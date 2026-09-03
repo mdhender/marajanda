@@ -17,11 +17,28 @@ internal/hexfield       midpoint subdivision on a hex grid
 displacement on the triangular lattice of hex centres, the hex analogue of
 diamond-square. See below.
 
+| terrain | gray |
+|---|---|
+| ![subdivision, terrain palette](docs/images/subdivision-terrain.png) | ![subdivision, grayscale](docs/images/subdivision-gray.png) |
+
+The same field twice. Judge lattice artefacts on the right one: the terrain
+palette's colour banding hides the residual hexagonal creasing that grayscale
+makes plain.
+
 **Voronoi regions** produces discrete areas instead: sites are scattered across
 the map and every hex goes to its nearest one. Lloyd relaxation evens out the
 sizes, and the distance metric decides whether borders follow hex steps or run
 straight. The shape wanted for realms, faction territory or biome patches
 rather than terrain.
+
+| no relaxation | two Lloyd passes |
+|---|---|
+| ![voronoi, ragged regions](docs/images/voronoi-ragged.png) | ![voronoi, relaxed regions](docs/images/voronoi-relaxed.png) |
+
+Same seed and the same starting sites, so the colours match region for region
+and relaxation is the only difference. Untouched, the sites land where they land
+and regions come out as sprawls next to splinters; two passes towards the
+centroids is enough to make them read as territory.
 
 **Plate tectonics** is the middle case, where the regions interact. It takes the
 same partition and treats each region as a plate with a drift vector and a crust
@@ -42,12 +59,20 @@ when the terrain looks wrong.
 One map under both palettes, and they are worth reading together: every mountain
 chain in the terrain view sits on a red (convergent) margin, with the darkest
 water right beside it where the oceanic plate is going under. Yellow (transform)
-margins leave a line in the height field and raise nothing. Reproduce with
+margins leave a line in the height field and raise nothing.
+
+Every image above comes from the web UI, and each pair differs in exactly one
+parameter. Note the explicit `&borders=true` and `&relax=true&sra=true`: an
+absent checkbox is submitted as false, not as its default.
 
 ```sh
 go run ./cmd/hexweb -addr :8100 -open=false
+# /image?gen=subdivision&seed=42&levels=6&size=3&relax=true&sra=true&palette=terrain
+#                                                                   &palette=gray
+# /image?gen=voronoi&seed=42&radius=48&sites=32&size=4&borders=true&lloyd=0
+#                                                                  &lloyd=2
 # /image?gen=tectonic&seed=7&radius=48&plates=12&size=4&palette=terrain
-# /image?gen=tectonic&seed=7&radius=48&plates=12&size=4&palette=plates
+#                                                      &palette=plates
 ```
 
 `internal/hexgrid` holds what they need — cube coordinates, the six directions,
