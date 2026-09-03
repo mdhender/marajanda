@@ -1,4 +1,4 @@
-module github.com/mdhender/marjanda
+module github.com/mdhender/marajanda
 
 go 1.26
 

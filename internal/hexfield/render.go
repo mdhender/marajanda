@@ -6,7 +6,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/mdhender/marjanda/internal/hexgrid"
+	"github.com/mdhender/marajanda/internal/hexgrid"
 )
 
 // Ramp is the default ASCII height ramp, lightest (lowest) first.

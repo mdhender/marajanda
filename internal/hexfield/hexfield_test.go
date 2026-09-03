@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/mdhender/marjanda/internal/hexgrid"
+	"github.com/mdhender/marajanda/internal/hexgrid"
 )
 
 // The refinement claim: the level-k lattice inside a radius-2**K hexagon

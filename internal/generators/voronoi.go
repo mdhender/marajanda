@@ -9,8 +9,8 @@ import (
 	"math/rand/v2"
 	"slices"
 
-	"github.com/mdhender/marjanda/internal/hexgrid"
-	"github.com/mdhender/marjanda/internal/mapgen"
+	"github.com/mdhender/marajanda/internal/hexgrid"
+	"github.com/mdhender/marajanda/internal/mapgen"
 )
 
 func init() { mapgen.Register(voronoi{}) }

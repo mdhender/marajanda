@@ -5,7 +5,7 @@ import (
 	"math"
 	"math/rand/v2"
 
-	"github.com/mdhender/marjanda/internal/hexgrid"
+	"github.com/mdhender/marajanda/internal/hexgrid"
 )
 
 // Stencil selects how a newly inserted point's base height is interpolated

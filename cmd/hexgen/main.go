@@ -9,8 +9,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mdhender/marjanda/internal/hexfield"
-	"github.com/mdhender/marjanda/internal/hexgrid"
+	"github.com/mdhender/marajanda/internal/hexfield"
+	"github.com/mdhender/marajanda/internal/hexgrid"
 )
 
 func main() {

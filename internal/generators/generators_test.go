@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/mdhender/marjanda/internal/hexgrid"
-	"github.com/mdhender/marjanda/internal/mapgen"
+	"github.com/mdhender/marajanda/internal/hexgrid"
+	"github.com/mdhender/marajanda/internal/mapgen"
 )
 
 // Every test here runs against the whole registry, so a new generator is

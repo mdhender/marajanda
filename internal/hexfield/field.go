@@ -4,7 +4,7 @@ import (
 	"iter"
 	"math"
 
-	"github.com/mdhender/marjanda/internal/hexgrid"
+	"github.com/mdhender/marajanda/internal/hexgrid"
 )
 
 // Field is a hexagon-shaped height field of radius 2**Levels, addressed by

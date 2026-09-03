@@ -22,8 +22,8 @@ import (
 	"strconv"
 	"time"
 
-	_ "github.com/mdhender/marjanda/internal/generators"
-	"github.com/mdhender/marjanda/internal/mapgen"
+	_ "github.com/mdhender/marajanda/internal/generators"
+	"github.com/mdhender/marajanda/internal/mapgen"
 )
 
 func main() {

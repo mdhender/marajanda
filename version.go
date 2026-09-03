@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Michael D Henderson.
 
-package marjanda
+package marajanda
 
 import (
 	"github.com/maloquacious/semver"
