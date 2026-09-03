@@ -66,7 +66,7 @@ parameter. Note the explicit `&borders=true` and `&relax=true&sra=true`: an
 absent checkbox is submitted as false, not as its default.
 
 ```sh
-go run ./cmd/hexweb -addr :8100 -open=false
+go run ./cmd/hexweb -addr :8100 -open=false -timeout 5m
 # /image?gen=subdivision&seed=42&levels=6&size=3&relax=true&sra=true&palette=terrain
 #                                                                   &palette=gray
 # /image?gen=voronoi&seed=42&radius=48&sites=32&size=4&borders=true&lloyd=0
@@ -84,8 +84,15 @@ a function from coordinate to colour.
 
 ```sh
 go run ./cmd/hexweb              # opens a browser on localhost:8080
-go run ./cmd/hexweb -addr :9000 -open=false
+go run ./cmd/hexweb -addr :9000 -open=false -timeout 5m
 ```
+
+`-timeout` bounds the run: the server shuts itself down when it fires and says
+so in the log. Scripts should pass it, because `go run` execs the server as a
+child process — killing the `go run` gets you a still-listening orphan on the
+port, and the next run fails to bind for a reason that looks unrelated. Without
+the flag the server runs until it is killed, which is what you want
+interactively.
 
 Pick a generator, adjust the parameters, hit Render. The image opens in a new
 tab as a plain `GET /image?...` URL, so it is shareable and bookmarkable. Seeds

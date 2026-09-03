@@ -11,11 +11,11 @@ go test ./...
 go test ./internal/generators/ -run TestNoUnpaintedHexes -v   # one test
 go test ./internal/hexfield/ -count=3                         # statistical tests: check for flakes
 
-go run ./cmd/hexweb                             # browser UI, opens localhost:8080
-go run ./cmd/hexweb -addr :9000 -open=false     # for scripted/curl checks
-go run ./cmd/hexgen -levels 4 -island -ascii    # subdivision straight to the terminal
+go run ./cmd/hexweb                                        # browser UI, opens localhost:8080
+go run ./cmd/hexweb -addr :9000 -open=false -timeout 5m    # scripted/curl checks; -timeout so it cannot leak
+go run ./cmd/hexgen -levels 4 -island -ascii               # subdivision straight to the terminal
 # generator name is the "gen" query param: /image?gen=tectonic&seed=7&radius=40
-go run ./cmd/hexgen -compare out/ -palette gray # every variant as separate PNGs
+go run ./cmd/hexgen -compare out/ -palette gray            # every variant as separate PNGs
 ```
 
 ## Architecture

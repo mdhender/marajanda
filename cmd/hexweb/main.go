@@ -29,14 +29,15 @@ import (
 func main() {
 	addr := flag.String("addr", "localhost:8080", "listen address")
 	open := flag.Bool("open", true, "open a browser on start")
+	timeout := flag.Duration("timeout", 0, "exit after this long (0 = run until killed)")
 	flag.Parse()
 
-	if err := run(*addr, *open); err != nil {
+	if err := run(*addr, *open, *timeout); err != nil {
 		log.Fatalln("hexweb:", err)
 	}
 }
 
-func run(addr string, openBrowser bool) error {
+func run(addr string, openBrowser bool, timeout time.Duration) error {
 	gens := mapgen.All()
 	if len(gens) == 0 {
 		return errors.New("no generators registered")
@@ -74,6 +75,18 @@ func run(addr string, openBrowser bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
+	// A non-zero timeout bounds the run so a scripted server cannot outlive
+	// the script that started it. `go run` execs the binary as a child, so
+	// killing the `go run` process leaves this one holding the port; expiring
+	// here is the cleanup a caller cannot get wrong. The cause carries the
+	// duration so the log line below says why the port went away.
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeoutCause(ctx, timeout, fmt.Errorf("timeout after %s", timeout))
+		defer cancel()
+		log.Printf("will exit after %s", timeout)
+	}
+
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 
@@ -84,7 +97,12 @@ func run(addr string, openBrowser bool) error {
 		}
 		return err
 	case <-ctx.Done():
-		log.Println("shutting down")
+		// The cause names the reason: the signal for an interrupt, the
+		// duration for a timeout. A script that suddenly gets connection
+		// refused finds it in the output it was already capturing.
+		log.Println("shutting down:", context.Cause(ctx))
+		// Graceful, so a render already in flight finishes rather than
+		// arriving as a truncated PNG.
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)
