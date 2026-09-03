@@ -1,26 +1,10 @@
-// Package hexfield generates fractal terrain on a hexagonal grid.
+// Package hexgrid is the hex geometry every generator shares: cube
+// coordinates, the six neighbour directions, and rendering a hexagon-shaped
+// map to an image.
 //
-// Hexagons are not rep-tiles: a hexagon cannot be divided into smaller
-// hexagons, so the square-grid diamond-square algorithm has no direct
-// analogue here. The centres of a hex grid, however, form a triangular
-// lattice, and triangular lattices do refine self-similarly -- inserting a
-// point at every edge midpoint yields a triangular lattice of half the
-// spacing, splitting each triangle into four. That is the recursion this
-// package uses, and it is what Loop subdivision does topologically.
-//
-// In cube coordinates the refinement is exact. Define the level-k lattice as
-// every hex whose Q, R and S are all divisible by 2**k. The midpoint of two
-// adjacent level-k points lands precisely on the level-(k-1) lattice, and
-// since Q+R+S == 0 the parities of a coordinate fall into exactly four
-// classes: (even,even,even) is the coarse lattice that already holds values,
-// and the other three are the edge midpoints along the three edge directions.
-// Each refinement therefore adds exactly three points per existing point,
-// covering the finer lattice with nothing missed and nothing written twice.
-//
-// One consequence is that this needs only a single step per level. Square
-// grids need a diamond phase and a square phase because their midpoints come
-// in two incompatible flavours; the triangular lattice refines uniformly.
-package hexfield
+// It holds nothing about how a map is generated. Generators supply a function
+// from coordinate to colour and this package handles the layout.
+package hexgrid
 
 // Coord is a cube coordinate on a hex grid. Every valid Coord satisfies
 // Q+R+S == 0, so the three axes are symmetric and none is privileged.
@@ -48,10 +32,10 @@ var Directions = [6]Coord{
 	{Q: 0, R: -1, S: 1},
 }
 
-// forward is how many directions must be walked to visit every lattice edge
+// Forward is how many directions must be walked to visit every lattice edge
 // exactly once. The remaining three are negations of these, so walking all
 // six would process every edge twice.
-const forward = 3
+const Forward = 3
 
 // Add returns c+o.
 func (c Coord) Add(o Coord) Coord { return Coord{c.Q + o.Q, c.R + o.R, c.S + o.S} }
@@ -64,6 +48,11 @@ func (c Coord) Valid() bool { return c.Q+c.R+c.S == 0 }
 
 // Length is the distance from the origin in hex steps.
 func (c Coord) Length() int { return max(abs(c.Q), abs(c.R), abs(c.S)) }
+
+// Distance is the number of hex steps between c and o.
+func (c Coord) Distance(o Coord) int {
+	return max(abs(c.Q-o.Q), abs(c.R-o.R), abs(c.S-o.S))
+}
 
 // Lattice reports the coarsest lattice c belongs to: the largest k <= maxK
 // for which every coordinate of c is divisible by 2**k. Masking works for

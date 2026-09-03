@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"math"
 	"math/rand/v2"
+
+	"github.com/mdhender/marjanda/internal/hexgrid"
 )
 
 // Stencil selects how a newly inserted point's base height is interpolated
@@ -101,15 +103,15 @@ func Generate(p Params) *Field {
 	// These seven values are the whole of the caller's control over the
 	// large-scale shape, and pinning them is the reason to prefer recursive
 	// subdivision over summed noise octaves in the first place.
-	seed := func(c Coord, v float64) { f.Set(c, v) }
+	seed := func(c hexgrid.Coord, v float64) { f.Set(c, v) }
 	if p.Island {
-		seed(Origin, 1)
-		for _, d := range Directions {
+		seed(hexgrid.Origin, 1)
+		for _, d := range hexgrid.Directions {
 			seed(d.Scale(f.Radius), -1)
 		}
 	} else {
-		seed(Origin, signed(rng))
-		for _, d := range Directions {
+		seed(hexgrid.Origin, signed(rng))
+		for _, d := range hexgrid.Directions {
 			seed(d.Scale(f.Radius), signed(rng))
 		}
 	}
@@ -131,9 +133,9 @@ func Generate(p Params) *Field {
 		// The subdivision step: insert the midpoint of every edge of the
 		// level-k lattice. There is only one such step per level, because
 		// unlike a square lattice the triangular lattice refines uniformly.
-		f.eachLattice(step, func(a Coord) {
-			for i := range forward {
-				d := Directions[i]
+		f.eachLattice(step, func(a hexgrid.Coord) {
+			for i := range hexgrid.Forward {
+				d := hexgrid.Directions[i]
 
 				b := a.Add(d.Scale(step))
 				if !f.Contains(b) {
@@ -143,8 +145,8 @@ func Generate(p Params) *Field {
 
 				// The apexes of the two lattice triangles sharing edge (a,b)
 				// lie along the directions adjacent to d in the six-cycle.
-				c := a.Add(Directions[(i+1)%6].Scale(step))
-				e := a.Add(Directions[(i+5)%6].Scale(step))
+				c := a.Add(hexgrid.Directions[(i+1)%6].Scale(step))
+				e := a.Add(hexgrid.Directions[(i+5)%6].Scale(step))
 
 				// With successive random additions the displacement is
 				// applied to the whole lattice afterwards, so this step
@@ -158,7 +160,7 @@ func Generate(p Params) *Field {
 		})
 
 		if p.SRA {
-			f.eachLattice(half, func(c Coord) {
+			f.eachLattice(half, func(c hexgrid.Coord) {
 				f.h[f.index(c)] += amp * signed(rng)
 			})
 		}
@@ -177,15 +179,15 @@ func Generate(p Params) *Field {
 // average over the neighbours they have.
 func (f *Field) relax(step int) {
 	type update struct {
-		c Coord
+		c hexgrid.Coord
 		v float64
 	}
 	var updates []update
 
-	f.eachLattice(step, func(c Coord) {
+	f.eachLattice(step, func(c hexgrid.Coord) {
 		var sum float64
 		var n int
-		for _, d := range Directions {
+		for _, d := range hexgrid.Directions {
 			if o := c.Add(d.Scale(step)); f.Has(o) {
 				sum += f.At(o)
 				n++
@@ -208,7 +210,7 @@ func (f *Field) relax(step int) {
 // apex is missing -- the same situation as the three-neighbour edge case in
 // diamond-square. The available weights are renormalized rather than
 // substituting a zero, which would drag the rim towards the origin height.
-func (f *Field) interpolate(a, b, c, e Coord, s Stencil) float64 {
+func (f *Field) interpolate(a, b, c, e hexgrid.Coord, s Stencil) float64 {
 	ha, hb := f.At(a), f.At(b)
 	if s == Midpoint {
 		return (ha + hb) / 2

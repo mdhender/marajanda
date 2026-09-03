@@ -3,6 +3,8 @@ package hexfield
 import (
 	"iter"
 	"math"
+
+	"github.com/mdhender/marjanda/internal/hexgrid"
 )
 
 // Field is a hexagon-shaped height field of radius 2**Levels, addressed by
@@ -45,14 +47,14 @@ func New(levels int) *Field {
 }
 
 // Contains reports whether c lies inside the hexagon.
-func (f *Field) Contains(c Coord) bool {
+func (f *Field) Contains(c hexgrid.Coord) bool {
 	return c.Valid() && c.Length() <= f.Radius
 }
 
-func (f *Field) index(c Coord) int { return (c.Q+f.Radius)*f.stride + c.R + f.Radius }
+func (f *Field) index(c hexgrid.Coord) int { return (c.Q+f.Radius)*f.stride + c.R + f.Radius }
 
 // At returns the height at c, or NaN if c is out of bounds or unset.
-func (f *Field) At(c Coord) float64 {
+func (f *Field) At(c hexgrid.Coord) float64 {
 	if !f.Contains(c) {
 		return math.NaN()
 	}
@@ -60,24 +62,24 @@ func (f *Field) At(c Coord) float64 {
 }
 
 // Has reports whether c is in bounds and holds a height.
-func (f *Field) Has(c Coord) bool {
+func (f *Field) Has(c hexgrid.Coord) bool {
 	return f.Contains(c) && !math.IsNaN(f.h[f.index(c)])
 }
 
 // Set stores a height at c. Out-of-bounds coordinates are ignored.
-func (f *Field) Set(c Coord, v float64) {
+func (f *Field) Set(c hexgrid.Coord, v float64) {
 	if f.Contains(c) {
 		f.h[f.index(c)] = v
 	}
 }
 
 // All iterates every in-bounds hex and its height, in no meaningful order.
-func (f *Field) All() iter.Seq2[Coord, float64] {
-	return func(yield func(Coord, float64) bool) {
+func (f *Field) All() iter.Seq2[hexgrid.Coord, float64] {
+	return func(yield func(hexgrid.Coord, float64) bool) {
 		n := f.Radius
 		for q := -n; q <= n; q++ {
 			for r := max(-n, -n-q); r <= min(n, n-q); r++ {
-				c := Coord{Q: q, R: r, S: -q - r}
+				c := hexgrid.Coord{Q: q, R: r, S: -q - r}
 				if !yield(c, f.h[f.index(c)]) {
 					return
 				}
@@ -87,7 +89,7 @@ func (f *Field) All() iter.Seq2[Coord, float64] {
 }
 
 // Len returns the number of hexes in the field.
-func (f *Field) Len() int { n := f.Radius; return 3*n*n + 3*n + 1 }
+func (f *Field) Len() int { return hexgrid.Count(f.Radius) }
 
 // Range returns the lowest and highest heights present.
 func (f *Field) Range() (lo, hi float64) {
@@ -120,11 +122,11 @@ func (f *Field) Normalize() {
 // where step is 2**k. Because Q+R+S == 0, S is divisible by step whenever Q
 // and R both are, so stepping Q and R is sufficient. The bound -Radius is
 // itself a multiple of every step in use, so the walk stays on the lattice.
-func (f *Field) eachLattice(step int, fn func(Coord)) {
+func (f *Field) eachLattice(step int, fn func(hexgrid.Coord)) {
 	n := f.Radius
 	for q := -n; q <= n; q += step {
 		for r := -n; r <= n; r += step {
-			if c := (Coord{Q: q, R: r, S: -q - r}); f.Contains(c) {
+			if c := (hexgrid.Coord{Q: q, R: r, S: -q - r}); f.Contains(c) {
 				fn(c)
 			}
 		}

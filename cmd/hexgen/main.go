@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/mdhender/marjanda/internal/hexfield"
+	"github.com/mdhender/marjanda/internal/hexgrid"
 )
 
 func main() {
@@ -61,14 +62,14 @@ func run() error {
 		Island:    *island,
 	}
 
-	var pal hexfield.Palette
+	var pal hexgrid.Palette
 	switch *palette {
 	case "terrain":
-		pal = hexfield.Terrain(*sea)
+		pal = hexgrid.Terrain(*sea)
 	case "gray":
 		// Grayscale shows lattice artefacts that the terrain palette's
 		// colour banding hides.
-		pal = hexfield.Grayscale
+		pal = hexgrid.Grayscale
 	default:
 		return fmt.Errorf("unknown palette %q: want terrain or gray", *palette)
 	}
@@ -92,7 +93,7 @@ func run() error {
 // writeComparison emits one PNG per variant, named for its settings, so the
 // effect of each knob can be seen side by side. Filenames carry the labels;
 // nothing is drawn onto the images and no font dependency is needed.
-func writeComparison(dir string, base hexfield.Params, size float64, pal hexfield.Palette) error {
+func writeComparison(dir string, base hexfield.Params, size float64, pal hexgrid.Palette) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -150,7 +151,7 @@ func writeComparison(dir string, base hexfield.Params, size float64, pal hexfiel
 	return nil
 }
 
-func writePNG(path string, f *hexfield.Field, size float64, pal hexfield.Palette) (err error) {
+func writePNG(path string, f *hexfield.Field, size float64, pal hexgrid.Palette) (err error) {
 	fh, err := os.Create(path)
 	if err != nil {
 		return err

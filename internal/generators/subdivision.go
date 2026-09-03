@@ -8,6 +8,7 @@ import (
 	"image"
 
 	"github.com/mdhender/marjanda/internal/hexfield"
+	"github.com/mdhender/marjanda/internal/hexgrid"
 	"github.com/mdhender/marjanda/internal/mapgen"
 )
 
@@ -81,7 +82,7 @@ func (subdivision) Params() []mapgen.Param {
 		},
 		{
 			Name: "size", Label: "Hex size (px)", Kind: mapgen.KindFloat,
-			Default: 4, Min: 1, Max: 40, Step: 1,
+			Default: 4.0, Min: 1, Max: 40, Step: 1,
 		},
 	}
 }
@@ -109,9 +110,9 @@ func (subdivision) Generate(v mapgen.Values) (image.Image, error) {
 			"lower the hex size or the levels", w, h, maxPixels>>20)
 	}
 
-	pal := hexfield.Palette(hexfield.Grayscale)
+	pal := hexgrid.Palette(hexgrid.Grayscale)
 	if v.String("palette") == "terrain" {
-		pal = hexfield.Terrain(v.Float("sea"))
+		pal = hexgrid.Terrain(v.Float("sea"))
 	}
 	return f.Image(size, pal), nil
 }

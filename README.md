@@ -7,8 +7,26 @@ cmd/hexweb              browser front end: pick a generator, adjust, render
 cmd/hexgen              CLI for the subdivision generator
 internal/mapgen         the registry generators plug into
 internal/generators     the generators themselves, one file each
+internal/hexgrid        shared hex geometry: cube coords, layout, rendering
 internal/hexfield       midpoint subdivision on a hex grid
 ```
+
+## Generators
+
+**Midpoint subdivision** produces a continuous height field: recursive midpoint
+displacement on the triangular lattice of hex centres, the hex analogue of
+diamond-square. See below.
+
+**Voronoi regions** produces discrete areas instead: sites are scattered across
+the map and every hex goes to its nearest one. Lloyd relaxation evens out the
+sizes, and the distance metric decides whether borders follow hex steps or run
+straight. The shape wanted for realms, faction territory or biome patches
+rather than terrain.
+
+`internal/hexgrid` holds what both need — cube coordinates, the six directions,
+palettes, and rendering a hexagon-shaped map by converting each pixel back to a
+coordinate. It knows nothing about how a map is generated; a generator supplies
+a function from coordinate to colour.
 
 ## Running it
 

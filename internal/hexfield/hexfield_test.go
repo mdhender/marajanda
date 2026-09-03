@@ -3,6 +3,8 @@ package hexfield
 import (
 	"math"
 	"testing"
+
+	"github.com/mdhender/marjanda/internal/hexgrid"
 )
 
 // The refinement claim: the level-k lattice inside a radius-2**K hexagon
@@ -48,9 +50,9 @@ func TestMidpointsLandOnFinerLattice(t *testing.T) {
 	const maxK = 5
 	for k := maxK; k >= 1; k-- {
 		step, half := 1<<k, 1<<(k-1)
-		for i := range forward {
-			d := Directions[i]
-			a := Coord{Q: 2 * step, R: -2 * step, S: 0}
+		for i := range hexgrid.Forward {
+			d := hexgrid.Directions[i]
+			a := hexgrid.Coord{Q: 2 * step, R: -2 * step, S: 0}
 			b := a.Add(d.Scale(step))
 			m := a.Add(d.Scale(half))
 
@@ -60,7 +62,7 @@ func TestMidpointsLandOnFinerLattice(t *testing.T) {
 			if got := m.Lattice(maxK); got < k-1 {
 				t.Errorf("k=%d dir=%v: midpoint %v is on lattice %d, want >= %d", k, d, m, got, k-1)
 			}
-			if mid := (Coord{Q: (a.Q + b.Q) / 2, R: (a.R + b.R) / 2, S: (a.S + b.S) / 2}); mid != m {
+			if mid := (hexgrid.Coord{Q: (a.Q + b.Q) / 2, R: (a.R + b.R) / 2, S: (a.S + b.S) / 2}); mid != m {
 				t.Errorf("k=%d dir=%v: %v is not the midpoint of %v and %v", k, d, m, a, b)
 			}
 		}
@@ -70,16 +72,16 @@ func TestMidpointsLandOnFinerLattice(t *testing.T) {
 // The three forward directions must cover all six as negations, so every
 // lattice edge is visited exactly once.
 func TestForwardDirectionsCoverAllEdges(t *testing.T) {
-	seen := map[Coord]bool{}
-	for i := range forward {
-		d := Directions[i]
+	seen := map[hexgrid.Coord]bool{}
+	for i := range hexgrid.Forward {
+		d := hexgrid.Directions[i]
 		seen[d] = true
 		seen[d.Scale(-1)] = true
 	}
 	if len(seen) != 6 {
-		t.Fatalf("forward directions and their negations cover %d directions, want 6", len(seen))
+		t.Fatalf("hexgrid.Forward directions and their negations cover %d directions, want 6", len(seen))
 	}
-	for _, d := range Directions {
+	for _, d := range hexgrid.Directions {
 		if !seen[d] {
 			t.Errorf("direction %v is never visited", d)
 		}
@@ -90,23 +92,19 @@ func TestForwardDirectionsCoverAllEdges(t *testing.T) {
 // both edge endpoints, or the four-point stencil is reading the wrong hexes.
 func TestApexesAreAdjacentToBothEndpoints(t *testing.T) {
 	const step = 4
-	a := Origin
-	for i := range forward {
-		b := a.Add(Directions[i].Scale(step))
+	a := hexgrid.Origin
+	for i := range hexgrid.Forward {
+		b := a.Add(hexgrid.Directions[i].Scale(step))
 		for _, j := range []int{(i + 1) % 6, (i + 5) % 6} {
-			apex := a.Add(Directions[j].Scale(step))
-			if d := dist(a, apex); d != step {
+			apex := a.Add(hexgrid.Directions[j].Scale(step))
+			if d := a.Distance(apex); d != step {
 				t.Errorf("dir %d apex %v: distance to %v is %d, want %d", i, apex, a, d, step)
 			}
-			if d := dist(b, apex); d != step {
+			if d := b.Distance(apex); d != step {
 				t.Errorf("dir %d apex %v: distance to %v is %d, want %d", i, apex, b, d, step)
 			}
 		}
 	}
-}
-
-func dist(a, b Coord) int {
-	return max(abs(a.Q-b.Q), abs(a.R-b.R), abs(a.S-b.S))
 }
 
 // Hashed noise means the field depends only on the seed, not on traversal.
@@ -148,8 +146,8 @@ func neighbourVariation(f *Field) float64 {
 	f.Normalize()
 	sum, n := 0.0, 0
 	for c, v := range f.All() {
-		for i := range forward {
-			if o := c.Add(Directions[i]); f.Has(o) {
+		for i := range hexgrid.Forward {
+			if o := c.Add(hexgrid.Directions[i]); f.Has(o) {
 				sum += math.Abs(v - f.At(o))
 				n++
 			}
@@ -174,7 +172,7 @@ func creaseRatio(f *Field) float64 {
 	for c, v := range f.All() {
 		var sum float64
 		var n int
-		for _, d := range Directions {
+		for _, d := range hexgrid.Directions {
 			if o := c.Add(d); f.Has(o) {
 				sum += f.At(o)
 				n++
@@ -283,7 +281,7 @@ func TestIslandSeedPutsHighGroundAtTheCentre(t *testing.T) {
 // Out-of-bounds reads must not panic or alias a real hex.
 func TestOutOfBoundsIsSafe(t *testing.T) {
 	f := New(3)
-	for _, c := range []Coord{
+	for _, c := range []hexgrid.Coord{
 		{Q: 99, R: -99, S: 0},
 		{Q: -50, R: 50, S: 0},
 		{Q: 1, R: 1, S: 1}, // violates the cube invariant
@@ -297,16 +295,6 @@ func TestOutOfBoundsIsSafe(t *testing.T) {
 		f.Set(c, 1) // must be ignored, not panic
 		if f.Has(c) {
 			t.Errorf("%v accepted a write", c)
-		}
-	}
-}
-
-func TestCubeRoundStaysOnTheLattice(t *testing.T) {
-	for q := -3.0; q <= 3; q += 0.37 {
-		for r := -3.0; r <= 3; r += 0.29 {
-			if c := cubeRound(q, r, -q-r); !c.Valid() {
-				t.Fatalf("cubeRound(%v,%v) gave %v, which violates Q+R+S == 0", q, r, c)
-			}
 		}
 	}
 }
