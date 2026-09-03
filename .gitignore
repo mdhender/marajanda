@@ -6,3 +6,7 @@
 *.swp
 .DS_Store
 .idea/
+
+# build files that shouldn't be committed
+/hexgen
+/hexweb
