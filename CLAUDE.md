@@ -17,9 +17,6 @@ go run ./cmd/hexgen -levels 4 -island -ascii    # subdivision straight to the te
 go run ./cmd/hexgen -compare out/ -palette gray # every variant as separate PNGs
 ```
 
-The local directory is `marjanda`; the module and GitHub repo are `marajanda`. The
-directory name is a typo, deliberately left alone — nothing depends on it.
-
 ## Architecture
 
 The point of the layout is that **adding a generator touches one file**. A generator

@@ -1,4 +1,4 @@
-# marjanda
+# marajanda
 
 Hex map generators.
 

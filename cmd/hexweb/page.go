@@ -12,7 +12,7 @@ var page = template.Must(template.New("page").Parse(`<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>marjanda &mdash; hex map generators</title>
+<title>marajanda &mdash; hex map generators</title>
 <style>
   :root {
     color-scheme: light dark;
