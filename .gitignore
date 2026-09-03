@@ -3,6 +3,7 @@
 *.jpg
 *.pdf
 *.png
+!docs/images/*.png
 *.swp
 .DS_Store
 .idea/

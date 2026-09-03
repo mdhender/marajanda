@@ -35,6 +35,21 @@ peninsulas instead of tracing the polygon. The **plates** palette shows the
 partition and colours every margin by what it is doing, which is the view to use
 when the terrain looks wrong.
 
+| terrain | plates |
+|---|---|
+| ![tectonic terrain](docs/images/tectonic-terrain.png) | ![tectonic plate margins](docs/images/tectonic-plates.png) |
+
+One map under both palettes, and they are worth reading together: every mountain
+chain in the terrain view sits on a red (convergent) margin, with the darkest
+water right beside it where the oceanic plate is going under. Yellow (transform)
+margins leave a line in the height field and raise nothing. Reproduce with
+
+```sh
+go run ./cmd/hexweb -addr :8100 -open=false
+# /image?gen=tectonic&seed=7&radius=48&plates=12&size=4&palette=terrain
+# /image?gen=tectonic&seed=7&radius=48&plates=12&size=4&palette=plates
+```
+
 `internal/hexgrid` holds what they need — cube coordinates, the six directions,
 palettes, and rendering a hexagon-shaped map by converting each pixel back to a
 coordinate. It knows nothing about how a map is generated; a generator supplies
