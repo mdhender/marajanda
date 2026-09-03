@@ -1,0 +1,8 @@
+*~
+*.jpeg
+*.jpg
+*.pdf
+*.png
+*.swp
+.DS_Store
+.idea/
