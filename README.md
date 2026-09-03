@@ -23,7 +23,19 @@ sizes, and the distance metric decides whether borders follow hex steps or run
 straight. The shape wanted for realms, faction territory or biome patches
 rather than terrain.
 
-`internal/hexgrid` holds what both need — cube coordinates, the six directions,
+**Plate tectonics** is the middle case, where the regions interact. It takes the
+same partition and treats each region as a plate with a drift vector and a crust
+type, then reads the terrain off what happens where two plates meet: mountains
+where they converge, a trench on the oceanic side of a subduction zone, rifts
+and mid-ocean ridges where they part, fault valleys where they slide past. That
+relief is spread inland with an exponential falloff, so ranges get foothills
+rather than being one hex wide. The plate outlines are deliberately kept off the
+coastline — the crust lookup is domain-warped, so shores wander into bays and
+peninsulas instead of tracing the polygon. The **plates** palette shows the
+partition and colours every margin by what it is doing, which is the view to use
+when the terrain looks wrong.
+
+`internal/hexgrid` holds what they need — cube coordinates, the six directions,
 palettes, and rendering a hexagon-shaped map by converting each pixel back to a
 coordinate. It knows nothing about how a map is generated; a generator supplies
 a function from coordinate to colour.
@@ -71,6 +83,10 @@ generator outside the range it said it handles. Guard the output size, though
 and hex size multiply.
 
 Randomness comes from `math/rand/v2` sources only.
+
+Two of the three generators need the same thing — a hexagon carved into regions
+— so that lives in `internal/generators/regions.go` rather than in either of
+them. It is the exception to one file per generator.
 
 ---
 

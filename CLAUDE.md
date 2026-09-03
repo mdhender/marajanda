@@ -14,6 +14,7 @@ go test ./internal/hexfield/ -count=3                         # statistical test
 go run ./cmd/hexweb                             # browser UI, opens localhost:8080
 go run ./cmd/hexweb -addr :9000 -open=false     # for scripted/curl checks
 go run ./cmd/hexgen -levels 4 -island -ascii    # subdivision straight to the terminal
+# generator name is the "gen" query param: /image?gen=tectonic&seed=7&radius=40
 go run ./cmd/hexgen -compare out/ -palette gray # every variant as separate PNGs
 ```
 
@@ -27,6 +28,7 @@ never changes.
 ```
 internal/mapgen       registry: Generator, Param, Values. No concrete generators.
 internal/generators   the generators, one file each, self-registering in init()
+                      plus regions.go: the partition voronoi and tectonic share
 internal/hexgrid      shared hex geometry: Coord, Directions, Render, palettes
 internal/hexfield     midpoint subdivision only; depends on hexgrid
 cmd/hexweb            server; imports generators for its init() side effects
@@ -57,6 +59,10 @@ boundaries. Orientation lives only in `Render` — cube coordinates carry none.
   boxes) while `NewValues` still falls back to the default — do not collapse these.
 - Declare float params as `Default: 4.0`, not `Default: 4`. An untyped int in an
   `any` field fails the `float64` assertion and silently yields 0.
+- `partition` returns `all` in `hexgrid.Hexes` order precisely so callers have a
+  deterministic order to walk. `tectonic` indexes every field by position in it
+  and never ranges over `owner`; the BFS in `spread` is seeded in that order too,
+  so ties break the same way on every run.
 
 ### Tests
 
@@ -77,6 +83,14 @@ Hexagons are not rep-tiles, so diamond-square has no direct hex analogue. Hex
 coordinates the level-k lattice is every hex whose coordinates divide by `2^k`, and
 the four parity classes of `Q+R+S == 0` are the coarse lattice plus one midpoint
 class per edge direction. Hence one subdivision step per level, not two.
+
+In `tectonic` the boundary normal is taken from the two plate *centroids*, not
+from the hex step to the neighbour. The partition is Voronoi in pixel space, so a
+margin is perpendicular to the line joining its plates; classifying off the six
+hex directions instead makes the class flicker hex to hex and turns every margin
+into transform speckle. Relatedly, `shearDominance` is below 1 on purpose —
+whichever component is larger winning outright makes half of all margins
+transform, and the map comes out nearly flat.
 
 Subdivision creasing is reduced, not eliminated — visible as a hexagonal cell
 pattern under `-palette gray`, which the terrain palette's colour banding hides.
