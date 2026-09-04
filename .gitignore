@@ -1,14 +1,17 @@
 *~
-*.jpeg
-*.jpg
+*.db
+*.db-*
 *.pdf
 *.png
-!docs/images/*.png
 *.swp
+
 .DS_Store
 .idea/
 
+# Environment files (see dotenv). The *.local files may hold secrets, so
+# they are explicitly ignored; shared .env and .env.<env> files are committed.
+.env.local
+.env.*.local
+
 # build files that shouldn't be committed
-/hexgen
-/hexweb
 /marajanda
