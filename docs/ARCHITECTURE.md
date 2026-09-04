@@ -17,7 +17,7 @@ Before `github.com/peterbourgon/ff/v4` runs a command, the process loads environ
 
 ## Command configuration
 
-`cmd/marajanda` reads `MARAJANDA_ENV` directly from the process environment to choose the dotenv environment. It defaults to `development`. After loading those files, it parses command-line flags and environment variables with the `MARAJANDA` prefix. Explicit flags take precedence over environment variables.
+The process entry point reads `ENV` to choose the dotenv environment and defaults to `development`. It loads those files before calling the command runner. The runner then parses command-line flags and environment variables with the `MARAJANDA` prefix; explicit flags take precedence over environment variables. Keeping dotenv initialization outside the runner lets tests and other callers provide isolated environments without the runner overwriting them.
 
 | Flag | Environment variable | Required |
 | --- | --- | --- |

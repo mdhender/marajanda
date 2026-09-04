@@ -19,6 +19,12 @@ import (
 const envPrefix = "MARAJANDA"
 
 func main() {
+	environment := cmp.Or(os.Getenv("ENV"), "development")
+	if err := dotenv.Load(environment); err != nil {
+		fmt.Fprintf(os.Stderr, "marajanda: load %s environment: %v\n", environment, err)
+		os.Exit(1)
+	}
+
 	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "marajanda: %v\n", err)
 		os.Exit(1)
@@ -26,11 +32,6 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout io.Writer) error {
-	environment := cmp.Or(os.Getenv("MARAJANDA_ENV"), "development")
-	if err := dotenv.Load(environment); err != nil {
-		return fmt.Errorf("load %s environment: %w", environment, err)
-	}
-
 	flags := ff.NewFlagSet("marajanda")
 	root := flags.StringLong("root", "", "path containing all server files, or :memory:")
 	adminEmail := flags.StringLong("admin-email", "", "initial admin email for a new persistent database")

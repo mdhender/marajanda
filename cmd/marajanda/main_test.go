@@ -20,32 +20,19 @@ func TestRunRequiresRoot(t *testing.T) {
 	}
 }
 
-func TestRunLoadsEnvironmentBeforeParsingFlags(t *testing.T) {
+func TestRunUsesConfiguredEnvironment(t *testing.T) {
 	workingDirectory := t.TempDir()
 	root := filepath.Join(workingDirectory, "server")
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	env := strings.Join([]string{
-		"MARAJANDA_ROOT=" + root,
-		"MARAJANDA_ADMIN_EMAIL=ADMIN@EXAMPLE.COM",
-		"MARAJANDA_ADMIN_HANDLE=keeper",
-	}, "\n")
-	if err := os.WriteFile(filepath.Join(workingDirectory, ".env.test.local"), []byte(env), 0o600); err != nil {
-		t.Fatal(err)
-	}
 
 	t.Chdir(workingDirectory)
-	t.Setenv("MARAJANDA_ENV", "test")
-	for _, name := range []string{
-		"MARAJANDA_ROOT",
-		"MARAJANDA_ADMIN_EMAIL",
-		"MARAJANDA_ADMIN_SECRET",
-		"MARAJANDA_ADMIN_HANDLE",
-	} {
-		unsetenv(t, name)
-	}
-	if err := run(t.Context(), []string{"--admin-secret", "test-only-value"}, &bytes.Buffer{}); err != nil {
+	t.Setenv("MARAJANDA_ROOT", root)
+	t.Setenv("MARAJANDA_ADMIN_EMAIL", "ADMIN@EXAMPLE.COM")
+	t.Setenv("MARAJANDA_ADMIN_SECRET", "test-only-value")
+	t.Setenv("MARAJANDA_ADMIN_HANDLE", "keeper")
+	if err := run(t.Context(), nil, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(root, datastore.Filename)); err != nil {
