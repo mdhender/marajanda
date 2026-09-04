@@ -9,6 +9,14 @@
 - Password hashes use bcrypt with `bcrypt.MinCost`.
 - Account email addresses are the only personally identifiable information stored. Additional PII requires an explicit product decision.
 
+## Sign-in and sessions
+
+The sign-in form labels the email identifier as `Account` and renders it as a text input. Inputs that are not syntactically email addresses are rejected before a database authentication lookup. All rejected credentials receive the same message.
+
+Successful authentication creates a cryptographically random in-memory session. The browser receives the session identifier in a host-only `Secure`, `HttpOnly`, `SameSite=Lax` cookie without a persistent expiration. The session ends when the browser or server restarts.
+
+Authenticated admins are directed to `/admin/dashboard`. Authenticated players are directed to `/player/dashboard`. Requests for either dashboard without a valid session are directed to `/sign-in`.
+
 ## Invitations
 
 Registration is invitation-only.

@@ -124,6 +124,41 @@ func TestOpenMemorySeedsDefaults(t *testing.T) {
 	assertTextPragma(t, store, "journal_mode", "memory")
 }
 
+func TestAuthenticate(t *testing.T) {
+	store, err := OpenMemory(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	account, ok, err := store.Authenticate(t.Context(), " ADMIN@MARAJANDA.COM ", "good.luck")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || account.Handle != "admin" || account.Role != "admin" {
+		t.Fatalf("Authenticate = %#v, %t; want admin account, true", account, ok)
+	}
+
+	for _, test := range []struct {
+		name   string
+		email  string
+		secret string
+	}{
+		{name: "unknown account", email: "missing@marajanda.com", secret: "good.luck"},
+		{name: "wrong secret", email: "admin@marajanda.com", secret: "not.right"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			account, ok, err := store.Authenticate(t.Context(), test.email, test.secret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok || account != (Account{}) {
+				t.Fatalf("Authenticate = %#v, %t; want zero account, false", account, ok)
+			}
+		})
+	}
+}
+
 func TestOpenSharedMemoryUsesNamedDatabase(t *testing.T) {
 	first, err := OpenSharedMemory(t.Context(), t.Name())
 	if err != nil {

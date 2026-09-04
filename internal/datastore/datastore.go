@@ -45,6 +45,12 @@ type SeedAccount struct {
 	Role   string
 }
 
+// Account contains the non-secret account data needed after authentication.
+type Account struct {
+	Handle string
+	Role   string
+}
+
 // Store owns an open SQLite database.
 type Store struct {
 	conn *sqlite.Conn
@@ -151,6 +157,41 @@ func (s *Store) Close() error {
 		return s.conn.Close()
 	}
 	return s.pool.Close()
+}
+
+// Authenticate verifies an account's credentials and returns its dashboard identity.
+func (s *Store) Authenticate(ctx context.Context, email, secret string) (Account, bool, error) {
+	conn, release, err := s.take(ctx)
+	if err != nil {
+		return Account{}, false, err
+	}
+	defer release()
+
+	var account Account
+	var hash []byte
+	if err := sqlitex.ExecuteTransient(conn, `
+		SELECT secret_hash, handle, role FROM accounts WHERE email = ?1;`, &sqlitex.ExecOptions{
+		Args: []any{normalizeEmail(email)},
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			hash = make([]byte, stmt.ColumnLen(0))
+			stmt.ColumnBytes(0, hash)
+			account.Handle = stmt.ColumnText(1)
+			account.Role = stmt.ColumnText(2)
+			return nil
+		},
+	}); err != nil {
+		return Account{}, false, fmt.Errorf("look up account: %w", err)
+	}
+	if hash == nil {
+		return Account{}, false, nil
+	}
+	if err := bcrypt.CompareHashAndPassword(hash, []byte(secret)); err != nil {
+		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+			return Account{}, false, nil
+		}
+		return Account{}, false, fmt.Errorf("verify account secret: %w", err)
+	}
+	return account, true, nil
 }
 
 func (s *Store) awaitReady(ctx context.Context) error {

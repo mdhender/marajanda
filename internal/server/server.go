@@ -72,7 +72,7 @@ func Run(ctx context.Context, cfg Config) (err error) {
 		return fmt.Errorf("listen for HTTP: %w", err)
 	}
 
-	httpServer := &http.Server{Handler: newHandler()}
+	httpServer := &http.Server{Handler: newHandler(store.Authenticate)}
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- httpServer.Serve(listener)
@@ -100,12 +100,4 @@ func Run(ctx context.Context, cfg Config) (err error) {
 		}
 		return nil
 	}
-}
-
-func newHandler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
-	return mux
 }
