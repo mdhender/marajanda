@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/mdhender/marajanda/internal/dotenv"
 	"github.com/mdhender/marajanda/internal/server"
@@ -25,7 +27,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "marajanda: %v\n", err)
 		os.Exit(1)
 	}
@@ -37,11 +41,14 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	adminEmail := flags.StringLong("admin-email", "", "initial admin email for a new persistent database")
 	adminSecret := flags.StringLong("admin-secret", "", "initial admin secret for a new persistent database")
 	adminHandle := flags.StringLong("admin-handle", "", "initial admin handle for a new persistent database")
+	address := flags.StringLong("address", server.DefaultAddress, "network address to listen on")
+	port := flags.IntLong("port", server.DefaultPort, "network port to listen on")
+	timeout := flags.DurationLong("timeout", 0, "stop the server after this duration; zero disables the timeout")
 
 	command := &ff.Command{
 		Name:      "marajanda",
 		Usage:     "marajanda --root PATH [FLAGS]",
-		ShortHelp: "initialize the Marajanda server",
+		ShortHelp: "run the Marajanda server",
 		Flags:     flags,
 		Exec: func(ctx context.Context, args []string) error {
 			if len(args) != 0 {
@@ -55,6 +62,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 				AdminEmail:  *adminEmail,
 				AdminSecret: *adminSecret,
 				AdminHandle: *adminHandle,
+				Address:     *address,
+				Port:        *port,
+				Timeout:     *timeout,
 			})
 		},
 	}

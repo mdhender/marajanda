@@ -32,6 +32,9 @@ func TestRunUsesConfiguredEnvironment(t *testing.T) {
 	t.Setenv("MARAJANDA_ADMIN_EMAIL", "ADMIN@EXAMPLE.COM")
 	t.Setenv("MARAJANDA_ADMIN_SECRET", "test-only-value")
 	t.Setenv("MARAJANDA_ADMIN_HANDLE", "keeper")
+	t.Setenv("MARAJANDA_ADDRESS", "127.0.0.1")
+	t.Setenv("MARAJANDA_PORT", "0")
+	t.Setenv("MARAJANDA_TIMEOUT", "1ms")
 	if err := run(t.Context(), nil, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +67,7 @@ func TestRunMemoryUsesDefaults(t *testing.T) {
 	} {
 		unsetenv(t, name)
 	}
-	if err := run(t.Context(), []string{"--root", ":memory:"}, &bytes.Buffer{}); err != nil {
+	if err := run(t.Context(), []string{"--root", ":memory:", "--port", "0", "--timeout", "1ms"}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -75,8 +78,10 @@ func TestRunHelp(t *testing.T) {
 	if err := run(t.Context(), []string{"--help"}, &stdout); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "--root") {
-		t.Fatalf("help = %q, want --root", stdout.String())
+	for _, want := range []string{"--root", "--address", "--port", "8443", "--timeout"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("help = %q, want %q", stdout.String(), want)
+		}
 	}
 }
 

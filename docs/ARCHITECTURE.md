@@ -25,6 +25,9 @@ The process entry point reads `ENV` to choose the dotenv environment and default
 | `--admin-email` | `MARAJANDA_ADMIN_EMAIL` | When creating a persistent database |
 | `--admin-secret` | `MARAJANDA_ADMIN_SECRET` | When creating a persistent database |
 | `--admin-handle` | `MARAJANDA_ADMIN_HANDLE` | When creating a persistent database |
+| `--address` | `MARAJANDA_ADDRESS` | No; defaults to `127.0.0.1` |
+| `--port` | `MARAJANDA_PORT` | No; defaults to `8443` |
+| `--timeout` | `MARAJANDA_TIMEOUT` | No; defaults to `0` (disabled) |
 
 The root value may be `:memory:`. In-memory databases ignore configured admin seed values and use the documented defaults.
 
@@ -35,3 +38,5 @@ The server requires either a persistent database directory or the special databa
 A persistent server changes its working directory to the configured root before opening server files. Future request handlers that accept file paths must resolve them within that root and reject traversal or symlink escapes rather than relying on the working directory as a security boundary.
 
 A server using a persistent database supports graceful shutdown and closes the database cleanly.
+
+The server accepts `GET /api/healthz` and returns `204 No Content`. It shuts down gracefully when its context is canceled or its configured non-zero timeout expires.
