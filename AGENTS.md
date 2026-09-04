@@ -11,6 +11,12 @@ Consult the document that owns the area you change:
 
 Ask the user before deciding game rules or server behavior that these documents do not specify.
 
+## Work prioritization
+
+- Implement bug fixes before new features.
+- Before starting feature work, check the upstream repository for open bug issues.
+- If any upstream bug issue is open, push back on the feature request and prioritize resolving the open bugs first.
+
 ## Coding directives
 
 - Follow the documented contracts; do not silently weaken or reinterpret them.
