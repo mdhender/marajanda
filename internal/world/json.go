@@ -17,6 +17,13 @@ func (w *World) Validate() error {
 	if w.Grid.Cols < 1 || w.Grid.Rows < 1 {
 		return fmt.Errorf("grid %dx%d: both dimensions must be positive", w.Grid.Cols, w.Grid.Rows)
 	}
+	// Odd columns are pushed half a row south, so a cylinder closes only when
+	// the last column and column 0 have opposite parity. An odd column count
+	// leaves two unstaggered columns against each other at the join: the hexes
+	// there do not tile, and no amount of care downstream can fix it.
+	if w.Grid.WrapEastWest && w.Grid.Cols%2 != 0 {
+		return fmt.Errorf("grid wraps east to west with %d columns: an odd count cannot close", w.Grid.Cols)
+	}
 	n := w.Grid.Len()
 	// A layer is either absent or complete. Anything else would leave every
 	// reader to decide what a short layer means.

@@ -8,11 +8,22 @@ import (
 	"github.com/mdhender/marajanda/internal/world"
 )
 
-// antipodal returns, for each hex, the hex nearest the point diametrically
-// opposite it. Brute force over the grid, which is why the grids here are
-// small; it is worth the cost because it measures the real thing rather than
-// assuming column + Cols/2 lands on an antipode, which parity makes untrue.
-func antipodal(g world.Grid) []int {
+// antipodal returns, for each hex, the hex diametrically opposite it, and
+// insists that such a hex really exists.
+//
+// It only does for some grids. Latitudes mirror across the equator into the
+// other column parity, because odd columns are pushed half a band south, so
+// the antipodal column -- col + Cols/2 -- has to have the opposite parity to
+// col. That needs Cols/2 to be odd, i.e. Cols = 2 (mod 4). On any other grid
+// the nearest hex to a hex's antipode is up to half a band away, and a
+// correlation measured against it is blurred by the sampling rather than by
+// the field: 48 columns costs about 0.06 of correlation, which is enough to
+// hide the very property these tests exist to pin.
+func antipodal(t *testing.T, g world.Grid) []int {
+	t.Helper()
+	if g.Cols%4 != 2 {
+		t.Fatalf("%d columns: antipodes are only exact when Cols is 2 mod 4", g.Cols)
+	}
 	n := g.Len()
 	px, py, pz := make([]float64, n), make([]float64, n), make([]float64, n)
 	for col := range g.Cols {
@@ -28,6 +39,10 @@ func antipodal(g world.Grid) []int {
 			if d := -(px[i]*px[j] + py[i]*py[j] + pz[i]*pz[j]); d > dot {
 				best, dot = j, d
 			}
+		}
+		if 1-dot > 1e-12 {
+			col, row := g.ColRow(i)
+			t.Fatalf("hex (%d,%d) has no exact antipode: nearest is off by %.2e", col, row, 1-dot)
 		}
 		out[i] = best
 	}
@@ -55,8 +70,10 @@ func correlation(a, b []float64) float64 {
 // and the property under test is a property of the algorithm.
 func antipodalCorrelation(t *testing.T, offset float64) float64 {
 	t.Helper()
-	const cols, rows, seeds = 48, 24, 3
-	anti := antipodal(world.Grid{Cols: cols, Rows: rows, WrapEastWest: true})
+	// 50 columns rather than 48 so that every hex has an exact antipode; see
+	// antipodal.
+	const cols, rows, seeds = 50, 24, 3
+	anti := antipodal(t, world.Grid{Cols: cols, Rows: rows, WrapEastWest: true})
 	var sum float64
 	for seed := range uint64(seeds) {
 		o := Defaults(cols, rows, seed)
@@ -244,6 +261,7 @@ func TestOptionsRejected(t *testing.T) {
 		{"no columns", Options{Cols: 0, Rows: 10}},
 		{"no rows", Options{Cols: 10, Rows: 0}},
 		{"too many hexes", Options{Cols: 1 << 12, Rows: 1 << 12}},
+		{"odd columns cannot wrap", Options{Cols: 11, Rows: 10}},
 		{"negative faults", Options{Cols: 10, Rows: 10, Faults: -1}},
 		{"offset at 1", Options{Cols: 10, Rows: 10, Offset: 1}},
 		{"negative offset", Options{Cols: 10, Rows: 10, Offset: -0.1}},

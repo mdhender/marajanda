@@ -94,6 +94,11 @@ func (o Options) check() error {
 	switch {
 	case o.Cols < 1 || o.Rows < 1:
 		return fmt.Errorf("worldgen: %dx%d: both dimensions must be positive", o.Cols, o.Rows)
+	case o.Cols%2 != 0:
+		// Fault always makes a wrapping world, and world.Grid only closes on
+		// an even column count -- odd columns are the ones pushed half a row
+		// south, so the parity has to alternate all the way round.
+		return fmt.Errorf("worldgen: %d columns: a world wraps, and an odd column count cannot close", o.Cols)
 	case o.Cols > maxHexes || o.Rows > maxHexes || o.Cols*o.Rows > maxHexes:
 		return fmt.Errorf("worldgen: %dx%d is more than %d hexes", o.Cols, o.Rows, maxHexes)
 	case o.Faults < 0:

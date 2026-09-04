@@ -106,10 +106,29 @@ func (g Grid) pixel(col, row int) hexg.Point {
 // span is the size of the whole map in that same frame. It is measured rather
 // than derived: one full turn east of column 0 is column Cols, and one full
 // map south of row 0 is row Rows, so hexg's layout supplies both and this
-// package does no hex trigonometry of its own.
+// package does no hex trigonometry of its own. Longitude divides by the width;
+// latitude uses poles instead, which is a narrower span than the height.
 func (g Grid) span() (w, h float64) {
 	origin := g.pixel(0, 0)
 	return g.pixel(g.Cols, 0).X - origin.X, g.pixel(0, g.Rows).Y - origin.Y
+}
+
+// poles is where the two poles fall in pixel space: half a row beyond the
+// northernmost and southernmost hex centres, so that every hex centre sits in
+// the middle of the latitude band it covers.
+//
+// Measuring the southernmost centre rather than assuming it is what makes the
+// result symmetric. Odd columns are pushed half a row south, so the last row's
+// odd columns reach further than its even ones, and taking row Rows-1 at face
+// value would leave the south pole half a band closer to the grid than the
+// north -- which renders as one ice cap larger than the other.
+func (g Grid) poles() (north, south float64) {
+	half := (g.pixel(0, 1).Y - g.pixel(0, 0).Y) / 2
+	last := 0
+	if g.Cols > 1 {
+		last = 1 // an odd column, and so the southern extreme of the last row
+	}
+	return g.pixel(0, 0).Y - half, g.pixel(last, g.Rows-1).Y + half
 }
 
 // LatLon is the hex's position on the globe in degrees: latitude +90 at the
@@ -117,10 +136,17 @@ func (g Grid) span() (w, h float64) {
 // eastward. The grid is read as an equirectangular projection of a sphere,
 // which is what makes an east-west wrap and a spherical generator the same
 // geometry rather than two that have to be reconciled.
+//
+// Latitude is measured between the poles as poles defines them, not between
+// the edges of the image. A hex covers a band and sits in the middle of it, so
+// the outermost hex centres are half a band short of +/-90 and the two hemi-
+// spheres are mirror images. Longitude needs no such care: the columns close
+// into a full circle, so the map's own width is the right divisor.
 func (g Grid) LatLon(col, row int) (lat, lon float64) {
 	p := g.pixel(col, row)
-	w, h := g.span()
-	return 90 - 180*p.Y/h, 360*p.X/w - 180
+	w, _ := g.span()
+	north, south := g.poles()
+	return 90 - 180*(p.Y-north)/(south-north), 360*p.X/w - 180
 }
 
 // Unit is the hex's position as a unit vector on the sphere. A generator

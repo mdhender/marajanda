@@ -5,6 +5,7 @@ import (
 	"math"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -148,12 +149,16 @@ func TestOnlyPolesLoseNeighbors(t *testing.T) {
 func TestLatLonAndUnit(t *testing.T) {
 	g := donjonGrid()
 
-	// The north pole is the top of the map and the south pole the bottom.
-	if lat, _ := g.LatLon(0, 0); math.Abs(lat-90) > 1e-9 {
-		t.Errorf("latitude of row 0 = %v, want 90", lat)
+	// The grid reaches close to both poles without standing on either: a hex
+	// covers a band of latitude and sits in the middle of it, so the
+	// outermost centres are half a band short of the poles themselves.
+	north, _ := g.LatLon(0, 0)
+	south, _ := g.LatLon(1, g.Rows-1)
+	if north <= 80 || north >= 90 {
+		t.Errorf("northernmost latitude = %v, want just short of +90", north)
 	}
-	if lat, _ := g.LatLon(0, g.Rows-1); lat >= -80 {
-		t.Errorf("latitude of the last row = %v, want it near the south pole", lat)
+	if south >= -80 || south <= -90 {
+		t.Errorf("southernmost latitude = %v, want just short of -90", south)
 	}
 
 	// Longitude increases eastward and stays inside the sphere's range.
@@ -180,6 +185,50 @@ func TestLatLonAndUnit(t *testing.T) {
 	x1, y1, z1 := g.Unit(g.Cols, 40)
 	if math.Abs(x0-x1) > 1e-12 || math.Abs(y0-y1) > 1e-12 || math.Abs(z0-z1) > 1e-12 {
 		t.Errorf("column %d is at (%v,%v,%v), column 0 at (%v,%v,%v)", g.Cols, x1, y1, z1, x0, y0, z0)
+	}
+}
+
+// TestLatitudeIsSymmetric is the property the half-band offset buys: every
+// latitude the grid samples has its mirror image in the other hemisphere. An
+// ice cap or a climate band computed from latitude then comes out the same
+// size at both ends of the map, which it did not when row 0 sat on the pole
+// and the last row stopped a band short of it.
+func TestLatitudeIsSymmetric(t *testing.T) {
+	for _, g := range []Grid{
+		{Cols: 200, Rows: 87, WrapEastWest: true},
+		{Cols: 40, Rows: 20, WrapEastWest: true},
+		{Cols: 2, Rows: 3, WrapEastWest: true},
+	} {
+		lats := make([]float64, 0, g.Len())
+		for col := range g.Cols {
+			for row := range g.Rows {
+				lat, _ := g.LatLon(col, row)
+				lats = append(lats, lat)
+			}
+		}
+		slices.Sort(lats)
+		for i, n := 0, len(lats); i < n/2; i++ {
+			if north, south := lats[i], lats[n-1-i]; math.Abs(north+south) > 1e-9 {
+				t.Errorf("%dx%d: latitude %v has no mirror; found %v", g.Cols, g.Rows, north, south)
+				break
+			}
+		}
+	}
+}
+
+// TestWrappingGridsNeedEvenColumns guards a seam that is invisible until it is
+// rendered. Odd columns are pushed half a row south, so a cylinder only closes
+// when the last column and column 0 have opposite parity -- and with an odd
+// column count they do not, leaving two unstaggered columns side by side at
+// the join.
+func TestWrappingGridsNeedEvenColumns(t *testing.T) {
+	w := New(9, 5)
+	if err := w.Validate(); err == nil {
+		t.Error("a wrapping grid with 9 columns validated")
+	}
+	w.Grid.WrapEastWest = false
+	if err := w.Validate(); err != nil {
+		t.Errorf("9 columns without the wrap should be fine: %v", err)
 	}
 }
 

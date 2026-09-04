@@ -156,8 +156,9 @@ antipode. Consequences:
   change is a **small circle** — offset the cutting plane from the centre —
   which is what `worldgen.Fault` does, through `Options.Offset`.
 
-Measured on `worldgen.Fault` itself, averaged over seeds, `corr(h, antipode)`
-against the offset:
+Measured on `worldgen.Fault` itself, averaged over seeds and on a grid where
+every hex has an exact antipode (see below), `corr(h, antipode)` against the
+offset:
 
 | offset | 0.0 | 0.1 | 0.25 | 0.5 | 0.75 | 0.9 |
 |---|---|---|---|---|---|---|
@@ -170,12 +171,41 @@ removing it. This is not worth chasing — Earth's own land is famously
 antipodal to water, and donjon scores -0.68, so the 0.5 default is already
 less mirrored than the reference it is imitating.
 
-Two properties that fall out of generating on the sphere, both regression
-tested: there is **no seam** (the wrap's mean step is 1.02x the interior mean,
-i.e. indistinguishable), and the poles are a real place rather than an edge —
-every even column of row 0 maps to the north pole exactly, so those hexes hold
-the same value. That is equirectangular pole distortion, donjon has it too,
-and its ice caps are what hide it.
+Generating on the sphere means there is **no seam**: the wrap's mean step
+measures 0.98x the interior mean, i.e. indistinguishable. Regression tested
+over eight seeds, because one map's seam is 60 differences against an interior
+of 7,000 and a single trial is noise.
+
+### Latitude, and why hex centres sit half a band off the poles
+
+`Grid.LatLon` measures latitude between the poles as `Grid.poles` defines
+them — half a row beyond the outermost hex *centres* — not between the edges
+of the image. A hex covers a band of latitude and sits in the middle of it, so
+the northernmost centre is at +88.971 on a 200x87 grid and the southernmost at
+exactly -88.971.
+
+The earlier version divided by the image height, which put row 0 on the pole
+at +90.000 while the last row stopped 1.03 degrees short of -90. Two things
+went wrong with that, both fixed by the half-band offset:
+
+- The hemispheres were not mirror images, so anything sized off latitude — an
+  ice cap, a climate band — came out different at the two ends of the map.
+  `TestLatitudeIsSymmetric` now checks the whole sampled set, not just the
+  extremes.
+- Every even column of row 0 landed on the pole *exactly*, so all 100 of them
+  were one point sampled a hundred times and held one identical elevation.
+  They now sit on a small circle just short of it and carry 7 distinct values.
+
+Two parity rules follow from the stagger, and neither is optional:
+
+- **A wrapping grid needs an even column count.** Odd columns are the ones
+  pushed half a row south, so the cylinder only closes if the last column and
+  column 0 have opposite parity. `Validate` rejects the rest.
+- **Exact antipodes need `Cols = 2 (mod 4)`.** A mirrored latitude lives in
+  the other parity class, so the antipodal column `col + Cols/2` must have the
+  opposite parity to `col`. On 48 columns the nearest hex to an antipode is
+  half a band away and the measured correlation blurs by about 0.06 — enough
+  to hide the property. The tests use 50.
 
 ### Upstream: hexg
 
