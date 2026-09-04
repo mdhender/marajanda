@@ -19,6 +19,11 @@ Ask the user before deciding game rules or server behavior that these documents 
 - Prefer HTMX for web interactions. Add Alpine.js only when HTMX is insufficient.
 - Preserve the repository's existing copyright-header style in new Go files.
 
+## Documentation directives
+
+- All user-facing documentation must follow the Diataxis standard and be clearly structured as reference, how-to, explanation, or tutorial content.
+- Load and follow the Diataxis skill when creating, reviewing, or restructuring user-facing documentation.
+
 ## Verification
 
 - Run `go test ./...` for Go changes, plus focused package tests while iterating.
