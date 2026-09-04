@@ -5,6 +5,8 @@ package datastore
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -192,6 +194,55 @@ func (s *Store) Authenticate(ctx context.Context, email, secret string) (Account
 		return Account{}, false, fmt.Errorf("verify account secret: %w", err)
 	}
 	return account, true, nil
+}
+
+// FindOrCreateDevelopmentAccount returns an account for development-only sign-in.
+// Accounts created by this method are players with generated handles and secrets.
+func (s *Store) FindOrCreateDevelopmentAccount(ctx context.Context, email string) (account Account, err error) {
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
+		return Account{}, fmt.Errorf("generate development account secret: %w", err)
+	}
+	hash, err := bcrypt.GenerateFromPassword(random, bcrypt.MinCost)
+	if err != nil {
+		return Account{}, fmt.Errorf("hash development account secret: %w", err)
+	}
+	if _, err := rand.Read(random[:8]); err != nil {
+		return Account{}, fmt.Errorf("generate development account handle: %w", err)
+	}
+	handle := "agent-" + hex.EncodeToString(random[:8])
+
+	conn, release, err := s.take(ctx)
+	if err != nil {
+		return Account{}, err
+	}
+	defer release()
+	end, err := sqlitex.ImmediateTransaction(conn)
+	if err != nil {
+		return Account{}, err
+	}
+	defer end(&err)
+
+	if err = sqlitex.ExecuteTransient(conn, `
+		INSERT INTO accounts (email, secret_hash, handle, role)
+		VALUES (?1, ?2, ?3, 'player')
+		ON CONFLICT (email) DO NOTHING;`, &sqlitex.ExecOptions{
+		Args: []any{normalizeEmail(email), hash, handle},
+	}); err != nil {
+		return Account{}, err
+	}
+	if err = sqlitex.ExecuteTransient(conn, `
+		SELECT handle, role FROM accounts WHERE email = ?1;`, &sqlitex.ExecOptions{
+		Args: []any{normalizeEmail(email)},
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			account.Handle = stmt.ColumnText(0)
+			account.Role = stmt.ColumnText(1)
+			return nil
+		},
+	}); err != nil {
+		return Account{}, err
+	}
+	return account, nil
 }
 
 func (s *Store) awaitReady(ctx context.Context) error {

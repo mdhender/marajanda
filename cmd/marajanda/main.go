@@ -62,6 +62,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 				AdminEmail:  *adminEmail,
 				AdminSecret: *adminSecret,
 				AdminHandle: *adminHandle,
+				Environment: cmp.Or(os.Getenv("ENV"), "development"),
 				Address:     *address,
 				Port:        *port,
 				Timeout:     *timeout,

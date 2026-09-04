@@ -159,6 +159,40 @@ func TestAuthenticate(t *testing.T) {
 	}
 }
 
+func TestFindOrCreateDevelopmentAccount(t *testing.T) {
+	store, err := OpenMemory(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	existing, err := store.FindOrCreateDevelopmentAccount(t.Context(), " ADMIN@MARAJANDA.COM ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if existing != (Account{Handle: "admin", Role: "admin"}) {
+		t.Fatalf("existing account = %#v, want admin", existing)
+	}
+
+	created, err := store.FindOrCreateDevelopmentAccount(t.Context(), "Agent@Example.Test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(created.Handle, "agent-") || created.Role != "player" {
+		t.Fatalf("created account = %#v, want generated player", created)
+	}
+	again, err := store.FindOrCreateDevelopmentAccount(t.Context(), "agent@example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != created {
+		t.Fatalf("second lookup = %#v, want %#v", again, created)
+	}
+	if got := accountCount(t, store); got != 3 {
+		t.Fatalf("account count = %d, want 3", got)
+	}
+}
+
 func TestOpenSharedMemoryUsesNamedDatabase(t *testing.T) {
 	first, err := OpenSharedMemory(t.Context(), t.Name())
 	if err != nil {

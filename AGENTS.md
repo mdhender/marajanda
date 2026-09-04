@@ -16,7 +16,7 @@ Ask the user before deciding game rules or server behavior that these documents 
 - Implement bug fixes before new features.
 - Before starting feature work, check the upstream repository for open bug issues.
 - If any upstream bug issue is open, push back on the feature request and prioritize resolving the open bugs first.
-- Before starting a non-trivial feature that has no tracking issue, suggest creating an upstream issue. Create the issue only with the user's explicit approval.
+- Before starting a non-trivial feature that has no tracking issue, create an upstream issue. Tracking issue creation is pre-authorized and does not require additional approval.
 
 ## Coding directives
 
@@ -37,6 +37,16 @@ Ask the user before deciding game rules or server behavior that these documents 
 - Test database behavior with both non-shared and named shared in-memory opens where connection-sharing semantics matter.
 - Cover persistent-open failures, migration on open, newer-schema rejection, WAL, foreign keys, normalization and uniqueness, invitation expiry/reissue/deletion/consumption, password validation, seed behavior, and graceful shutdown as those features are implemented.
 - For UI changes, exercise the affected HTMX flow in a running server and inspect the rendered result.
+
+## Development browser authentication
+
+In a non-production build with `ENV` other than `production`, open the following URL in the browser session used for testing:
+
+`https://localhost:8443/__agents/log-me-in/agent%40example.test?returnTo=%2Fplayer%2Fdashboard`
+
+The development route creates `agent@example.test` as a player account if needed, starts a normal browser session, and redirects to the player dashboard. Opening the URL with `curl` does not authenticate a separate browser session.
+
+Production builds use the `production` build tag and omit this route: `go build -tags production ./cmd/marajanda`.
 
 ## Beta version-control workflow
 

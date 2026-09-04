@@ -17,6 +17,12 @@ Successful authentication creates a cryptographically random in-memory session. 
 
 Authenticated admins are directed to `/admin/dashboard`. Authenticated players are directed to `/player/dashboard`. Requests for either dashboard without a valid session are directed to `/sign-in`.
 
+### Development authentication
+
+Non-production builds register `GET /__agents/log-me-in/{email}` when `ENV` is not `production`. The route finds the normalized account or creates a player account with a generated handle and secret, starts a normal browser session, and redirects to the safe same-origin path supplied by `returnTo`. Missing, absolute, protocol-relative, and malformed return paths redirect to `/`.
+
+The `production` build tag omits the route. Setting `ENV=production` also prevents registration in a non-production build.
+
 ## Invitations
 
 Registration is invitation-only.

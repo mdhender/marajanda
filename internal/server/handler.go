@@ -18,11 +18,13 @@ import (
 const sessionCookieName = "marajanda_session"
 
 type authenticateFunc func(context.Context, string, string) (datastore.Account, bool, error)
+type findOrCreateFunc func(context.Context, string) (datastore.Account, error)
 
 type application struct {
-	authenticate authenticateFunc
-	sessionsMu   sync.RWMutex
-	sessions     map[string]datastore.Account
+	authenticate        authenticateFunc
+	findOrCreateAccount findOrCreateFunc
+	sessionsMu          sync.RWMutex
+	sessions            map[string]datastore.Account
 }
 
 type pageData struct {
@@ -33,9 +35,14 @@ type pageData struct {
 }
 
 func newHandler(authenticate authenticateFunc) http.Handler {
+	return newConfiguredHandler(authenticate, nil, "production")
+}
+
+func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCreateFunc, environment string) http.Handler {
 	app := &application{
-		authenticate: authenticate,
-		sessions:     make(map[string]datastore.Account),
+		authenticate:        authenticate,
+		findOrCreateAccount: findOrCreate,
+		sessions:            make(map[string]datastore.Account),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -46,11 +53,16 @@ func newHandler(authenticate authenticateFunc) http.Handler {
 	mux.HandleFunc("POST /sign-in", app.signIn)
 	mux.HandleFunc("GET /admin/dashboard", app.dashboard("admin"))
 	mux.HandleFunc("GET /player/dashboard", app.dashboard("player"))
+	registerAgentRoutes(mux, app, environment)
 
 	return new(http.CrossOriginProtection).Handler(mux)
 }
 
 func (app *application) landing(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
 	if account, ok := app.currentAccount(r); ok {
 		http.Redirect(w, r, dashboardPath(account), http.StatusSeeOther)
 		return
@@ -85,10 +97,17 @@ func (app *application) signIn(w http.ResponseWriter, r *http.Request) {
 		app.renderSignInFailure(w, http.StatusUnauthorized)
 		return
 	}
-	token, err := newSessionToken()
-	if err != nil {
+	if err := app.startSession(w, account); err != nil {
 		http.Error(w, "Marajanda could not create the session.", http.StatusInternalServerError)
 		return
+	}
+	http.Redirect(w, r, dashboardPath(account), http.StatusSeeOther)
+}
+
+func (app *application) startSession(w http.ResponseWriter, account datastore.Account) error {
+	token, err := newSessionToken()
+	if err != nil {
+		return err
 	}
 	app.sessionsMu.Lock()
 	app.sessions[token] = account
@@ -101,7 +120,7 @@ func (app *application) signIn(w http.ResponseWriter, r *http.Request) {
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
-	http.Redirect(w, r, dashboardPath(account), http.StatusSeeOther)
+	return nil
 }
 
 func (app *application) dashboard(role string) http.HandlerFunc {
