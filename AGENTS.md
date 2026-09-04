@@ -40,9 +40,11 @@ Ask the user before deciding game rules or server behavior that these documents 
 
 ## Development browser authentication
 
-In a non-production build with `ENV` other than `production`, open the following URL in the browser session used for testing:
+In a non-production build with `ENV` other than `production`, start the server with `overmind start` and open the following URL in the browser session used for testing:
 
-`https://localhost:8443/__agents/log-me-in/agent%40example.test?returnTo=%2Fplayer%2Fdashboard`
+`https://htmx-app.localhost:8443/__agents/log-me-in/agent%40example.test?returnTo=%2Fplayer%2Fdashboard`
+
+The host matters. The Go server speaks plain HTTP on the address and port in `.env.development.local`, currently `127.0.0.1:18443`, and the local Caddy instance terminates TLS for `htmx-app.localhost:8443` and proxies every path to it. Caddy serves no site for plain `localhost:8443`, and the session cookie is `Secure`, so a browser drops it on the raw HTTP port.
 
 The development route creates `agent@example.test` as a player account if needed, starts a normal browser session, and redirects to the player dashboard. Opening the URL with `curl` does not authenticate a separate browser session.
 

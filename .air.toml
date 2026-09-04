@@ -1,0 +1,86 @@
+# Air rebuilds and restarts the Go server for `overmind start` (see Procfile.dev).
+#
+# The binary built here speaks plain HTTP. In development a shared Caddy
+# instance (/opt/homebrew/etc/Caddyfile) terminates TLS for
+# https://htmx-app.localhost:8443 and reverse-proxies every path to the Go
+# server on 127.0.0.1:18443, which is where .env.development.local points
+# MARAJANDA_ADDRESS and MARAJANDA_PORT. Reach the app through Caddy rather than
+# through the raw port: the session cookie is set Secure, so a browser drops it
+# over http://127.0.0.1:18443 and every signed-in flow — including the
+# __agents/log-me-in route — appears to silently fail.
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  # The module root has no main package; the command lives under cmd/.
+  cmd = "go build -o ./tmp/marajanda ./cmd/marajanda"
+  bin = "./tmp/marajanda"
+
+  # No arguments: the daemon takes --root, --address, and --port from
+  # MARAJANDA_* in .env.development.local, which the process loads itself
+  # through internal/dotenv. MARAJANDA_ROOT is relative to this directory, and
+  # air always starts the binary here, so the daemon's Chdir lands in the same
+  # place a manual `go run ./cmd/marajanda` would.
+  args_bin = []
+
+  include_ext = ["go"]
+
+  # The daemon's markup lives in Go string literals, so "go" covers the whole
+  # tree that matters. Everything skipped here either holds no Go at all (docs,
+  # out) or is written by something other than an edit: data is the server root
+  # the daemon chdirs into and writes SQLite files under, tmp holds this
+  # config's own build output, and .git churns on every commit.
+  exclude_dir = [".git", ".idea", "data", "docs", "out", "tmp"]
+  exclude_regex = ["_test\\.go"]
+
+  # Editors that save by rewriting a file untouched would otherwise restart the
+  # daemon, which drops every browser session mid-flow.
+  exclude_unchanged = true
+
+  delay = 200
+
+  # Let the graceful shutdown actually happen. The daemon handles SIGINT through
+  # signal.NotifyContext and drains in-flight requests, so a rebuild produces the
+  # same clean "shutting down" / "stopped" pair a Ctrl-C does, rather than a
+  # SIGKILL that leaves SQLite's WAL to recover on the next start.
+  send_interrupt = true
+
+  # Sized for the shutdown that actually happens, not for the worst case. The
+  # daemon's Shutdown call is unbounded, and air sleeps this value
+  # unconditionally between the interrupt and the SIGKILL — it does not wait for
+  # the process to exit first — so any generous value would be added to every
+  # single rebuild. An idle server finishes shutting down in well under a
+  # millisecond; this is slack, not a drain timeout.
+  kill_delay = "500ms"
+
+  # A failed build takes the old binary down with it. Caddy then answers 502 for
+  # every path on htmx-app.localhost, which in this project means exactly one
+  # thing — the Go server is not running — whereas leaving the previous binary
+  # up would serve stale behaviour that looks like the edit did nothing.
+  stop_on_error = true
+
+  log = "build-errors.log"
+
+[misc]
+  # tmp/ holds only the binary and the build log; neither survives usefully.
+  clean_on_exit = true
+
+[proxy]
+  # Off deliberately. Caddy already owns the front door on 8443 and proxies to
+  # the port the daemon binds; air's own proxy would insert a second hop that
+  # nothing points at, and its live-reload injection has no HTMX response to
+  # attach to.
+  enabled = false
+
+[screen]
+  # Overmind multiplexes several processes into one terminal with prefixed
+  # output. A child that clears the screen would take the frontend's output with
+  # it.
+  clear_on_rebuild = false
+  keep_scroll = true
+
+[log]
+  # slog already timestamps every line the daemon emits; air's own timestamps
+  # would sit alongside them in a different format.
+  time = false
