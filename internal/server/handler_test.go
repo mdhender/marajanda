@@ -25,6 +25,15 @@ func TestLandingAndSignInForm(t *testing.T) {
 			t.Fatalf("landing body missing %q", want)
 		}
 	}
+	for _, want := range []string{
+		"v0.1.6-beta",
+		`href="https://github.com/mdhender/marajanda/issues"`,
+		`aria-label="Marajanda issues on GitHub"`,
+	} {
+		if !strings.Contains(landing.Body.String(), want) {
+			t.Fatalf("landing footer missing %q", want)
+		}
+	}
 
 	form := serveRequest(handler, http.MethodGet, "/sign-in")
 	if form.Code != http.StatusOK {
