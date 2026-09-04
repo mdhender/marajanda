@@ -19,8 +19,8 @@ func TestAgentSignInCreatesNormalSession(t *testing.T) {
 	var gotEmail string
 	handler := newConfiguredHandler(nil, func(_ context.Context, email string) (datastore.Account, error) {
 		gotEmail = email
-		return datastore.Account{Handle: "reviewer", Role: "player"}, nil
-	}, "development")
+		return datastore.Account{Email: email, Handle: "reviewer", Role: "player"}, nil
+	}, &testFactionStore{faction: datastore.Faction{Name: "Reviewers"}, found: true}, "development")
 	response := serveRequest(handler, http.MethodGet, "/__agents/log-me-in/Reviewer@Example.Test?returnTo=%2Fplayer%2Fdashboard")
 
 	if gotEmail != "reviewer@example.test" {
@@ -50,7 +50,7 @@ func TestAgentSignInCreatesNormalSession(t *testing.T) {
 func TestAgentSignInRejectsUnsafeReturnPaths(t *testing.T) {
 	handler := newConfiguredHandler(nil, func(context.Context, string) (datastore.Account, error) {
 		return datastore.Account{Handle: "reviewer", Role: "player"}, nil
-	}, "development")
+	}, nil, "development")
 	for _, value := range []string{
 		"",
 		"dashboard",
@@ -77,7 +77,7 @@ func TestAgentSignInRequiresEmail(t *testing.T) {
 	handler := newConfiguredHandler(nil, func(context.Context, string) (datastore.Account, error) {
 		calls++
 		return datastore.Account{}, nil
-	}, "development")
+	}, nil, "development")
 	response := serveRequest(handler, http.MethodGet, "/__agents/log-me-in/not-an-email")
 	if response.Code != http.StatusBadRequest || calls != 0 {
 		t.Fatalf("response status = %d, account calls = %d; want %d, 0", response.Code, calls, http.StatusBadRequest)
@@ -88,7 +88,7 @@ func TestAgentSignInNotRegisteredInProductionEnvironment(t *testing.T) {
 	handler := newConfiguredHandler(nil, func(context.Context, string) (datastore.Account, error) {
 		t.Fatal("production route called account lookup")
 		return datastore.Account{}, nil
-	}, "production")
+	}, nil, "production")
 	response := serveRequest(handler, http.MethodGet, "/__agents/log-me-in/agent@example.test")
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusNotFound)

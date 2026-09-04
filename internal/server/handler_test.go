@@ -10,11 +10,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/maloquacious/hexg"
 	"github.com/mdhender/marajanda/internal/datastore"
 )
 
 func TestLandingAndSignInForm(t *testing.T) {
-	handler := newHandler(nil)
+	handler := newHandler(nil, nil)
 
 	landing := serveRequest(handler, http.MethodGet, "/")
 	if landing.Code != http.StatusOK {
@@ -26,7 +27,7 @@ func TestLandingAndSignInForm(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"v0.1.7-beta",
+		"v0.1.8-beta",
 		`href="https://github.com/mdhender/marajanda/issues"`,
 		`aria-label="Marajanda issues on GitHub"`,
 	} {
@@ -55,7 +56,7 @@ func TestSignInRejectsMalformedAccountBeforeAuthentication(t *testing.T) {
 	handler := newHandler(func(context.Context, string, string) (datastore.Account, bool, error) {
 		authenticationCalls++
 		return datastore.Account{}, false, nil
-	})
+	}, nil)
 
 	response := submitSignIn(handler, "not-an-email", "anything")
 	if response.Code != http.StatusUnauthorized {
@@ -75,7 +76,7 @@ func TestSignInRejectsInvalidCredentials(t *testing.T) {
 			t.Fatalf("credentials = %q, %q", email, secret)
 		}
 		return datastore.Account{}, false, nil
-	})
+	}, nil)
 
 	response := submitSignIn(handler, " ADMIN@EXAMPLE.COM ", "wrong")
 	if response.Code != http.StatusUnauthorized {
@@ -92,15 +93,19 @@ func TestSignInCreatesSessionAndRoutesByRole(t *testing.T) {
 		handle        string
 		wantPath      string
 		otherPath     string
-		wantDashboard string
+		wantDashboard []string
 	}{
-		{role: "admin", handle: "keeper", wantPath: "/admin/dashboard", otherPath: "/player/dashboard", wantDashboard: "The realm awaits its keeper."},
-		{role: "player", handle: "wanderer", wantPath: "/player/dashboard", otherPath: "/admin/dashboard", wantDashboard: "Your faction awaits its first command."},
+		{role: "admin", handle: "keeper", wantPath: "/admin/dashboard", otherPath: "/player/dashboard", wantDashboard: []string{"The realm awaits its keeper."}},
+		{role: "player", handle: "wanderer", wantPath: "/player/dashboard", otherPath: "/admin/dashboard", wantDashboard: []string{"The Wayfarers", "(2, -1)"}},
 	} {
 		t.Run(test.role, func(t *testing.T) {
+			var factions factionStore
+			if test.role == "player" {
+				factions = &testFactionStore{faction: datastore.Faction{Name: "The Wayfarers", Location: hexg.NewHex(2, -1)}, found: true}
+			}
 			handler := newHandler(func(context.Context, string, string) (datastore.Account, bool, error) {
-				return datastore.Account{Handle: test.handle, Role: test.role}, true, nil
-			})
+				return datastore.Account{Email: test.role + "@example.com", Handle: test.handle, Role: test.role}, true, nil
+			}, factions)
 			response := submitSignIn(handler, test.role+"@example.com", "good.luck")
 			if response.Code != http.StatusSeeOther || response.Header().Get("Location") != test.wantPath {
 				t.Fatalf("sign-in response = %d %q, want %d %q", response.Code, response.Header().Get("Location"), http.StatusSeeOther, test.wantPath)
@@ -121,12 +126,13 @@ func TestSignInCreatesSessionAndRoutesByRole(t *testing.T) {
 			if dashboard.Code != http.StatusOK {
 				t.Fatalf("dashboard status = %d, want %d", dashboard.Code, http.StatusOK)
 			}
-			for _, want := range []string{
+			wants := []string{
 				"Welcome, " + test.handle + ".",
-				test.wantDashboard,
 				`action="/sign-out" method="post"`,
 				`type="submit">Sign out</button>`,
-			} {
+			}
+			wants = append(wants, test.wantDashboard...)
+			for _, want := range wants {
 				if !strings.Contains(dashboard.Body.String(), want) {
 					t.Fatalf("dashboard body missing %q", want)
 				}
@@ -146,7 +152,7 @@ func TestSignInCreatesSessionAndRoutesByRole(t *testing.T) {
 func TestSignOutEndsSession(t *testing.T) {
 	handler := newHandler(func(context.Context, string, string) (datastore.Account, bool, error) {
 		return datastore.Account{Handle: "wanderer", Role: "player"}, true, nil
-	})
+	}, nil)
 	signIn := submitSignIn(handler, "player@example.com", "good.luck")
 	sessionCookie := signIn.Result().Cookies()[0]
 
@@ -177,9 +183,52 @@ func TestSignOutEndsSession(t *testing.T) {
 }
 
 func TestDashboardRequiresSession(t *testing.T) {
-	response := serveRequest(newHandler(nil), http.MethodGet, "/admin/dashboard")
+	response := serveRequest(newHandler(nil, nil), http.MethodGet, "/admin/dashboard")
 	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/sign-in" {
 		t.Fatalf("response = %d %q, want %d %q", response.Code, response.Header().Get("Location"), http.StatusSeeOther, "/sign-in")
+	}
+}
+
+func TestPlayerConfiguresFactionBeforeDashboard(t *testing.T) {
+	factions := &testFactionStore{}
+	handler := newHandler(func(context.Context, string, string) (datastore.Account, bool, error) {
+		return datastore.Account{Email: "player@example.com", Handle: "wanderer", Role: "player"}, true, nil
+	}, factions)
+	signIn := submitSignIn(handler, "player@example.com", "good.luck")
+	cookie := signIn.Result().Cookies()[0]
+
+	dashboard := requestWithCookie(handler, http.MethodGet, "/player/dashboard", cookie, "")
+	if dashboard.Code != http.StatusSeeOther || dashboard.Header().Get("Location") != "/player/faction" {
+		t.Fatalf("dashboard response = %d %q, want %d %q", dashboard.Code, dashboard.Header().Get("Location"), http.StatusSeeOther, "/player/faction")
+	}
+
+	form := requestWithCookie(handler, http.MethodGet, "/player/faction", cookie, "")
+	if form.Code != http.StatusOK || !strings.Contains(form.Body.String(), `action="/player/faction" method="post"`) {
+		t.Fatalf("faction form = %d %q, want configuration form", form.Code, form.Body.String())
+	}
+
+	invalid := requestWithCookie(handler, http.MethodPost, "/player/faction", cookie, url.Values{"name": {"ab"}}.Encode())
+	if invalid.Code != http.StatusUnprocessableEntity || !strings.Contains(invalid.Body.String(), "3 to 32 printable characters") {
+		t.Fatalf("invalid response = %d %q, want validation error", invalid.Code, invalid.Body.String())
+	}
+
+	configured := requestWithCookie(handler, http.MethodPost, "/player/faction", cookie, url.Values{"name": {"  Star   Kin  "}}.Encode())
+	if configured.Code != http.StatusSeeOther || configured.Header().Get("Location") != "/player/dashboard" {
+		t.Fatalf("configuration response = %d %q, want %d %q", configured.Code, configured.Header().Get("Location"), http.StatusSeeOther, "/player/dashboard")
+	}
+	if factions.email != "player@example.com" || factions.faction.Name != "Star Kin" {
+		t.Fatalf("saved faction = %q %#v, want normalized Star Kin faction", factions.email, factions.faction)
+	}
+
+	dashboard = requestWithCookie(handler, http.MethodGet, "/player/dashboard", cookie, "")
+	for _, want := range []string{"Star Kin", "Current location", "(0, 0)"} {
+		if dashboard.Code != http.StatusOK || !strings.Contains(dashboard.Body.String(), want) {
+			t.Fatalf("dashboard = %d %q, want %q", dashboard.Code, dashboard.Body.String(), want)
+		}
+	}
+	form = requestWithCookie(handler, http.MethodGet, "/player/faction", cookie, "")
+	if form.Code != http.StatusSeeOther || form.Header().Get("Location") != "/player/dashboard" {
+		t.Fatalf("completed configuration response = %d %q, want dashboard redirect", form.Code, form.Header().Get("Location"))
 	}
 }
 
@@ -190,7 +239,7 @@ func TestCrossOriginSignInIsRejected(t *testing.T) {
 	request.Header.Set("Origin", "https://hostile.example")
 	response := httptest.NewRecorder()
 
-	newHandler(nil).ServeHTTP(response, request)
+	newHandler(nil, nil).ServeHTTP(response, request)
 
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
@@ -211,4 +260,32 @@ func submitSignIn(handler http.Handler, account, passphrase string) *httptest.Re
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response
+}
+
+func requestWithCookie(handler http.Handler, method, target string, cookie *http.Cookie, body string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, target, strings.NewReader(body))
+	request.AddCookie(cookie)
+	if body != "" {
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+type testFactionStore struct {
+	email   string
+	faction datastore.Faction
+	found   bool
+}
+
+func (s *testFactionStore) Faction(context.Context, string) (datastore.Faction, bool, error) {
+	return s.faction, s.found, nil
+}
+
+func (s *testFactionStore) SaveFaction(_ context.Context, email, name string) error {
+	s.email = email
+	s.faction = datastore.Faction{Name: name, Location: hexg.NewHex(0, 0)}
+	s.found = true
+	return nil
 }

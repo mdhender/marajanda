@@ -73,7 +73,7 @@ func Run(ctx context.Context, cfg Config) (err error) {
 		return fmt.Errorf("listen for HTTP: %w", err)
 	}
 
-	httpServer := &http.Server{Handler: newConfiguredHandler(store.Authenticate, store.FindOrCreateDevelopmentAccount, cfg.Environment)}
+	httpServer := &http.Server{Handler: newConfiguredHandler(store.Authenticate, store.FindOrCreateDevelopmentAccount, store, cfg.Environment)}
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- httpServer.Serve(listener)

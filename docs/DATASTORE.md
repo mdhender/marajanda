@@ -16,6 +16,10 @@ Marajanda uses ZombieZen SQLite for persistent and in-memory data.
 - Schema versions use ZombieZen's SQL migration package. Marajanda does not maintain a custom migration-version table or mechanism.
 - Open fails when the database schema version is newer than the version the application supports.
 
+## Factions
+
+Each player faction is associated with one account. Faction records store the faction name and its current axial `q` and `r` map coordinates. New faction records start at `(0, 0)`.
+
 ## Open modes
 
 The datastore exposes distinct open operations for:

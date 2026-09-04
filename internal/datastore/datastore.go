@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/maloquacious/hexg"
 	"golang.org/x/crypto/bcrypt"
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitemigration"
@@ -36,6 +37,12 @@ var schema = sqlitemigration.Schema{
 			handle      TEXT NOT NULL UNIQUE,
 			role        TEXT NOT NULL CHECK (role IN ('admin', 'player'))
 		) STRICT;`,
+		`CREATE TABLE factions (
+			account_email TEXT PRIMARY KEY REFERENCES accounts (email) ON DELETE CASCADE,
+			name          TEXT NOT NULL,
+			location_q    INTEGER NOT NULL DEFAULT 0,
+			location_r    INTEGER NOT NULL DEFAULT 0
+		) STRICT;`,
 	},
 }
 
@@ -49,8 +56,20 @@ type SeedAccount struct {
 
 // Account contains the non-secret account data needed after authentication.
 type Account struct {
+	Email  string
 	Handle string
 	Role   string
+}
+
+// Faction contains a player's faction metadata.
+type Faction struct {
+	Name     string
+	Location hexg.Hex
+}
+
+// Configured reports whether all required faction metadata is present.
+func (f Faction) Configured() bool {
+	return f.Name != ""
 }
 
 // Store owns an open SQLite database.
@@ -172,13 +191,14 @@ func (s *Store) Authenticate(ctx context.Context, email, secret string) (Account
 	var account Account
 	var hash []byte
 	if err := sqlitex.ExecuteTransient(conn, `
-		SELECT secret_hash, handle, role FROM accounts WHERE email = ?1;`, &sqlitex.ExecOptions{
+		SELECT email, secret_hash, handle, role FROM accounts WHERE email = ?1;`, &sqlitex.ExecOptions{
 		Args: []any{normalizeEmail(email)},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
-			hash = make([]byte, stmt.ColumnLen(0))
-			stmt.ColumnBytes(0, hash)
-			account.Handle = stmt.ColumnText(1)
-			account.Role = stmt.ColumnText(2)
+			account.Email = stmt.ColumnText(0)
+			hash = make([]byte, stmt.ColumnLen(1))
+			stmt.ColumnBytes(1, hash)
+			account.Handle = stmt.ColumnText(2)
+			account.Role = stmt.ColumnText(3)
 			return nil
 		},
 	}); err != nil {
@@ -194,6 +214,50 @@ func (s *Store) Authenticate(ctx context.Context, email, secret string) (Account
 		return Account{}, false, fmt.Errorf("verify account secret: %w", err)
 	}
 	return account, true, nil
+}
+
+// Faction returns the faction controlled by an account.
+func (s *Store) Faction(ctx context.Context, email string) (Faction, bool, error) {
+	conn, release, err := s.take(ctx)
+	if err != nil {
+		return Faction{}, false, err
+	}
+	defer release()
+
+	var faction Faction
+	found := false
+	if err := sqlitex.ExecuteTransient(conn, `
+		SELECT name, location_q, location_r FROM factions WHERE account_email = ?1;`, &sqlitex.ExecOptions{
+		Args: []any{normalizeEmail(email)},
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			faction.Name = stmt.ColumnText(0)
+			faction.Location = hexg.NewHex(stmt.ColumnInt(1), stmt.ColumnInt(2))
+			found = true
+			return nil
+		},
+	}); err != nil {
+		return Faction{}, false, fmt.Errorf("look up faction: %w", err)
+	}
+	return faction, found, nil
+}
+
+// SaveFaction creates or updates an account's faction metadata.
+func (s *Store) SaveFaction(ctx context.Context, email, name string) error {
+	conn, release, err := s.take(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	if err := sqlitex.ExecuteTransient(conn, `
+		INSERT INTO factions (account_email, name, location_q, location_r)
+		VALUES (?1, ?2, 0, 0)
+		ON CONFLICT (account_email) DO UPDATE SET name = excluded.name;`, &sqlitex.ExecOptions{
+		Args: []any{normalizeEmail(email), name},
+	}); err != nil {
+		return fmt.Errorf("save faction: %w", err)
+	}
+	return nil
 }
 
 // FindOrCreateDevelopmentAccount returns an account for development-only sign-in.
@@ -232,11 +296,12 @@ func (s *Store) FindOrCreateDevelopmentAccount(ctx context.Context, email string
 		return Account{}, err
 	}
 	if err = sqlitex.ExecuteTransient(conn, `
-		SELECT handle, role FROM accounts WHERE email = ?1;`, &sqlitex.ExecOptions{
+		SELECT email, handle, role FROM accounts WHERE email = ?1;`, &sqlitex.ExecOptions{
 		Args: []any{normalizeEmail(email)},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
-			account.Handle = stmt.ColumnText(0)
-			account.Role = stmt.ColumnText(1)
+			account.Email = stmt.ColumnText(0)
+			account.Handle = stmt.ColumnText(1)
+			account.Role = stmt.ColumnText(2)
 			return nil
 		},
 	}); err != nil {

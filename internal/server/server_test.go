@@ -14,7 +14,7 @@ func TestHealthz(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/healthz", nil)
 
-	newHandler(nil).ServeHTTP(recorder, request)
+	newHandler(nil, nil).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNoContent)
@@ -28,7 +28,7 @@ func TestHealthzRejectsOtherMethods(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/healthz", nil)
 
-	newHandler(nil).ServeHTTP(recorder, request)
+	newHandler(nil, nil).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)

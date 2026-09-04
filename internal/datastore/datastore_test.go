@@ -4,6 +4,7 @@ package datastore
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,7 +91,7 @@ func TestOpenPersistentRejectsNewerSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sqlitex.ExecuteTransient(conn, "PRAGMA user_version = 2;", nil); err != nil {
+	if err := sqlitex.ExecuteTransient(conn, fmt.Sprintf("PRAGMA user_version = %d;", len(schema.Migrations)+1), nil); err != nil {
 		conn.Close()
 		t.Fatal(err)
 	}
@@ -101,6 +102,44 @@ func TestOpenPersistentRejectsNewerSchema(t *testing.T) {
 	_, err = Open(t.Context(), root, SeedAccount{})
 	if err == nil || !strings.Contains(err.Error(), "newer than supported") {
 		t.Fatalf("Open newer schema error = %v", err)
+	}
+}
+
+func TestOpenPersistentMigratesFactionSchema(t *testing.T) {
+	root := t.TempDir()
+	conn, err := sqlite.OpenConn(filepath.Join(root, Filename), sqlite.OpenReadWrite|sqlite.OpenCreate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlitex.ExecuteScript(conn, schema.Migrations[0], nil); err != nil {
+		conn.Close()
+		t.Fatal(err)
+	}
+	if err := sqlitex.ExecuteTransient(conn, fmt.Sprintf("PRAGMA application_id = %d;", ApplicationID), nil); err != nil {
+		conn.Close()
+		t.Fatal(err)
+	}
+	if err := sqlitex.ExecuteTransient(conn, "PRAGMA user_version = 1;", nil); err != nil {
+		conn.Close()
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(t.Context(), root, SeedAccount{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	assertPragma(t, store, "user_version", int64(len(schema.Migrations)))
+	conn, release, err := store.take(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if err := sqlitex.ExecuteTransient(conn, "SELECT count(*) FROM factions;", nil); err != nil {
+		t.Fatalf("query migrated factions table: %v", err)
 	}
 }
 
@@ -170,7 +209,7 @@ func TestFindOrCreateDevelopmentAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if existing != (Account{Handle: "admin", Role: "admin"}) {
+	if existing != (Account{Email: "admin@marajanda.com", Handle: "admin", Role: "admin"}) {
 		t.Fatalf("existing account = %#v, want admin", existing)
 	}
 
@@ -209,6 +248,49 @@ func TestOpenSharedMemoryUsesNamedDatabase(t *testing.T) {
 		t.Fatalf("account count from second pool = %d, want 2", got)
 	}
 	assertPragma(t, second, "foreign_keys", 1)
+}
+
+func TestFactionStartsAtOrigin(t *testing.T) {
+	store, err := OpenMemory(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if faction, found, err := store.Faction(t.Context(), "player@marajanda.com"); err != nil || found {
+		t.Fatalf("Faction before save = %#v, %t, %v; want no faction", faction, found, err)
+	}
+	if err := store.SaveFaction(t.Context(), " PLAYER@MARAJANDA.COM ", "The Wayfarers"); err != nil {
+		t.Fatal(err)
+	}
+	faction, found, err := store.Faction(t.Context(), "player@marajanda.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || !faction.Configured() || faction.Name != "The Wayfarers" || faction.Location.Q() != 0 || faction.Location.R() != 0 {
+		t.Fatalf("Faction = %#v, %t; want configured faction at axial origin", faction, found)
+	}
+}
+
+func TestFactionIsVisibleAcrossSharedMemoryConnections(t *testing.T) {
+	first, err := OpenSharedMemory(t.Context(), t.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := OpenSharedMemory(t.Context(), t.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	if err := first.SaveFaction(t.Context(), "player@marajanda.com", "The Navigators"); err != nil {
+		t.Fatal(err)
+	}
+	faction, found, err := second.Faction(t.Context(), "player@marajanda.com")
+	if err != nil || !found || faction.Name != "The Navigators" {
+		t.Fatalf("shared Faction = %#v, %t, %v; want The Navigators", faction, found, err)
+	}
 }
 
 type storedAccount struct {

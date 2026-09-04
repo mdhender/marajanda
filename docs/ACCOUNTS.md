@@ -17,6 +17,8 @@ Successful authentication creates a cryptographically random in-memory session. 
 
 Authenticated admins are directed to `/admin/dashboard`. Authenticated players are directed to `/player/dashboard`. Requests for either dashboard without a valid session are directed to `/sign-in`.
 
+The player dashboard directs players with incomplete required faction metadata to `/player/faction`. Accepted faction configuration directs the player back to `/player/dashboard`.
+
 Submitting `POST /sign-out` invalidates the current session, expires its cookie, and directs the browser to `/sign-in`.
 
 ### Development authentication
