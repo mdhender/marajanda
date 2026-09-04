@@ -53,6 +53,7 @@ func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCrea
 	mux.HandleFunc("GET /", app.landing)
 	mux.HandleFunc("GET /sign-in", app.signInForm)
 	mux.HandleFunc("POST /sign-in", app.signIn)
+	mux.HandleFunc("POST /sign-out", app.signOut)
 	mux.HandleFunc("GET /admin/dashboard", app.dashboard("admin"))
 	mux.HandleFunc("GET /player/dashboard", app.dashboard("player"))
 	registerAgentRoutes(mux, app, environment)
@@ -104,6 +105,23 @@ func (app *application) signIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, dashboardPath(account), http.StatusSeeOther)
+}
+
+func (app *application) signOut(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie(sessionCookieName); err == nil {
+		app.sessionsMu.Lock()
+		delete(app.sessions, cookie.Value)
+		app.sessionsMu.Unlock()
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.Redirect(w, r, "/sign-in", http.StatusSeeOther)
 }
 
 func (app *application) startSession(w http.ResponseWriter, account datastore.Account) error {
@@ -208,7 +226,8 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .shell { display: flex; flex-direction: column; width: min(1120px, calc(100% - 2rem)); min-height: 100vh; margin: 0 auto; }
     header { display: flex; align-items: center; justify-content: space-between; min-height: 5.5rem; border-bottom: 1px solid var(--line); }
     .brand { text-decoration: none; color: var(--gold); font-size: 1.25rem; letter-spacing: .18em; text-transform: uppercase; }
-    .sign-link { padding: .55rem 1rem; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; }
+    .sign-out-form { display: block; margin: 0; }
+    .sign-link { padding: .55rem 1rem; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 999px; font: inherit; text-decoration: none; cursor: pointer; }
     .sign-link:hover { border-color: var(--gold); }
     main { position: relative; flex: 1; padding: clamp(3rem, 9vw, 7rem) 0 5rem; }
     .eyebrow { margin: 0 0 1rem; color: var(--gold); font: .75rem/1.2 system-ui, sans-serif; font-weight: 700; letter-spacing: .22em; text-transform: uppercase; }
@@ -246,6 +265,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     <header>
       <a class="brand" href="/">Marajanda</a>
       {{if eq .View "landing"}}<a class="sign-link" href="/sign-in">Sign in</a>{{end}}
+      {{if or (eq .View "admin") (eq .View "player")}}<form class="sign-out-form" action="/sign-out" method="post"><button class="sign-link" type="submit">Sign out</button></form>{{end}}
     </header>
     <main>
       {{if eq .View "landing"}}

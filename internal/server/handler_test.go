@@ -26,7 +26,7 @@ func TestLandingAndSignInForm(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"v0.1.6-beta",
+		"v0.1.7-beta",
 		`href="https://github.com/mdhender/marajanda/issues"`,
 		`aria-label="Marajanda issues on GitHub"`,
 	} {
@@ -121,7 +121,12 @@ func TestSignInCreatesSessionAndRoutesByRole(t *testing.T) {
 			if dashboard.Code != http.StatusOK {
 				t.Fatalf("dashboard status = %d, want %d", dashboard.Code, http.StatusOK)
 			}
-			for _, want := range []string{"Welcome, " + test.handle + ".", test.wantDashboard} {
+			for _, want := range []string{
+				"Welcome, " + test.handle + ".",
+				test.wantDashboard,
+				`action="/sign-out" method="post"`,
+				`type="submit">Sign out</button>`,
+			} {
 				if !strings.Contains(dashboard.Body.String(), want) {
 					t.Fatalf("dashboard body missing %q", want)
 				}
@@ -135,6 +140,39 @@ func TestSignInCreatesSessionAndRoutesByRole(t *testing.T) {
 				t.Fatalf("other dashboard response = %d %q, want %d %q", other.Code, other.Header().Get("Location"), http.StatusSeeOther, test.wantPath)
 			}
 		})
+	}
+}
+
+func TestSignOutEndsSession(t *testing.T) {
+	handler := newHandler(func(context.Context, string, string) (datastore.Account, bool, error) {
+		return datastore.Account{Handle: "wanderer", Role: "player"}, true, nil
+	})
+	signIn := submitSignIn(handler, "player@example.com", "good.luck")
+	sessionCookie := signIn.Result().Cookies()[0]
+
+	request := httptest.NewRequest(http.MethodPost, "/sign-out", nil)
+	request.AddCookie(sessionCookie)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/sign-in" {
+		t.Fatalf("sign-out response = %d %q, want %d %q", response.Code, response.Header().Get("Location"), http.StatusSeeOther, "/sign-in")
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookies = %d, want 1", len(cookies))
+	}
+	expiredCookie := cookies[0]
+	if expiredCookie.Name != sessionCookieName || expiredCookie.MaxAge != -1 || !expiredCookie.HttpOnly || !expiredCookie.Secure || expiredCookie.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("expired session cookie = %#v", expiredCookie)
+	}
+
+	dashboardRequest := httptest.NewRequest(http.MethodGet, "/player/dashboard", nil)
+	dashboardRequest.AddCookie(sessionCookie)
+	dashboard := httptest.NewRecorder()
+	handler.ServeHTTP(dashboard, dashboardRequest)
+	if dashboard.Code != http.StatusSeeOther || dashboard.Header().Get("Location") != "/sign-in" {
+		t.Fatalf("dashboard response = %d %q, want %d %q", dashboard.Code, dashboard.Header().Get("Location"), http.StatusSeeOther, "/sign-in")
 	}
 }
 
