@@ -11,3 +11,4 @@
 # build files that shouldn't be committed
 /hexgen
 /hexweb
+/marajanda

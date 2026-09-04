@@ -1,0 +1,345 @@
+# marajanda
+
+Hex map generators.
+
+```
+cmd/hexweb              browser front end: pick a generator, adjust, render
+cmd/hexgen              CLI for the subdivision generator
+internal/mapgen         the registry generators plug into
+internal/generators     the generators themselves, one file each
+internal/hexgrid        shared hex geometry: cube coords, layout, rendering
+internal/hexfield       midpoint subdivision on a hex grid
+internal/noise          simplex, Perlin and value noise, and the fractal sum
+```
+
+## Generators
+
+**Midpoint subdivision** produces a continuous height field: recursive midpoint
+displacement on the triangular lattice of hex centres, the hex analogue of
+diamond-square. See below.
+
+| terrain | gray |
+|---|---|
+| ![subdivision, terrain palette](docs/images/subdivision-terrain.png) | ![subdivision, grayscale](docs/images/subdivision-gray.png) |
+
+The same field twice. Judge lattice artefacts on the right one: the terrain
+palette's colour banding hides the residual hexagonal creasing that grayscale
+makes plain.
+
+**Voronoi regions** produces discrete areas instead: sites are scattered across
+the map and every hex goes to its nearest one. Lloyd relaxation evens out the
+sizes, and the distance metric decides whether borders follow hex steps or run
+straight. The shape wanted for realms, faction territory or biome patches
+rather than terrain.
+
+| no relaxation | two Lloyd passes |
+|---|---|
+| ![voronoi, ragged regions](docs/images/voronoi-ragged.png) | ![voronoi, relaxed regions](docs/images/voronoi-relaxed.png) |
+
+Same seed and the same starting sites, so the colours match region for region
+and relaxation is the only difference. Untouched, the sites land where they land
+and regions come out as sprawls next to splinters; two passes towards the
+centroids is enough to make them read as territory.
+
+**Plate tectonics** is the middle case, where the regions interact. It takes the
+same partition and treats each region as a plate with a drift vector and a crust
+type, then reads the terrain off what happens where two plates meet: mountains
+where they converge, a trench on the oceanic side of a subduction zone, rifts
+and mid-ocean ridges where they part, fault valleys where they slide past. That
+relief is spread inland with an exponential falloff, so ranges get foothills
+rather than being one hex wide. The plate outlines are deliberately kept off the
+coastline — the crust lookup is domain-warped, so shores wander into bays and
+peninsulas instead of tracing the polygon. The **plates** palette shows the
+partition and colours every margin by what it is doing, which is the view to use
+when the terrain looks wrong.
+
+| terrain | plates |
+|---|---|
+| ![tectonic terrain](docs/images/tectonic-terrain.png) | ![tectonic plate margins](docs/images/tectonic-plates.png) |
+
+One map under both palettes, and they are worth reading together: every mountain
+chain in the terrain view sits on a red (convergent) margin, with the darkest
+water right beside it where the oceanic plate is going under. Yellow (transform)
+margins leave a line in the height field and raise nothing.
+
+**Fractal noise** goes the other way from all three. Nothing is built: the
+field is a function of position, defined everywhere before any map exists, and
+the hexes only choose where to sample it. Summed octaves of gradient noise, with a choice of
+simplex, Perlin or value noise underneath. Simplex is the default because it
+lives on a triangular lattice — the same lattice hex centres do — so it has no
+square grain for the map to inherit.
+
+| fBm | ridged |
+|---|---|
+| ![noise, fBm octaves](docs/images/noise-fbm.png) | ![noise, ridged octaves](docs/images/noise-ridged.png) |
+
+The same noise, folded differently, in grayscale so the structure is not hidden
+by colour banding. fBm sums the octaves as they come and its maxima are peaks,
+which are isolated points, so it makes blobs. Ridged folds each octave at zero
+and turns it upside down, which puts the maxima on the noise's *zero set* — and
+the zero set of a continuous field is a set of curves. That is where the chains
+come from, and it is why ridged is the shape to reach for when the map wants
+mountain ranges rather than lumps.
+
+Ridged is also the one shape whose octaves are not independent: each is scaled
+by the height of the one above it, so detail only lands where there is already
+relief. Without that the folds of every octave fall in different places and the
+map comes out as speckle. Compare the smooth basins in the image on the right
+with the crowded ridges between them.
+
+Because the field is continuous rather than refined, the map radius is free —
+there is no power of two here — and hex size zooms the picture instead of
+changing the terrain. There is no creasing either: creasing is an artefact of
+subdivision's insertion order, and nothing is inserted.
+
+Every image above comes from the web UI, and each pair differs in exactly one
+parameter. Note the explicit `&borders=true` and `&relax=true&sra=true`: an
+absent checkbox is submitted as false, not as its default.
+
+```sh
+go run ./cmd/hexweb -addr :8100 -open=false -timeout 5m
+# /image?gen=subdivision&seed=42&levels=6&size=3&relax=true&sra=true&palette=terrain
+#                                                                   &palette=gray
+# /image?gen=voronoi&seed=42&radius=48&sites=32&size=4&borders=true&lloyd=0
+#                                                                  &lloyd=2
+# /image?gen=tectonic&seed=7&radius=48&plates=12&size=4&palette=terrain
+#                                                      &palette=plates
+# /image?gen=noise&seed=42&radius=48&size=5&octaves=5&frequency=2.5&palette=gray&shape=fbm
+#                                                                              &shape=ridged
+```
+
+`internal/hexgrid` holds what they need — cube coordinates, the six directions,
+palettes, and rendering a hexagon-shaped map by converting each pixel back to a
+coordinate. It knows nothing about how a map is generated; a generator supplies
+a function from coordinate to colour.
+
+## Running it
+
+```sh
+go run ./cmd/hexweb              # opens a browser on localhost:8080
+go run ./cmd/hexweb -addr :9000 -open=false -timeout 5m
+```
+
+`-timeout` bounds the run: the server shuts itself down when it fires and says
+so in the log. Scripts should pass it, because `go run` execs the server as a
+child process — killing the `go run` gets you a still-listening orphan on the
+port, and the next run fails to bind for a reason that looks unrelated. Without
+the flag the server runs until it is killed, which is what you want
+interactively.
+
+Pick a generator, adjust the parameters, hit Render. The image opens in a new
+tab as a plain `GET /image?...` URL, so it is shareable and bookmarkable. Seeds
+default to a fresh random value on every page load; the **New** button asks the
+server for another.
+
+## Adding a generator
+
+Implement `mapgen.Generator` in a new file under `internal/generators` and
+register it in `init`. Declare the tunables as `mapgen.Param` values and the
+web form, defaults, parsing, clamping and the picker entry all follow. The
+server does not change.
+
+```go
+func init() { mapgen.Register(myGen{}) }
+
+func (myGen) Params() []mapgen.Param {
+    return []mapgen.Param{
+        {Name: "seed", Label: "Seed", Kind: mapgen.KindSeed},
+        {Name: "levels", Label: "Levels", Kind: mapgen.KindInt,
+         Default: 7, Min: 1, Max: 9},
+    }
+}
+
+func (myGen) Generate(v mapgen.Values) (image.Image, error) {
+    // v is already clamped to the declared bounds.
+    return render(v.Int("levels"), v.Uint64("seed"))
+}
+```
+
+Values accessors never fail: missing or unparseable input falls back to the
+declared default and numbers are clamped, so a hand-typed URL cannot push a
+generator outside the range it said it handles. Guard the output size, though
+— `internal/generators` caps the rendered image at 40 megapixels, since levels
+and hex size multiply.
+
+Randomness comes from `math/rand/v2` sources only.
+
+Two of the four generators need the same thing — a hexagon carved into regions
+— so that lives in `internal/generators/regions.go` rather than in either of
+them. It is the exception to one file per generator.
+
+Where a generator needs real machinery rather than a shared helper, it goes in
+its own package and the file under `internal/generators` stays a declaration of
+parameters plus a call: `subdivision` over `internal/hexfield`, `noise` over
+`internal/noise`. Those packages know nothing about `mapgen`, which is what
+makes them testable on their own terms — `internal/noise` checks the range,
+continuity and lattice of each function directly, none of which is visible in a
+rendered PNG.
+
+---
+
+# internal/hexfield
+
+Fractal terrain generation on a hex grid, by recursive midpoint displacement.
+
+This is the hex analogue of the diamond-square algorithm. It is not a direct
+port, because there isn't one.
+
+## Why it isn't diamond-square
+
+Hexagons are not rep-tiles: a hexagon cannot be divided into smaller hexagons.
+Split one and you get three rhombi or six triangles, never hexagons. Looking
+for the analogue of "split the square into four squares" is a dead end.
+
+The way through is to stop thinking about tiles and look at the lattice of
+*centres*. Hex centres form a **triangular lattice**, and triangular lattices
+do refine self-similarly: insert a point at every edge midpoint and you get a
+triangular lattice at half the spacing, with each triangle becoming four. That
+is the recursion here, and it is Loop subdivision's topology.
+
+In cube coordinates it falls out exactly. Define the **level-k lattice** as
+every hex whose `Q`, `R` and `S` are all divisible by `2^k`. The midpoint of
+two adjacent level-k points lands precisely on the level-(k−1) lattice:
+
+```
+p = (0,0,0)   p' = (2,-2,0)   midpoint = (1,-1,0)     integer, and sums to 0
+```
+
+Because `Q+R+S == 0`, coordinate parities fall into exactly four classes:
+
+| parity of (Q,R,S)  | role                                     |
+|--------------------|------------------------------------------|
+| (even, even, even) | the coarse lattice — already has values  |
+| (odd, odd, even)   | midpoints along direction (1,−1,0)       |
+| (odd, even, odd)   | midpoints along direction (1,0,−1)       |
+| (even, odd, odd)   | midpoints along direction (0,1,−1)       |
+
+Three new classes, one per edge direction, so each pass adds exactly three
+points per existing point and quadruples the density. Nothing is missed and
+nothing is written twice.
+
+**This needs only one step per level.** Square grids need a diamond phase and
+a square phase because their midpoints come in two incompatible flavours; the
+triangular lattice refines uniformly.
+
+## Grid shape
+
+A **hexagon of radius 2^K**. It is convex in the hex metric, so midpoints of
+in-bounds points stay in bounds; it has no preferred axis; and its coarsest
+lattice is exactly seven points — origin plus six at radius N — which refines
+with no leftovers.
+
+```
+Levels 0: radius  1 ->    7 hexes   (the seed)
+Levels 1: radius  2 ->   19 hexes
+Levels 2: radius  4 ->   61 hexes
+Levels 6: radius 64 -> 12481 hexes      3N^2 + 3N + 1
+```
+
+Those seven seed values are the caller's control over the large-scale shape.
+Pinning them is the reason to reach for subdivision rather than summed noise
+octaves in the first place.
+
+If you want a **wrapping** world instead, use a rhombus of side `2^K` seeded
+at four corners; a rhombus tiles the plane by translation, so `Q` and `R`
+modulo the side length give a torus. Not implemented here.
+
+## Orientation
+
+Cube coordinates carry no orientation. Pointy-top versus flat-top is entirely
+the layout matrix applied at render time — a 30° rotation — so every
+adjacency, distance and midpoint in the algorithm is identical either way.
+Orientation is confined to `Field.Image`.
+
+## Creasing, and what actually helps
+
+Subdivision writes a point once and never revisits it, so the few values fixed
+while the displacement amplitude was largest act as frozen scaffolding that
+shows through as ridges along the lattice axes. Two knobs address it, and
+**they fail in opposite directions on their own**:
+
+- `Relax` — the Loop **vertex mask**, repositioning existing points towards
+  their neighbourhood average (5/8 point + 3/8 neighbours) before each round
+  of midpoints. A naive port omits this half of Loop subdivision entirely.
+- `SRA` — successive random additions (Voss): perturb every point at every
+  level, not just newly inserted ones.
+
+Measured as the mean deviation of coarse-lattice points from their
+neighbourhood, divided by the same for finest-level points. **1.0 means no
+creasing signature**; above 1 the old points spike, below 1 they sit in flat
+spots. 40 trials, standard error ≈ 0.02–0.05:
+
+| variant                  | H=0.5 | H=0.7 | H=0.9 |
+|--------------------------|-------|-------|-------|
+| midpoint, bare           | 0.507 | 0.628 | 0.900 |
+| loop, bare               | 0.834 | 1.335 | 2.423 |
+| loop + SRA only          | 1.802 | 2.467 | 3.805 |
+| loop + relax only        | 0.406 | 0.430 | 0.490 |
+| **loop + relax + SRA**   | 1.125 | 1.195 | 1.324 |
+| **midpoint + relax + SRA** | 1.052 | 1.079 | 1.131 |
+
+Read off it:
+
+- **SRA alone makes creasing worse**, badly. A point present at coarse levels
+  accumulates independent noise from every level while its later-inserted
+  neighbours get only the smaller, finer noise, so old points spike.
+- **Relax alone over-corrects**, leaving old points flatter than the surface
+  around them.
+- **Together they cancel.** Both default to on.
+- Bare `loop` degrades sharply as H rises: fine at H=0.5, badly creased at
+  H=0.9.
+- The four-point Loop edge mask scores *worse* than the plain two-point
+  midpoint once relax is in play, consistently and at every H. Loop remains
+  the default as the better interpolant, but `-stencil midpoint` is a
+  defensible choice and the numbers say so.
+
+**None of this eliminates the artefact.** Rendered in grayscale, a faint
+hexagonal cell pattern remains visible in every variant. That is inherent to
+subdivision — it is Miller's 1986 critique, and the reason summed noise
+octaves displaced these methods for most terrain work. If you don't need to
+pin exact heights at specific points, fBm over Perlin/simplex noise has no
+lattice memory and no creasing.
+
+Note that `Relax` repositions the seven seed points too, so `-island` bias is
+weakened by it. Exact control and crease suppression are in tension.
+
+## CLI
+
+```sh
+go run ./cmd/hexgen -levels 7 -hurst 0.7 -seed 42 -out terrain.png
+go run ./cmd/hexgen -levels 4 -island -ascii            # ASCII to stdout
+go run ./cmd/hexgen -palette gray -out raw.png          # shows artefacts
+go run ./cmd/hexgen -compare out/ -palette gray         # the full variant set
+```
+
+`-hurst` is the roughness knob: 1.0 smooth rolling hills, ~0.5 Brownian and
+natural-looking, near 0 violently jagged. The displacement amplitude is
+multiplied by `2^-H` after each level, which is what makes the result
+fractional Brownian motion rather than white noise or a flat plane.
+
+`-compare` writes one PNG per variant, named for its settings, sweeping H and
+the creasing knobs.
+
+## Library
+
+```go
+f := hexfield.Generate(hexfield.Params{
+    Levels: 7, Hurst: 0.7, Seed: 42,
+    Stencil: hexfield.Loop, Relax: true, SRA: true,
+})
+f.Normalize()
+for c, h := range f.All() {
+    // c.Q, c.R, c.S and a height in [0,1]
+}
+```
+
+Displacements are drawn as a stream from a `math/rand/v2` ChaCha8 source in the
+order the lattice is walked. That order is fixed, so a seed reproduces a field
+exactly.
+
+An earlier version hashed `(seed, coordinate, level)` so any region could be
+regenerated independently of traversal, and so the coarse structure stayed put
+while you tuned `levels`. That meant hand-rolling a mixer, and the project
+standardises on `math/rand/v2` sources; the property was traded away
+deliberately. ChaCha8 rather than PCG because seeds here are frequently small
+and sequential, and ChaCha8 has no short-seed correlation to reason about.
