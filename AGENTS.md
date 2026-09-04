@@ -16,6 +16,7 @@ Ask the user before deciding game rules or server behavior that these documents 
 - Implement bug fixes before new features.
 - Before starting feature work, check the upstream repository for open bug issues.
 - If any upstream bug issue is open, push back on the feature request and prioritize resolving the open bugs first.
+- Before starting a non-trivial feature that has no tracking issue, suggest creating an upstream issue. Create the issue only with the user's explicit approval.
 
 ## Coding directives
 
