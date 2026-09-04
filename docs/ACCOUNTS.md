@@ -1,0 +1,30 @@
+# Accounts Reference
+
+## Identity and authentication
+
+- An email address identifies an account.
+- Email addresses are normalized to lowercase before lookup, comparison, or storage.
+- Normalized email addresses are unique. Both the database and application behavior enforce uniqueness.
+- Authentication uses email and password.
+- Password hashes use bcrypt with `bcrypt.MinCost`.
+- Account email addresses are the only personally identifiable information stored. Additional PII requires an explicit product decision.
+
+## Invitations
+
+Registration is invitation-only.
+
+An admin page accepts an email address and creates an invitation link for that address. Only one active invitation may exist for a normalized email address. An invitation expires 48 hours after issue.
+
+Admins can delete or reissue invitations. Reissuing replaces or invalidates the previous invitation and never leaves multiple valid invitations for one email address.
+
+## Registration
+
+After following an invitation link, the invitee enters:
+
+- Their email address to confirm the invitation. The page does not render or prefill the invited email address.
+- A password.
+- The password again as confirmation.
+
+A password contains exactly eight characters, all of which are printable. Non-printing characters are rejected.
+
+Registration verifies the invitation token, expiration, normalized email match, password confirmation, and account uniqueness before creating the account. Successful registration consumes or invalidates the invitation so that it cannot be reused.
