@@ -33,6 +33,7 @@ internal/hexgrid      shared hex geometry: Coord, Directions, Render, palettes
 internal/hexfield     midpoint subdivision only; depends on hexgrid
 internal/world        the world datastore: a wrapping cylinder of hexes and
                       its JSON. Depends on maloquacious/hexg, not on hexgrid.
+internal/worldgen     fills a world. Fault cuts the sphere with small circles
 cmd/hexweb            server; imports generators for its init() side effects
 cmd/hexgen            CLI for subdivision specifically
 ```
@@ -84,6 +85,11 @@ boundaries. Orientation lives only in `Render` — cube coordinates carry none.
   `Validate` rejects anything else so no reader has to invent a meaning for a
   half-filled layer. Index is column-major (`col*Rows + row`) to match
   Worldographer's own `[col][row]` tile array.
+- **`worldgen.Options` substitutes nothing.** Every field is used as given,
+  zeroes included, and `Defaults` is where a caller gets sensible values. A
+  "0 means unset" rule was tried and removed: `Offset: 0` is the great-circle
+  case the package exists to contrast with, so the one setting worth asking
+  for was the one setting you could not ask for.
 - **The world layout is not a parameter, deliberately.** donjon's maps and
   Worldographer's files independently agree on flat-top odd-q columns, so
   offering a choice would only create conversions at both ends.
@@ -148,7 +154,28 @@ antipode. Consequences:
   sample, against -0.24..-0.38 for control shifts.
 - To break it, the cut must not be odd under the antipodal map. The smallest
   change is a **small circle** — offset the cutting plane from the centre —
-  which is what the first generator here should do.
+  which is what `worldgen.Fault` does, through `Options.Offset`.
+
+Measured on `worldgen.Fault` itself, averaged over seeds, `corr(h, antipode)`
+against the offset:
+
+| offset | 0.0 | 0.1 | 0.25 | 0.5 | 0.75 | 0.9 |
+|---|---|---|---|---|---|---|
+| corr | **-1.00** | -0.83 | -0.63 | **-0.47** | -0.41 | -0.41 |
+
+It plateaus around -0.4 rather than reaching 0, and that is inherent: for a cut
+at offset d, the even (symmetric) part of the field lives only in the band
+where `|p·n| < |d|`, so displacing the plane shrinks the odd part without
+removing it. This is not worth chasing — Earth's own land is famously
+antipodal to water, and donjon scores -0.68, so the 0.5 default is already
+less mirrored than the reference it is imitating.
+
+Two properties that fall out of generating on the sphere, both regression
+tested: there is **no seam** (the wrap's mean step is 1.02x the interior mean,
+i.e. indistinguishable), and the poles are a real place rather than an edge —
+every even column of row 0 maps to the north pole exactly, so those hexes hold
+the same value. That is equirectangular pole distortion, donjon has it too,
+and its ice caps are what hide it.
 
 ### Upstream: hexg
 
