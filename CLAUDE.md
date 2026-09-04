@@ -103,6 +103,12 @@ soundness. `TestNoUnpaintedHexes` is the regression test for a slice-aliasing bu
 where sites shared a backing array with the hex list — prefer extending these
 registry-wide tests over per-generator ones.
 
+A test that calls `mapgen.Register` must use `registerForTest`, which takes the
+entry out again on cleanup. `Register` refuses to overwrite a name, so an entry
+left behind is harmless on the first run and fatal on the second — which is
+what made the whole package fail under `-count=3`, the very flag this file
+tells you to reach for.
+
 `hexfield`'s creasing tests are statistical (24 trials); under ~16 the variants do
 not separate. If one fails, re-run with `-count=3` before assuming a real change.
 

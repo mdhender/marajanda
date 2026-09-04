@@ -108,8 +108,25 @@ func TestSeedIsNotClamped(t *testing.T) {
 	}
 }
 
+// registerForTest registers g and takes it out again when the test ends.
+//
+// The registry is package-level state that Register deliberately refuses to
+// overwrite, so a test that registered and walked away left an entry behind:
+// harmless within one run, fatal on the second, which made every test here
+// fail under -count=2 or higher. TestRegisterRejectsDuplicates failed
+// especially quietly, still passing while recovering from the wrong panic.
+func registerForTest(t *testing.T, g Generator) {
+	t.Helper()
+	Register(g)
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		delete(registered, g.Name())
+	})
+}
+
 func TestRegisterAndGet(t *testing.T) {
-	Register(fake{"registry-test"})
+	registerForTest(t, fake{"registry-test"})
 	got, ok := Get("registry-test")
 	if !ok {
 		t.Fatal("registered generator not found")
@@ -123,19 +140,22 @@ func TestRegisterAndGet(t *testing.T) {
 }
 
 func TestRegisterRejectsDuplicates(t *testing.T) {
+	registerForTest(t, fake{"dup-test"})
 	defer func() {
 		if recover() == nil {
 			t.Error("registering a duplicate name did not panic")
 		}
 	}()
-	Register(fake{"dup-test"})
+	// The second registration is the one under test, and it must not be
+	// cleaned up: it never lands, and deleting the name twice would take the
+	// first one out from under the cleanup above.
 	Register(fake{"dup-test"})
 }
 
 // All must be ordered, or the picker shuffles between runs.
 func TestAllIsOrdered(t *testing.T) {
-	Register(fake{"zzz-order"})
-	Register(fake{"aaa-order"})
+	registerForTest(t, fake{"zzz-order"})
+	registerForTest(t, fake{"aaa-order"})
 	all := All()
 	for i := 1; i < len(all); i++ {
 		if all[i-1].Title() > all[i].Title() {
