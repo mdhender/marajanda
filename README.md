@@ -9,6 +9,7 @@ internal/mapgen         the registry generators plug into
 internal/generators     the generators themselves, one file each
 internal/hexgrid        shared hex geometry: cube coords, layout, rendering
 internal/hexfield       midpoint subdivision on a hex grid
+internal/noise          simplex, Perlin and value noise, and the fractal sum
 ```
 
 ## Generators
@@ -61,6 +62,36 @@ chain in the terrain view sits on a red (convergent) margin, with the darkest
 water right beside it where the oceanic plate is going under. Yellow (transform)
 margins leave a line in the height field and raise nothing.
 
+**Fractal noise** goes the other way from all three. Nothing is built: the
+field is a function of position, defined everywhere before any map exists, and
+the hexes only choose where to sample it. Summed octaves of gradient noise, with a choice of
+simplex, Perlin or value noise underneath. Simplex is the default because it
+lives on a triangular lattice — the same lattice hex centres do — so it has no
+square grain for the map to inherit.
+
+| fBm | ridged |
+|---|---|
+| ![noise, fBm octaves](docs/images/noise-fbm.png) | ![noise, ridged octaves](docs/images/noise-ridged.png) |
+
+The same noise, folded differently, in grayscale so the structure is not hidden
+by colour banding. fBm sums the octaves as they come and its maxima are peaks,
+which are isolated points, so it makes blobs. Ridged folds each octave at zero
+and turns it upside down, which puts the maxima on the noise's *zero set* — and
+the zero set of a continuous field is a set of curves. That is where the chains
+come from, and it is why ridged is the shape to reach for when the map wants
+mountain ranges rather than lumps.
+
+Ridged is also the one shape whose octaves are not independent: each is scaled
+by the height of the one above it, so detail only lands where there is already
+relief. Without that the folds of every octave fall in different places and the
+map comes out as speckle. Compare the smooth basins in the image on the right
+with the crowded ridges between them.
+
+Because the field is continuous rather than refined, the map radius is free —
+there is no power of two here — and hex size zooms the picture instead of
+changing the terrain. There is no creasing either: creasing is an artefact of
+subdivision's insertion order, and nothing is inserted.
+
 Every image above comes from the web UI, and each pair differs in exactly one
 parameter. Note the explicit `&borders=true` and `&relax=true&sra=true`: an
 absent checkbox is submitted as false, not as its default.
@@ -73,6 +104,8 @@ go run ./cmd/hexweb -addr :8100 -open=false -timeout 5m
 #                                                                  &lloyd=2
 # /image?gen=tectonic&seed=7&radius=48&plates=12&size=4&palette=terrain
 #                                                      &palette=plates
+# /image?gen=noise&seed=42&radius=48&size=5&octaves=5&frequency=2.5&palette=gray&shape=fbm
+#                                                                              &shape=ridged
 ```
 
 `internal/hexgrid` holds what they need — cube coordinates, the six directions,
@@ -131,9 +164,17 @@ and hex size multiply.
 
 Randomness comes from `math/rand/v2` sources only.
 
-Two of the three generators need the same thing — a hexagon carved into regions
+Two of the four generators need the same thing — a hexagon carved into regions
 — so that lives in `internal/generators/regions.go` rather than in either of
 them. It is the exception to one file per generator.
+
+Where a generator needs real machinery rather than a shared helper, it goes in
+its own package and the file under `internal/generators` stays a declaration of
+parameters plus a call: `subdivision` over `internal/hexfield`, `noise` over
+`internal/noise`. Those packages know nothing about `mapgen`, which is what
+makes them testable on their own terms — `internal/noise` checks the range,
+continuity and lattice of each function directly, none of which is visible in a
+rendered PNG.
 
 ---
 

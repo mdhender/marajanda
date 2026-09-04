@@ -31,6 +31,8 @@ internal/generators   the generators, one file each, self-registering in init()
                       plus regions.go: the partition voronoi and tectonic share
 internal/hexgrid      shared hex geometry: Coord, Directions, Render, palettes
 internal/hexfield     midpoint subdivision only; depends on hexgrid
+internal/noise        simplex/Perlin/value noise and the fractal sum. Plane
+                      geometry only: knows nothing about hexes or mapgen
 internal/world        the world datastore: a wrapping cylinder of hexes and
                       its JSON. Depends on maloquacious/hexg, not on hexgrid.
 internal/worldgen     fills a world. Fault cuts the sphere with small circles
@@ -53,9 +55,10 @@ boundaries. Orientation lives only in `Render` — cube coordinates carry none.
 
 ### Constraints that are not obvious from the code
 
-- **`math/rand/v2` sources only.** Both generators seed ChaCha8 from the `seed`
-  param (`newRand`); not PCG, because seeds here are frequently small and
-  sequential. A previous hand-rolled splitmix64 was removed for this rule.
+- **`math/rand/v2` sources only.** Generators seed ChaCha8 from the `seed`
+  param (`newRand`, and `noise.New` for the same reason); not PCG, because
+  seeds here are frequently small and sequential. A previous hand-rolled
+  splitmix64 was removed for this rule.
 - **Anything affecting output must be deterministic from the seed.** Go randomises
   map iteration order, so code that ranges over a map and influences the result
   must index by region/id instead and break ties by lowest index. `mergeSlivers`
@@ -69,6 +72,14 @@ boundaries. Orientation lives only in `Render` — cube coordinates carry none.
   boxes) while `NewValues` still falls back to the default — do not collapse these.
 - Declare float params as `Default: 4.0`, not `Default: 4`. An untyped int in an
   `any` field fails the `float64` assertion and silently yields 0.
+- **Noise is sampled in pixel space, never in cube coordinates.** `noisemap`
+  takes each hex's `hexgrid.Center` at unit size and divides by the radius.
+  Cube coordinates are not a space the field looks isotropic in, so sampling
+  `(Q,R)` directly shears it; this is the same reason `tectonic` takes its
+  boundary normals from pixel-space centroids. Dividing by the radius rather
+  than the pixel width is what makes hex size a zoom and radius a wider window
+  onto the same terrain.
+
 - `partition` returns `all` in `hexgrid.Hexes` order precisely so callers have a
   deterministic order to walk. `tectonic` indexes every field by position in it
   and never ranges over `owner`; the BFS in `spread` is seeded in that order too,
@@ -109,6 +120,12 @@ left behind is harmless on the first run and fatal on the second — which is
 what made the whole package fail under `-count=3`, the very flag this file
 tells you to reach for.
 
+`internal/noise` is tested on its own terms rather than through a rendered
+image: range, mean, continuity, where each function vanishes, and that the two
+folded shapes are the maxima of `-|n|` and `+|n|` respectively. Sequential
+seeds are checked for correlation specifically, since those are the seeds a
+sweep actually uses and the reason the source is ChaCha8.
+
 `hexfield`'s creasing tests are statistical (24 trials); under ~16 the variants do
 not separate. If one fails, re-run with `-count=3` before assuming a real change.
 
@@ -127,6 +144,23 @@ hex directions instead makes the class flicker hex to hex and turns every margin
 into transform speckle. Relatedly, `shearDominance` is below 1 on purpose —
 whichever component is larger winning outright makes half of all margins
 transform, and the map comes out nearly flat.
+
+Every gradient noise is exactly zero at its own lattice vertices — there is no
+offset there for the gradient to dot with. Perlin's lattice is the integer
+grid, so its zeros are a grid and low-frequency Perlin shows a faint square
+grain; simplex's is triangular, and in the usual parameterisation it meets the
+integer grid only along `i+j == 0`. That is the reason simplex is the default
+here: hex centres are a triangular lattice too, so the noise has no square
+grain for the map to inherit. It is also why `Fractal` offsets each octave by a
+seed-derived amount — unoffset, every octave's lattice zero stacks at the
+origin and the centre of the map is dead at every scale at once.
+
+`Ridged` is the only shape whose octaves are not independent: each is scaled by
+the height of the one above it (`ridgeFeedback`), so detail only lands where
+there is already relief. Summed flat, the folds of successive octaves land in
+different places and the result is speckle rather than chains, which is the
+whole reason to have the shape. Its distribution is bottom-heavy as a result,
+so a ridged map usually wants a lower `sea` than an fBm one.
 
 Subdivision creasing is reduced, not eliminated — visible as a hexagonal cell
 pattern under `-palette gray`, which the terrain palette's colour banding hides.
