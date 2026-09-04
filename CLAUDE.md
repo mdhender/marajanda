@@ -31,9 +31,18 @@ internal/generators   the generators, one file each, self-registering in init()
                       plus regions.go: the partition voronoi and tectonic share
 internal/hexgrid      shared hex geometry: Coord, Directions, Render, palettes
 internal/hexfield     midpoint subdivision only; depends on hexgrid
+internal/world        the world datastore: a wrapping cylinder of hexes and
+                      its JSON. Depends on maloquacious/hexg, not on hexgrid.
 cmd/hexweb            server; imports generators for its init() side effects
 cmd/hexgen            CLI for subdivision specifically
 ```
+
+**There are two hex worlds in here and they do not meet.** `hexgrid` is the
+original: hexagon-*shaped* maps in cube coordinates, rendered pixel-by-pixel,
+with no notion of a globe. `world` is where the project is going: a rectangular
+cylinder of columns that wraps east to west, which is what a donjon-style world
+map is. They share no code, and merging them is not on the table — a hexagon and
+a cylinder want different things.
 
 `hexgrid` knows nothing about generation. A generator hands `hexgrid.Render` a
 `func(Coord) (color.RGBA, bool)` and gets an image; the bool means "in the map",
@@ -63,6 +72,21 @@ boundaries. Orientation lives only in `Render` — cube coordinates carry none.
   deterministic order to walk. `tectonic` indexes every field by position in it
   and never ranges over `owner`; the BFS in `spread` is seeded in that order too,
   so ties break the same way on every run.
+
+- **`internal/world` does its hex trigonometry nowhere.** Layout, pixel
+  positions, and the offset/cube conversions all come from
+  `github.com/maloquacious/hexg`. What the package keeps is the *frame*
+  (flat-top odd-q, origin half a hex west) and the topology (the east-west
+  wrap), because those are properties of the world, not of hex geometry. If you
+  find yourself writing a `sqrt(3)` in this package, it belongs upstream.
+- **A layer is absent or complete, never short.** `world.Layers` is
+  struct-of-arrays; each slice is length 0 or exactly `Grid.Len()`, and
+  `Validate` rejects anything else so no reader has to invent a meaning for a
+  half-filled layer. Index is column-major (`col*Rows + row`) to match
+  Worldographer's own `[col][row]` tile array.
+- **The world layout is not a parameter, deliberately.** donjon's maps and
+  Worldographer's files independently agree on flat-top odd-q columns, so
+  offering a choice would only create conversions at both ends.
 
 ### Tests
 
@@ -97,8 +121,48 @@ pattern under `-palette gray`, which the terrain palette's colour banding hides.
 Use grayscale when judging lattice artefacts. `Relax` and `SRA` each fail alone and
 in opposite directions and only work paired; the measured numbers are in README.md.
 
-`docs/` holds RPG source PDFs (gitignored) and a reconstructed changelog. `out/` is
-generated images (gitignored).
+### The donjon reference, and the symmetry in it
+
+`docs/downloads/` holds a donjon fantasy world map (`Eglar.png`, plus the
+`.html` whose place index carries both grid and pixel coordinates). Two things
+were established from it and are worth not re-deriving:
+
+**Its geometry is exactly ours.** Fitting all 32 places gives
+`x = 20*col + 20/3` and `y = 23.094*row`, plus half a row on odd columns, with
+no outlier above 1e-6. That is flat-top odd-q hexes at circumradius 40/3 px,
+200 columns across a 4000px image. donjon's world map *is* a hex map; the PNG
+is only its rasterisation. `TestLayoutMatchesDonjonSample` pins us to it.
+
+**Great-circle faulting is antipodally antisymmetric, and that is the "weird
+symmetry".** Every cut raises one hemisphere and lowers the other, so each cut
+is odd under p -> -p and so is any sum of them: `h(-p) = -h(p)`, exactly. A
+replication of `mdhender/mapgen`'s Olsson port measures `corr(H, antipode) =
+-1.000` at every fault count. Every continent is guaranteed an ocean at its
+antipode. Consequences:
+
+- Olsson's `I have only calculated faults for 1/2 the image` trick is *not* the
+  cause. Running the sweep over the full width and deleting the mirror produces
+  statistically identical output; the mirror exploits the symmetry, it does not
+  create it.
+- donjon has it too: land/sea against its own antipode scores -0.683 on the
+  sample, against -0.24..-0.38 for control shifts.
+- To break it, the cut must not be odd under the antipodal map. The smallest
+  change is a **small circle** — offset the cutting plane from the centre —
+  which is what the first generator here should do.
+
+### Upstream: hexg
+
+`maloquacious/hexg` (the standalone module, v1.0.1) is the one to use. The copy
+vendored inside `maloquacious/wxx` as `wxx/hexg` is a stub: `OddQLayout` panics
+in 12 of 13 methods, and every coordinate type has unexported fields with no
+accessors, so `wxx.Tile_t.Coords` marshals as `{}`. Filed as maloquacious/wxx
+[#52](https://github.com/maloquacious/wxx/issues/52) (replace the vendored copy),
+[#53](https://github.com/maloquacious/wxx/issues/53) and
+[#54](https://github.com/maloquacious/wxx/issues/54). Add the `wxx` dependency
+back when the Worldographer exporter is written, not before.
+
+`docs/` holds RPG source PDFs (gitignored), the donjon samples above, and a
+reconstructed changelog. `out/` is generated images (gitignored).
 
 ---
 

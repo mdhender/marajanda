@@ -1,2 +1,4 @@
+github.com/maloquacious/hexg v1.0.1 h1:xnb6r5rQ8Hz+hSCkF9tOwHbpDhUrDxp4INN9zyebRMw=
+github.com/maloquacious/hexg v1.0.1/go.mod h1:Un6Fvo4X/rCr5WTG4abr4Bos/9h7NyBvHqK4q5Ok4iY=
 github.com/maloquacious/semver v0.4.1 h1:qwMBcA9VfkD1KsPIMcX7KW9/rnBpBQBbTTcZhlgOIgc=
 github.com/maloquacious/semver v0.4.1/go.mod h1:0VQ90ipG1SLXCDcQo1bgYTBIpvXsEiNOnEF5Bs/HRYY=
