@@ -16,7 +16,7 @@ Ask the user before deciding game rules or server behavior that these documents 
 - Implement bug fixes before new features.
 - Before starting feature work, check the upstream repository for open bug issues.
 - If any upstream bug issue is open, push back on the feature request and prioritize resolving the open bugs first.
-- Before starting a non-trivial feature that has no tracking issue, create an upstream issue. Tracking issue creation is pre-authorized and does not require additional approval.
+- Before starting a non-trivial feature that has no tracking issue, create an upstream issue assigned to `mdhender`. Tracking issue creation is pre-authorized and does not require additional approval.
 
 ## Coding directives
 
