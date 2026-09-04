@@ -5,7 +5,9 @@ Marajanda uses ZombieZen SQLite for persistent and in-memory data.
 ## Database identity and connection settings
 
 - SQLite `application_id` is the ASCII encoding of `MRJ0`: hexadecimal `0x4D524A30`, decimal `1297238576`.
-- Every connection enables write-ahead logging (WAL) and foreign-key enforcement. This includes persistent, test, and in-memory connections.
+- Every persistent connection enables write-ahead logging (WAL).
+- Every connection enables foreign-key enforcement, including test and in-memory connections.
+- SQLite does not support WAL for true in-memory databases; those databases use SQLite's `memory` journal mode.
 
 ## Migrations
 
@@ -40,6 +42,8 @@ When `:memory:` is selected, the server creates and migrates an in-memory databa
 | --- | --- | --- |
 | Admin | `admin@marajanda.com` | `good.luck` |
 | Player | `player@marajanda.com` | `good.luck` |
+
+The corresponding default handles are `admin` and `player`.
 
 These are intentional credentials for temporary server instances and do not produce warnings or errors.
 

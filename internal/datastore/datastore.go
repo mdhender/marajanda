@@ -1,0 +1,298 @@
+// Copyright (c) 2026 Michael D Henderson.
+
+// Package datastore opens and migrates Marajanda SQLite databases.
+package datastore
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"golang.org/x/crypto/bcrypt"
+	"zombiezen.com/go/sqlite"
+	"zombiezen.com/go/sqlite/sqlitemigration"
+	"zombiezen.com/go/sqlite/sqlitex"
+)
+
+const (
+	// Filename is the database filename within a persistent server root.
+	Filename = "marajanda.db"
+	// ApplicationID is the ASCII encoding of "MRJ0".
+	ApplicationID int32 = 0x4D524A30
+)
+
+var schema = sqlitemigration.Schema{
+	AppID: ApplicationID,
+	Migrations: []string{
+		`CREATE TABLE accounts (
+			email       TEXT PRIMARY KEY CHECK (email = lower(email)),
+			secret_hash BLOB NOT NULL,
+			handle      TEXT NOT NULL UNIQUE,
+			role        TEXT NOT NULL CHECK (role IN ('admin', 'player'))
+		) STRICT;`,
+	},
+}
+
+// SeedAccount contains the initial account data for a new database.
+type SeedAccount struct {
+	Email  string
+	Secret string
+	Handle string
+	Role   string
+}
+
+// Store owns an open SQLite database.
+type Store struct {
+	conn *sqlite.Conn
+	pool *sqlitemigration.Pool
+}
+
+// Open opens marajanda.db in root, migrates it, and seeds admin if the file is new.
+// Open never creates root.
+func Open(ctx context.Context, root string, admin SeedAccount) (_ *Store, err error) {
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, fmt.Errorf("open datastore root: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("open datastore root: %q is not a directory", root)
+	}
+
+	databasePath := filepath.Join(root, Filename)
+	newDatabase, err := isNewDatabase(databasePath)
+	if err != nil {
+		return nil, err
+	}
+	if newDatabase {
+		admin.Role = "admin"
+		if err := validateSeed(admin); err != nil {
+			return nil, fmt.Errorf("seed persistent database: %w", err)
+		}
+	}
+
+	if newDatabase {
+		defer func() {
+			if err != nil {
+				removeDatabaseFiles(databasePath)
+			}
+		}()
+	}
+
+	pool := sqlitemigration.NewPool(databasePath, schema, sqlitemigration.Options{
+		Flags: sqlite.OpenReadWrite | sqlite.OpenCreate | sqlite.OpenWAL,
+		PrepareConn: func(conn *sqlite.Conn) error {
+			if err := prepareConnection(conn); err != nil {
+				return err
+			}
+			return requireJournalMode(conn, "wal")
+		},
+	})
+	store := &Store{pool: pool}
+	if err := store.awaitReady(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("open persistent datastore: %w", err)
+	}
+	if newDatabase {
+		if err := store.seed(ctx, admin); err != nil {
+			store.Close()
+			return nil, fmt.Errorf("seed persistent datastore: %w", err)
+		}
+	}
+	return store, nil
+}
+
+// OpenMemory creates, migrates, and seeds a private in-memory database.
+func OpenMemory(ctx context.Context) (*Store, error) {
+	conn, err := sqlite.OpenConn(":memory:", sqlite.OpenReadWrite|sqlite.OpenCreate)
+	if err != nil {
+		return nil, fmt.Errorf("open in-memory datastore: %w", err)
+	}
+	store := &Store{conn: conn}
+	if err := prepareAndMigrate(ctx, conn); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("open in-memory datastore: %w", err)
+	}
+	if err := store.seedDefaults(ctx); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("seed in-memory datastore: %w", err)
+	}
+	return store, nil
+}
+
+// OpenSharedMemory opens, migrates, and seeds a named shared in-memory database.
+func OpenSharedMemory(ctx context.Context, name string) (*Store, error) {
+	if name == "" {
+		return nil, errors.New("open shared in-memory datastore: missing name")
+	}
+	uri := "file:marajanda-" + url.QueryEscape(name) + "?mode=memory&cache=shared"
+	pool := sqlitemigration.NewPool(uri, schema, sqlitemigration.Options{
+		Flags:       sqlite.OpenReadWrite | sqlite.OpenCreate | sqlite.OpenURI,
+		PrepareConn: prepareConnection,
+	})
+	store := &Store{pool: pool}
+	if err := store.awaitReady(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("open shared in-memory datastore: %w", err)
+	}
+	if err := store.seedDefaults(ctx); err != nil {
+		store.Close()
+		return nil, fmt.Errorf("seed shared in-memory datastore: %w", err)
+	}
+	return store, nil
+}
+
+// Close closes every database connection owned by the store.
+func (s *Store) Close() error {
+	if s.conn != nil {
+		return s.conn.Close()
+	}
+	return s.pool.Close()
+}
+
+func (s *Store) awaitReady(ctx context.Context) error {
+	_, release, err := s.take(ctx)
+	if err != nil {
+		return err
+	}
+	release()
+	return nil
+}
+
+func (s *Store) take(ctx context.Context) (*sqlite.Conn, func(), error) {
+	if s.conn != nil {
+		previousInterrupt := s.conn.SetInterrupt(ctx.Done())
+		return s.conn, func() { s.conn.SetInterrupt(previousInterrupt) }, nil
+	}
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return conn, func() { s.pool.Put(conn) }, nil
+}
+
+func (s *Store) seedDefaults(ctx context.Context) error {
+	for _, account := range []SeedAccount{
+		{Email: "admin@marajanda.com", Secret: "good.luck", Handle: "admin", Role: "admin"},
+		{Email: "player@marajanda.com", Secret: "good.luck", Handle: "player", Role: "player"},
+	} {
+		if err := s.seed(ctx, account); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) seed(ctx context.Context, account SeedAccount) (err error) {
+	if err := validateSeed(account); err != nil {
+		return err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(account.Secret), bcrypt.MinCost)
+	if err != nil {
+		return fmt.Errorf("hash account secret: %w", err)
+	}
+
+	conn, release, err := s.take(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	end, err := sqlitex.ImmediateTransaction(conn)
+	if err != nil {
+		return err
+	}
+	defer end(&err)
+
+	err = sqlitex.ExecuteTransient(conn, `
+		INSERT INTO accounts (email, secret_hash, handle, role)
+		VALUES (?1, ?2, ?3, ?4)
+		ON CONFLICT (email) DO NOTHING;`, &sqlitex.ExecOptions{
+		Args: []any{normalizeEmail(account.Email), hash, account.Handle, account.Role},
+	})
+	return err
+}
+
+func prepareAndMigrate(ctx context.Context, conn *sqlite.Conn) error {
+	if err := prepareConnection(conn); err != nil {
+		return err
+	}
+	return sqlitemigration.Migrate(ctx, conn, schema)
+}
+
+func prepareConnection(conn *sqlite.Conn) error {
+	if err := sqlitex.ExecuteTransient(conn, "PRAGMA foreign_keys = ON;", nil); err != nil {
+		return fmt.Errorf("enable foreign keys: %w", err)
+	}
+	var version int64
+	if err := sqlitex.ExecuteTransient(conn, "PRAGMA user_version;", &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			version = stmt.ColumnInt64(0)
+			return nil
+		},
+	}); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+	if version > int64(len(schema.Migrations)) {
+		return fmt.Errorf("database schema version %d is newer than supported version %d", version, len(schema.Migrations))
+	}
+	return nil
+}
+
+func requireJournalMode(conn *sqlite.Conn, want string) error {
+	var got string
+	if err := sqlitex.ExecuteTransient(conn, "PRAGMA journal_mode;", &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			got = stmt.ColumnText(0)
+			return nil
+		},
+	}); err != nil {
+		return fmt.Errorf("read journal mode: %w", err)
+	}
+	if !strings.EqualFold(got, want) {
+		return fmt.Errorf("journal mode is %q, want %q", got, want)
+	}
+	return nil
+}
+
+func validateSeed(account SeedAccount) error {
+	if strings.TrimSpace(account.Email) == "" {
+		return errors.New("admin email is required")
+	}
+	if account.Secret == "" {
+		return errors.New("admin secret is required")
+	}
+	if strings.TrimSpace(account.Handle) == "" {
+		return errors.New("admin handle is required")
+	}
+	if account.Role != "admin" && account.Role != "player" {
+		return fmt.Errorf("invalid account role %q", account.Role)
+	}
+	return nil
+}
+
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+func isNewDatabase(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return true, nil
+	case err != nil:
+		return false, fmt.Errorf("inspect database: %w", err)
+	case !info.Mode().IsRegular():
+		return false, fmt.Errorf("inspect database: %q is not a regular file", path)
+	default:
+		return false, nil
+	}
+}
+
+func removeDatabaseFiles(path string) {
+	for _, suffix := range []string{"", "-shm", "-wal"} {
+		_ = os.Remove(path + suffix)
+	}
+}

@@ -1,0 +1,109 @@
+// Copyright (c) 2026 Michael D Henderson.
+
+package main
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/mdhender/marajanda/internal/datastore"
+)
+
+func TestRunRequiresRoot(t *testing.T) {
+	t.Chdir(t.TempDir())
+	unsetenv(t, "MARAJANDA_ROOT")
+	if err := run(t.Context(), nil, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "--root is required") {
+		t.Fatalf("run error = %v", err)
+	}
+}
+
+func TestRunLoadsEnvironmentBeforeParsingFlags(t *testing.T) {
+	workingDirectory := t.TempDir()
+	root := filepath.Join(workingDirectory, "server")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	env := strings.Join([]string{
+		"MARAJANDA_ROOT=" + root,
+		"MARAJANDA_ADMIN_EMAIL=ADMIN@EXAMPLE.COM",
+		"MARAJANDA_ADMIN_HANDLE=keeper",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workingDirectory, ".env.test.local"), []byte(env), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(workingDirectory)
+	t.Setenv("MARAJANDA_ENV", "test")
+	for _, name := range []string{
+		"MARAJANDA_ROOT",
+		"MARAJANDA_ADMIN_EMAIL",
+		"MARAJANDA_ADMIN_SECRET",
+		"MARAJANDA_ADMIN_HANDLE",
+	} {
+		unsetenv(t, name)
+	}
+	if err := run(t.Context(), []string{"--admin-secret", "test-only-value"}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, datastore.Filename)); err != nil {
+		t.Fatalf("stat database: %v", err)
+	}
+	got, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotInfo, err := os.Stat(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootInfo, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(gotInfo, rootInfo) {
+		t.Fatalf("working directory = %q, want %q", got, root)
+	}
+}
+
+func TestRunMemoryUsesDefaults(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for _, name := range []string{
+		"MARAJANDA_ADMIN_EMAIL",
+		"MARAJANDA_ADMIN_SECRET",
+		"MARAJANDA_ADMIN_HANDLE",
+	} {
+		unsetenv(t, name)
+	}
+	if err := run(t.Context(), []string{"--root", ":memory:"}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunHelp(t *testing.T) {
+	t.Chdir(t.TempDir())
+	var stdout bytes.Buffer
+	if err := run(t.Context(), []string{"--help"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "--root") {
+		t.Fatalf("help = %q, want --root", stdout.String())
+	}
+}
+
+func unsetenv(t *testing.T, name string) {
+	t.Helper()
+	old, present := os.LookupEnv(name)
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if present {
+			_ = os.Setenv(name, old)
+		} else {
+			_ = os.Unsetenv(name)
+		}
+	})
+}

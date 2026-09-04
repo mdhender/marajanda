@@ -15,8 +15,23 @@ Server and game-engine behavior live in separate packages. Neither belongs in co
 
 Before `github.com/peterbourgon/ff/v4` runs a command, the process loads environment variables through `internal/dotenv`.
 
+## Command configuration
+
+`cmd/marajanda` reads `MARAJANDA_ENV` directly from the process environment to choose the dotenv environment. It defaults to `development`. After loading those files, it parses command-line flags and environment variables with the `MARAJANDA` prefix. Explicit flags take precedence over environment variables.
+
+| Flag | Environment variable | Required |
+| --- | --- | --- |
+| `--root` | `MARAJANDA_ROOT` | Always |
+| `--admin-email` | `MARAJANDA_ADMIN_EMAIL` | When creating a persistent database |
+| `--admin-secret` | `MARAJANDA_ADMIN_SECRET` | When creating a persistent database |
+| `--admin-handle` | `MARAJANDA_ADMIN_HANDLE` | When creating a persistent database |
+
+The root value may be `:memory:`. In-memory databases ignore configured admin seed values and use the documented defaults.
+
 ## Server lifecycle
 
 The server requires either a persistent database directory or the special database value `:memory:`. See [Datastore](DATASTORE.md) for open and initialization behavior.
+
+A persistent server changes its working directory to the configured root before opening server files. Future request handlers that accept file paths must resolve them within that root and reject traversal or symlink escapes rather than relying on the working directory as a security boundary.
 
 A server using a persistent database supports graceful shutdown and closes the database cleanly.
