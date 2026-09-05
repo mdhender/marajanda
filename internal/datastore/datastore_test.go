@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/maloquacious/hexg"
 	"golang.org/x/crypto/bcrypt"
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
@@ -31,6 +33,9 @@ func TestOpenPersistentCreatesMigratesAndSeeds(t *testing.T) {
 	account := readAccount(t, store, "admin@example.com")
 	if account.handle != "keeper" || account.role != "admin" {
 		t.Fatalf("account = %#v, want keeper admin", account)
+	}
+	if !account.origin.Equals(hexg.NewHex(0, 0)) || account.rotation != 0 {
+		t.Fatalf("main admin origin = %v rotation = %d, want (0,0,0) rotation 0", account.origin, account.rotation)
 	}
 	if err := bcrypt.CompareHashAndPassword(account.hash, []byte("temporary")); err != nil {
 		t.Fatalf("compare password hash: %v", err)
@@ -80,7 +85,7 @@ func TestOpenPersistentRejectsMissingRootAndMissingSeed(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	if _, err := Open(t.Context(), root, SeedAccount{}, new(testGame)); err == nil || !strings.Contains(err.Error(), "admin email is required") {
+	if _, err := Open(t.Context(), root, SeedAccount{}, new(testGame)); err == nil || !strings.Contains(err.Error(), "account email is required") {
 		t.Fatalf("Open missing seed error = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, Filename)); !errors.Is(err, os.ErrNotExist) {
@@ -144,6 +149,14 @@ func TestOpenMemorySeedsDefaults(t *testing.T) {
 		if err := bcrypt.CompareHashAndPassword(account.hash, []byte("good.luck")); err != nil {
 			t.Fatalf("%s password: %v", email, err)
 		}
+	}
+	admin := readAccount(t, store, "admin@marajanda.com")
+	if !admin.origin.Equals(hexg.NewHex(0, 0)) || admin.rotation != 0 {
+		t.Fatalf("main admin origin = %v rotation = %d, want game origin and rotation 0", admin.origin, admin.rotation)
+	}
+	player := readAccount(t, store, "player@marajanda.com")
+	if player.origin.Length() <= 15 || player.rotation < 0 || player.rotation > 5 {
+		t.Fatalf("player origin = %v rotation = %d, want distance > 15 and rotation 0..5", player.origin, player.rotation)
 	}
 	game, err := store.Game(t.Context())
 	if err != nil || game != testGame {
@@ -210,6 +223,9 @@ func TestFindOrCreateDevelopmentAccount(t *testing.T) {
 	if !strings.HasPrefix(created.Handle, "agent-") || created.Role != "player" {
 		t.Fatalf("created account = %#v, want generated player", created)
 	}
+	if created.Origin.Length() <= 15 || created.Rotation < 0 || created.Rotation > 5 {
+		t.Fatalf("created origin = %v rotation = %d, want distance > 15 and rotation 0..5", created.Origin, created.Rotation)
+	}
 	again, err := store.FindOrCreateDevelopmentAccount(t.Context(), "agent@example.test")
 	if err != nil {
 		t.Fatal(err)
@@ -219,6 +235,153 @@ func TestFindOrCreateDevelopmentAccount(t *testing.T) {
 	}
 	if got := accountCount(t, store); got != 3 {
 		t.Fatalf("account count = %d, want 3", got)
+	}
+}
+
+func TestCreateAccountAssignsDeterministicOriginToEveryRole(t *testing.T) {
+	first, err := OpenMemory(t.Context(), testGame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := OpenMemory(t.Context(), testGame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	seed := SeedAccount{
+		Email: " ASSISTANT@EXAMPLE.COM ", Secret: "temporary", Handle: "assistant", Role: "admin",
+	}
+	firstAccount, err := first.CreateAccount(t.Context(), seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondAccount, err := second.CreateAccount(t.Context(), seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstAccount != secondAccount {
+		t.Fatalf("deterministic accounts = %#v and %#v", firstAccount, secondAccount)
+	}
+	if firstAccount.Email != "assistant@example.com" || firstAccount.Role != "admin" {
+		t.Fatalf("created account = %#v, want normalized assistant admin", firstAccount)
+	}
+	if firstAccount.Origin.Length() <= 15 || firstAccount.Rotation < 0 || firstAccount.Rotation > 5 {
+		t.Fatalf("assistant origin = %v rotation = %d, want distance > 15 and rotation 0..5", firstAccount.Origin, firstAccount.Rotation)
+	}
+}
+
+func TestAccountOriginAndRotationConstraints(t *testing.T) {
+	store, err := OpenMemory(t.Context(), testGame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	conn, release, err := store.take(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	for _, test := range []struct {
+		name string
+		stmt string
+		want sqlite.ResultCode
+	}{
+		{
+			name: "required origin",
+			stmt: `INSERT INTO accounts (email, secret_hash, handle, role)
+				VALUES ('missing-origin@example.com', X'00', 'missing-origin', 'player');`,
+			want: sqlite.ResultConstraintNotNull,
+		},
+		{
+			name: "rotation range",
+			stmt: `INSERT INTO accounts (email, secret_hash, handle, role, origin_q, origin_r, rotation)
+				VALUES ('bad-rotation@example.com', X'00', 'bad-rotation', 'player', 100, 100, 6);`,
+			want: sqlite.ResultConstraintCheck,
+		},
+		{
+			name: "unique origin",
+			stmt: `INSERT INTO accounts (email, secret_hash, handle, role, origin_q, origin_r, rotation)
+				VALUES ('same-origin@example.com', X'00', 'same-origin', 'player', 0, 0, 1);`,
+			want: sqlite.ResultConstraintUnique,
+		},
+		{
+			name: "email conflict takes precedence over origin conflict",
+			stmt: `INSERT INTO accounts (email, secret_hash, handle, role, origin_q, origin_r, rotation)
+				VALUES ('admin@marajanda.com', X'00', 'same-email', 'admin', 0, 0, 0);`,
+			want: sqlite.ResultConstraintUnique,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := sqlitex.ExecuteTransient(conn, test.stmt, nil)
+			if got := sqlite.ErrCode(err); got != test.want {
+				t.Fatalf("constraint error = %v (%v), want %v", err, got, test.want)
+			}
+			if test.name == "unique origin" && !strings.Contains(err.Error(), "accounts.origin_q, accounts.origin_r") {
+				t.Fatalf("unique-origin error = %v, want origin constraint", err)
+			}
+			if test.name == "email conflict takes precedence over origin conflict" && !strings.Contains(err.Error(), "accounts.email") {
+				t.Fatalf("duplicate-email error = %v, want email constraint", err)
+			}
+		})
+	}
+}
+
+func TestCreateAccountConcurrentRaces(t *testing.T) {
+	store, err := OpenSharedMemory(t.Context(), t.Name(), testGame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for index := range 2 {
+		wg.Go(func() {
+			_, err := store.CreateAccount(t.Context(), SeedAccount{
+				Email: "race@example.com", Secret: "temporary",
+				Handle: fmt.Sprintf("racer-%d", index), Role: "player",
+			})
+			results <- err
+		})
+	}
+	wg.Wait()
+	close(results)
+
+	succeeded, constrained := 0, 0
+	for err := range results {
+		switch {
+		case err == nil:
+			succeeded++
+		case sqlite.ErrCode(err).ToPrimary() == sqlite.ResultConstraint && strings.Contains(err.Error(), "accounts.email"):
+			constrained++
+		default:
+			t.Fatalf("concurrent same-email creation: %v", err)
+		}
+	}
+	if succeeded != 1 || constrained != 1 {
+		t.Fatalf("concurrent same-email creation = %d succeeded, %d constrained; want 1 and 1", succeeded, constrained)
+	}
+
+	results = make(chan error, 2)
+	for index := range 2 {
+		wg.Go(func() {
+			_, err := store.CreateAccount(t.Context(), SeedAccount{
+				Email: fmt.Sprintf("different-%d@example.com", index), Secret: "temporary",
+				Handle: fmt.Sprintf("different-%d", index), Role: "player",
+			})
+			results <- err
+		})
+	}
+	wg.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Fatalf("concurrent different-email creation: %v", err)
+		}
 	}
 }
 
@@ -288,9 +451,11 @@ func TestFactionIsVisibleAcrossSharedMemoryConnections(t *testing.T) {
 }
 
 type storedAccount struct {
-	hash   []byte
-	handle string
-	role   string
+	hash     []byte
+	handle   string
+	role     string
+	origin   hexg.Hex
+	rotation int
 }
 
 func readAccount(t *testing.T, store *Store, email string) storedAccount {
@@ -302,13 +467,16 @@ func readAccount(t *testing.T, store *Store, email string) storedAccount {
 	defer release()
 	var account storedAccount
 	err = sqlitex.ExecuteTransient(conn, `
-		SELECT secret_hash, handle, role FROM accounts WHERE email = ?1;`, &sqlitex.ExecOptions{
+		SELECT secret_hash, handle, role, origin_q, origin_r, rotation
+		FROM accounts WHERE email = ?1;`, &sqlitex.ExecOptions{
 		Args: []any{email},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			account.hash = make([]byte, stmt.ColumnLen(0))
 			stmt.ColumnBytes(0, account.hash)
 			account.handle = stmt.ColumnText(1)
 			account.role = stmt.ColumnText(2)
+			account.origin = hexg.NewHex(stmt.ColumnInt(3), stmt.ColumnInt(4))
+			account.rotation = stmt.ColumnInt(5)
 			return nil
 		},
 	})

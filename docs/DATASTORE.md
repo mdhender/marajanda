@@ -21,6 +21,17 @@ Marajanda uses ZombieZen SQLite for persistent and in-memory data.
 
 The database contains exactly one game record. It stores two required signed 64-bit integer seeds used to initialize the game's deterministic PRNG. The seeds have no default values and do not change when the database is reopened.
 
+## Accounts
+
+Every account stores a required origin hex as axial `q` and `r` components and
+a required map rotation from `0` through `5`. Origin coordinates are unique
+across accounts. The origin and rotation are assigned when the account is
+created and do not belong to its faction.
+
+The main admin account has the game origin `(0, 0, 0)` and rotation `0`. Every
+later account, including an assistant admin, uses the deterministic placement
+and rotation rules in [Player origin reference](reference/player-origin.md).
+
 ## Factions
 
 Each player faction is associated with one account. Faction records store the faction name and its current axial `q` and `r` map coordinates. New faction records start at `(0, 0)`.

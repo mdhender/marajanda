@@ -8,6 +8,9 @@
 - Authentication uses email and password.
 - Password hashes use bcrypt with `bcrypt.MinCost`.
 - Account email addresses are the only personally identifiable information stored. Additional PII requires an explicit product decision.
+- Every account has an immutable origin hex and map rotation. The main admin
+  uses the game origin and rotation `0`; later player and admin accounts use
+  deterministic placement. See [Player origin reference](reference/player-origin.md).
 
 ## Sign-in and sessions
 

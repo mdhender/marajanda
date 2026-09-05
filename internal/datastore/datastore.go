@@ -15,6 +15,8 @@ import (
 	"strings"
 
 	"github.com/maloquacious/hexg"
+	"github.com/mdhender/marajanda/internal/game"
+	"github.com/mdhender/marajanda/internal/prng"
 	"golang.org/x/crypto/bcrypt"
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitemigration"
@@ -38,10 +40,15 @@ var schema = sqlitemigration.Schema{
 		) STRICT;
 
 		CREATE TABLE accounts (
-			email       TEXT PRIMARY KEY CHECK (email = lower(email)),
+			email       TEXT NOT NULL CHECK (email = lower(email)),
 			secret_hash BLOB NOT NULL,
 			handle      TEXT NOT NULL UNIQUE,
-			role        TEXT NOT NULL CHECK (role IN ('admin', 'player'))
+			role        TEXT NOT NULL CHECK (role IN ('admin', 'player')),
+			origin_q    INTEGER NOT NULL,
+			origin_r    INTEGER NOT NULL,
+			rotation    INTEGER NOT NULL CHECK (rotation BETWEEN 0 AND 5),
+			UNIQUE (origin_q, origin_r),
+			UNIQUE (email)
 		) STRICT;
 
 		CREATE TABLE factions (
@@ -53,7 +60,7 @@ var schema = sqlitemigration.Schema{
 	},
 }
 
-// SeedAccount contains the initial account data for a new database.
+// SeedAccount contains the secret and public data needed to create an account.
 type SeedAccount struct {
 	Email  string
 	Secret string
@@ -63,9 +70,11 @@ type SeedAccount struct {
 
 // Account contains the non-secret account data needed after authentication.
 type Account struct {
-	Email  string
-	Handle string
-	Role   string
+	Email    string
+	Handle   string
+	Role     string
+	Origin   hexg.Hex
+	Rotation int
 }
 
 // Game contains the persisted state shared by the entire game.
@@ -145,7 +154,7 @@ func Open(ctx context.Context, root string, admin SeedAccount, game *Game) (_ *S
 			store.Close()
 			return nil, fmt.Errorf("seed persistent datastore: %w", err)
 		}
-		if err := store.seed(ctx, admin); err != nil {
+		if err := store.seed(ctx, admin, true); err != nil {
 			store.Close()
 			return nil, fmt.Errorf("seed persistent datastore: %w", err)
 		}
@@ -215,7 +224,8 @@ func (s *Store) Authenticate(ctx context.Context, email, secret string) (Account
 	var account Account
 	var hash []byte
 	if err := sqlitex.ExecuteTransient(conn, `
-		SELECT email, secret_hash, handle, role FROM accounts WHERE email = ?1;`, &sqlitex.ExecOptions{
+		SELECT email, secret_hash, handle, role, origin_q, origin_r, rotation
+		FROM accounts WHERE email = ?1;`, &sqlitex.ExecOptions{
 		Args: []any{normalizeEmail(email)},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			account.Email = stmt.ColumnText(0)
@@ -223,6 +233,8 @@ func (s *Store) Authenticate(ctx context.Context, email, secret string) (Account
 			stmt.ColumnBytes(1, hash)
 			account.Handle = stmt.ColumnText(2)
 			account.Role = stmt.ColumnText(3)
+			account.Origin = hexg.NewHex(stmt.ColumnInt(4), stmt.ColumnInt(5))
+			account.Rotation = stmt.ColumnInt(6)
 			return nil
 		},
 	}); err != nil {
@@ -326,38 +338,22 @@ func (s *Store) FindOrCreateDevelopmentAccount(ctx context.Context, email string
 	}
 	handle := "agent-" + hex.EncodeToString(random[:8])
 
-	conn, release, err := s.take(ctx)
-	if err != nil {
-		return Account{}, err
-	}
-	defer release()
-	end, err := sqlitex.ImmediateTransaction(conn)
-	if err != nil {
-		return Account{}, err
-	}
-	defer end(&err)
+	return s.createAccount(ctx, SeedAccount{
+		Email: email, Handle: handle, Role: "player",
+	}, hash, false, true)
+}
 
-	if err = sqlitex.ExecuteTransient(conn, `
-		INSERT INTO accounts (email, secret_hash, handle, role)
-		VALUES (?1, ?2, ?3, 'player')
-		ON CONFLICT (email) DO NOTHING;`, &sqlitex.ExecOptions{
-		Args: []any{normalizeEmail(email), hash, handle},
-	}); err != nil {
+// CreateAccount creates an account with a deterministic origin and map
+// rotation. The main admin is created only while initializing a datastore.
+func (s *Store) CreateAccount(ctx context.Context, account SeedAccount) (Account, error) {
+	if err := validateSeed(account); err != nil {
 		return Account{}, err
 	}
-	if err = sqlitex.ExecuteTransient(conn, `
-		SELECT email, handle, role FROM accounts WHERE email = ?1;`, &sqlitex.ExecOptions{
-		Args: []any{normalizeEmail(email)},
-		ResultFunc: func(stmt *sqlite.Stmt) error {
-			account.Email = stmt.ColumnText(0)
-			account.Handle = stmt.ColumnText(1)
-			account.Role = stmt.ColumnText(2)
-			return nil
-		},
-	}); err != nil {
-		return Account{}, err
+	hash, err := bcrypt.GenerateFromPassword([]byte(account.Secret), bcrypt.MinCost)
+	if err != nil {
+		return Account{}, fmt.Errorf("hash account secret: %w", err)
 	}
-	return account, nil
+	return s.createAccount(ctx, account, hash, false, false)
 }
 
 func (s *Store) awaitReady(ctx context.Context) error {
@@ -385,11 +381,11 @@ func (s *Store) seedDefaults(ctx context.Context, game Game) error {
 	if err := s.seedGame(ctx, game); err != nil {
 		return err
 	}
-	for _, account := range []SeedAccount{
+	for index, account := range []SeedAccount{
 		{Email: "admin@marajanda.com", Secret: "good.luck", Handle: "admin", Role: "admin"},
 		{Email: "player@marajanda.com", Secret: "good.luck", Handle: "player", Role: "player"},
 	} {
-		if err := s.seed(ctx, account); err != nil {
+		if err := s.seed(ctx, account, index == 0); err != nil {
 			return err
 		}
 	}
@@ -413,7 +409,7 @@ func (s *Store) seedGame(ctx context.Context, game Game) error {
 	return nil
 }
 
-func (s *Store) seed(ctx context.Context, account SeedAccount) (err error) {
+func (s *Store) seed(ctx context.Context, account SeedAccount, mainAdmin bool) error {
 	if err := validateSeed(account); err != nil {
 		return err
 	}
@@ -422,24 +418,116 @@ func (s *Store) seed(ctx context.Context, account SeedAccount) (err error) {
 		return fmt.Errorf("hash account secret: %w", err)
 	}
 
+	_, err = s.createAccount(ctx, account, hash, mainAdmin, true)
+	return err
+}
+
+func (s *Store) createAccount(ctx context.Context, seed SeedAccount, hash []byte, mainAdmin, ignoreExisting bool) (Account, error) {
+	seed.Email = normalizeEmail(seed.Email)
 	conn, release, err := s.take(ctx)
 	if err != nil {
-		return err
+		return Account{}, err
 	}
 	defer release()
-	end, err := sqlitex.ImmediateTransaction(conn)
-	if err != nil {
-		return err
-	}
-	defer end(&err)
 
-	err = sqlitex.ExecuteTransient(conn, `
-		INSERT INTO accounts (email, secret_hash, handle, role)
-		VALUES (?1, ?2, ?3, ?4)
-		ON CONFLICT (email) DO NOTHING;`, &sqlitex.ExecOptions{
-		Args: []any{normalizeEmail(account.Email), hash, account.Handle, account.Role},
-	})
-	return err
+	if ignoreExisting {
+		if account, found, err := readAccountRecord(conn, seed.Email); err != nil {
+			return Account{}, err
+		} else if found {
+			return account, nil
+		}
+	}
+
+	origin := hexg.NewHex(0, 0)
+	rotation := 0
+	if !mainAdmin {
+		origin, rotation, err = accountPlacement(conn, seed.Email)
+		if err != nil {
+			return Account{}, err
+		}
+	}
+
+	query := `INSERT INTO accounts
+		(email, secret_hash, handle, role, origin_q, origin_r, rotation)
+		VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);`
+	if ignoreExisting {
+		query = `INSERT INTO accounts
+			(email, secret_hash, handle, role, origin_q, origin_r, rotation)
+			VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+			ON CONFLICT (email) DO NOTHING;`
+	}
+	if err := sqlitex.ExecuteTransient(conn, query, &sqlitex.ExecOptions{
+		Args: []any{seed.Email, hash, seed.Handle, seed.Role, origin.Q(), origin.R(), rotation},
+	}); err != nil {
+		return Account{}, fmt.Errorf("create account: %w", err)
+	}
+	if ignoreExisting {
+		account, found, err := readAccountRecord(conn, seed.Email)
+		if err != nil {
+			return Account{}, err
+		}
+		if !found {
+			return Account{}, errors.New("create account: inserted account not found")
+		}
+		return account, nil
+	}
+	return Account{
+		Email: seed.Email, Handle: seed.Handle, Role: seed.Role,
+		Origin: origin, Rotation: rotation,
+	}, nil
+}
+
+func accountPlacement(conn *sqlite.Conn, normalizedEmail string) (hexg.Hex, int, error) {
+	var storedSeeds Game
+	initialized := make([]hexg.Hex, 0)
+	foundGame := false
+	if err := sqlitex.ExecuteTransient(conn, `SELECT seed1, seed2 FROM game WHERE id = 1;`, &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			storedSeeds.Seed1 = stmt.ColumnInt64(0)
+			storedSeeds.Seed2 = stmt.ColumnInt64(1)
+			foundGame = true
+			return nil
+		},
+	}); err != nil {
+		return hexg.Hex{}, 0, fmt.Errorf("load game for account placement: %w", err)
+	}
+	if !foundGame {
+		return hexg.Hex{}, 0, errors.New("place account: game is not initialized")
+	}
+	if err := sqlitex.ExecuteTransient(conn, `SELECT origin_q, origin_r FROM accounts;`, &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			initialized = append(initialized, hexg.NewHex(stmt.ColumnInt(0), stmt.ColumnInt(1)))
+			return nil
+		},
+	}); err != nil {
+		return hexg.Hex{}, 0, fmt.Errorf("load initialized account origins: %w", err)
+	}
+
+	seeds := prng.New(uint64(storedSeeds.Seed1), uint64(storedSeeds.Seed2))
+	origin := game.AssignOrigin(seeds, normalizedEmail, initialized)
+	return origin, game.PlayerRotation(seeds, origin), nil
+}
+
+func readAccountRecord(conn *sqlite.Conn, normalizedEmail string) (Account, bool, error) {
+	var account Account
+	found := false
+	if err := sqlitex.ExecuteTransient(conn, `
+		SELECT email, handle, role, origin_q, origin_r, rotation
+		FROM accounts WHERE email = ?1;`, &sqlitex.ExecOptions{
+		Args: []any{normalizedEmail},
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			account.Email = stmt.ColumnText(0)
+			account.Handle = stmt.ColumnText(1)
+			account.Role = stmt.ColumnText(2)
+			account.Origin = hexg.NewHex(stmt.ColumnInt(3), stmt.ColumnInt(4))
+			account.Rotation = stmt.ColumnInt(5)
+			found = true
+			return nil
+		},
+	}); err != nil {
+		return Account{}, false, fmt.Errorf("look up account: %w", err)
+	}
+	return account, found, nil
 }
 
 func prepareAndMigrate(ctx context.Context, conn *sqlite.Conn) error {
@@ -486,13 +574,13 @@ func requireJournalMode(conn *sqlite.Conn, want string) error {
 
 func validateSeed(account SeedAccount) error {
 	if strings.TrimSpace(account.Email) == "" {
-		return errors.New("admin email is required")
+		return errors.New("account email is required")
 	}
 	if account.Secret == "" {
-		return errors.New("admin secret is required")
+		return errors.New("account secret is required")
 	}
 	if strings.TrimSpace(account.Handle) == "" {
-		return errors.New("admin handle is required")
+		return errors.New("account handle is required")
 	}
 	if account.Role != "admin" && account.Role != "player" {
 		return fmt.Errorf("invalid account role %q", account.Role)

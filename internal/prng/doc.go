@@ -10,8 +10,9 @@
 // sequence you consume but a function you query: every draw has an address — a
 // [Key] path whose first element is a domain tag (see tags.go) and whose
 // remaining elements identify the instance (a hex's coordinates, a player
-// number). Instance keys must be intrinsic to the game — map coordinates, never
-// SQLite autoincrement row ids, whose values depend on insertion order.
+// number, or the normalized-email digest used to assign that number). Instance
+// keys must be intrinsic to the game — map coordinates, never SQLite
+// autoincrement row ids, whose values depend on insertion order.
 // A private stream is derived by hashing that address with the seeds:
 //
 //	stream = PCG( SHA-256(seed1, seed2, len(path), path...) )   // all big-endian

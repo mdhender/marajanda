@@ -12,6 +12,11 @@ Each player has an origin hex at a true cube coordinate `(q, r, s)`. The
 origin hex appears to that player as the axial coordinate `(0, 0)`. A player
 origin hex is never the game origin.
 
+Every account stores an origin hex and map rotation. The main admin uses the
+game origin and rotation `0`, so the main admin's map matches the true map.
+Every later account, including an assistant admin, uses the placement and
+rotation rules below.
+
 The true axial components `(q, r)` of the player origin hex are the player
 number. Database row identifiers are not player numbers.
 
@@ -71,7 +76,8 @@ For each step:
 4. Assign the current hex as the player's origin hex if both of these
    conditions hold:
    - its distance from the game origin is greater than 15 hexes; and
-   - its distance from every initialized hex is greater than 15 hexes.
+   - its distance from every initialized account origin hex is greater than 15
+     hexes.
 5. Otherwise, repeat from step 1 at the current hex.
 
 The direction weighting produces:
@@ -82,8 +88,13 @@ The direction weighting produces:
 - 8 slots along an edge of a distance ring, where two moves increase distance.
 
 The assigned origin hex is persisted. For a fixed set of game seeds, normalized
-email, direction ordering, and initialized hexes, the walk produces the same
-origin hex.
+email, direction ordering, and initialized account origin hexes, the walk
+produces the same origin hex.
+
+Concurrent account creation may calculate placements from the same initialized
+set. The account-origin uniqueness constraint rejects identical origin hexes.
+Origins calculated concurrently may be within 15 hexes of each other, including
+on neighboring hexes.
 
 ## Player map rotation
 
