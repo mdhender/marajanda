@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/maloquacious/hexg"
+	"github.com/mdhender/marajanda/internal/game"
+	"github.com/mdhender/marajanda/internal/prng"
 	"golang.org/x/crypto/bcrypt"
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
@@ -36,6 +38,9 @@ func TestOpenPersistentCreatesMigratesAndSeeds(t *testing.T) {
 	}
 	if !account.origin.Equals(hexg.NewHex(0, 0)) || account.rotation != 0 {
 		t.Fatalf("main admin origin = %v rotation = %d, want (0,0,0) rotation 0", account.origin, account.rotation)
+	}
+	if terrain := readTerrain(t, store, account.origin); terrain != game.TerrainMountains {
+		t.Fatalf("main admin terrain = %q, want %q", terrain, game.TerrainMountains)
 	}
 	if err := bcrypt.CompareHashAndPassword(account.hash, []byte("temporary")); err != nil {
 		t.Fatalf("compare password hash: %v", err)
@@ -158,6 +163,12 @@ func TestOpenMemorySeedsDefaults(t *testing.T) {
 	if player.origin.Length() <= 15 || player.rotation < 0 || player.rotation > 5 {
 		t.Fatalf("player origin = %v rotation = %d, want distance > 15 and rotation 0..5", player.origin, player.rotation)
 	}
+	if got, want := readTerrain(t, store, player.origin), terrainAt(player.origin); got != want {
+		t.Fatalf("player terrain = %q, want %q", got, want)
+	}
+	if got := hexCount(t, store); got != 2 {
+		t.Fatalf("initialized hex count = %d, want 2", got)
+	}
 	game, err := store.Game(t.Context())
 	if err != nil || game != testGame {
 		t.Fatalf("Game = %#v, %v; want %#v", game, err, testGame)
@@ -236,6 +247,9 @@ func TestFindOrCreateDevelopmentAccount(t *testing.T) {
 	if got := accountCount(t, store); got != 3 {
 		t.Fatalf("account count = %d, want 3", got)
 	}
+	if got := hexCount(t, store); got != 3 {
+		t.Fatalf("initialized hex count = %d, want 3", got)
+	}
 }
 
 func TestCreateAccountAssignsDeterministicOriginToEveryRole(t *testing.T) {
@@ -269,6 +283,43 @@ func TestCreateAccountAssignsDeterministicOriginToEveryRole(t *testing.T) {
 	}
 	if firstAccount.Origin.Length() <= 15 || firstAccount.Rotation < 0 || firstAccount.Rotation > 5 {
 		t.Fatalf("assistant origin = %v rotation = %d, want distance > 15 and rotation 0..5", firstAccount.Origin, firstAccount.Rotation)
+	}
+	if got, want := readTerrain(t, first, firstAccount.Origin), terrainAt(firstAccount.Origin); got != want {
+		t.Fatalf("assistant terrain = %q, want %q", got, want)
+	}
+}
+
+func TestCreateAccountAvoidsEveryInitializedHex(t *testing.T) {
+	store, err := OpenMemory(t.Context(), testGame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	email := "blocked-path@example.com"
+	initialized := readInitializedHexes(t, store)
+	blocked := game.AssignOrigin(testPRNGSeeds(), email, initialized)
+	conn, release, err := store.take(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = sqlitex.ExecuteTransient(conn, `
+		INSERT INTO hexes (q, r, terrain) VALUES (?1, ?2, ?3);`, &sqlitex.ExecOptions{
+		Args: []any{blocked.Q(), blocked.R(), string(terrainAt(blocked))},
+	})
+	release()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	account, err := store.CreateAccount(t.Context(), SeedAccount{
+		Email: email, Secret: "temporary", Handle: "blocked-path", Role: "player",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if distance := account.Origin.Distance(blocked); distance <= 15 {
+		t.Fatalf("account origin %v is %d hexes from initialized hex %v, want > 15", account.Origin, distance, blocked)
 	}
 }
 
@@ -314,6 +365,12 @@ func TestAccountOriginAndRotationConstraints(t *testing.T) {
 				VALUES ('admin@marajanda.com', X'00', 'same-email', 'admin', 0, 0, 0);`,
 			want: sqlite.ResultConstraintUnique,
 		},
+		{
+			name: "origin must be initialized",
+			stmt: `INSERT INTO accounts (email, secret_hash, handle, role, origin_q, origin_r, rotation)
+				VALUES ('uninitialized@example.com', X'00', 'uninitialized', 'player', 101, 101, 1);`,
+			want: sqlite.ResultConstraintForeignKey,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := sqlitex.ExecuteTransient(conn, test.stmt, nil)
@@ -325,6 +382,49 @@ func TestAccountOriginAndRotationConstraints(t *testing.T) {
 			}
 			if test.name == "email conflict takes precedence over origin conflict" && !strings.Contains(err.Error(), "accounts.email") {
 				t.Fatalf("duplicate-email error = %v, want email constraint", err)
+			}
+		})
+	}
+}
+
+func TestInitializedHexConstraints(t *testing.T) {
+	store, err := OpenMemory(t.Context(), testGame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	conn, release, err := store.take(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	for _, test := range []struct {
+		name string
+		stmt string
+		want sqlite.ResultCode
+	}{
+		{
+			name: "terrain required",
+			stmt: `INSERT INTO hexes (q, r) VALUES (100, 100);`,
+			want: sqlite.ResultConstraintNotNull,
+		},
+		{
+			name: "terrain constrained",
+			stmt: `INSERT INTO hexes (q, r, terrain) VALUES (100, 100, 'ocean');`,
+			want: sqlite.ResultConstraintCheck,
+		},
+		{
+			name: "coordinates primary key",
+			stmt: `INSERT INTO hexes (q, r, terrain) VALUES (0, 0, 'grassland');`,
+			want: sqlite.ResultConstraintPrimaryKey,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := sqlitex.ExecuteTransient(conn, test.stmt, nil)
+			if got := sqlite.ErrCode(err); got != test.want {
+				t.Fatalf("constraint error = %v (%v), want %v", err, got, test.want)
 			}
 		})
 	}
@@ -365,6 +465,9 @@ func TestCreateAccountConcurrentRaces(t *testing.T) {
 	if succeeded != 1 || constrained != 1 {
 		t.Fatalf("concurrent same-email creation = %d succeeded, %d constrained; want 1 and 1", succeeded, constrained)
 	}
+	if accounts, hexes := accountCount(t, store), hexCount(t, store); accounts != 3 || hexes != 3 {
+		t.Fatalf("after same-email race: %d accounts, %d hexes; want 3 and 3", accounts, hexes)
+	}
 
 	results = make(chan error, 2)
 	for index := range 2 {
@@ -382,6 +485,9 @@ func TestCreateAccountConcurrentRaces(t *testing.T) {
 		if err != nil {
 			t.Fatalf("concurrent different-email creation: %v", err)
 		}
+	}
+	if accounts, hexes := accountCount(t, store), hexCount(t, store); accounts != 5 || hexes != 5 {
+		t.Fatalf("after different-email race: %d accounts, %d hexes; want 5 and 5", accounts, hexes)
 	}
 }
 
@@ -506,6 +612,76 @@ func accountCount(t *testing.T, store *Store) int64 {
 		t.Fatal(err)
 	}
 	return count
+}
+
+func hexCount(t *testing.T, store *Store) int64 {
+	t.Helper()
+	conn, release, err := store.take(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	var count int64
+	if err := sqlitex.ExecuteTransient(conn, "SELECT count(*) FROM hexes;", &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			count = stmt.ColumnInt64(0)
+			return nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func readTerrain(t *testing.T, store *Store, location hexg.Hex) game.Terrain {
+	t.Helper()
+	conn, release, err := store.take(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	var terrain game.Terrain
+	if err := sqlitex.ExecuteTransient(conn, `
+		SELECT terrain FROM hexes WHERE q = ?1 AND r = ?2;`, &sqlitex.ExecOptions{
+		Args: []any{location.Q(), location.R()},
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			terrain = game.Terrain(stmt.ColumnText(0))
+			return nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if terrain == "" {
+		t.Fatalf("initialized hex %v not found", location)
+	}
+	return terrain
+}
+
+func readInitializedHexes(t *testing.T, store *Store) []hexg.Hex {
+	t.Helper()
+	conn, release, err := store.take(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	var initialized []hexg.Hex
+	if err := sqlitex.ExecuteTransient(conn, `SELECT q, r FROM hexes;`, &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			initialized = append(initialized, hexg.NewHex(stmt.ColumnInt(0), stmt.ColumnInt(1)))
+			return nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return initialized
+}
+
+func terrainAt(location hexg.Hex) game.Terrain {
+	return game.TerrainAt(testPRNGSeeds(), location)
+}
+
+func testPRNGSeeds() prng.Seeds {
+	return prng.New(uint64(testGame.Seed1), uint64(testGame.Seed2))
 }
 
 func assertPragma(t *testing.T, store *Store, name string, want int64) {

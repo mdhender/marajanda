@@ -76,8 +76,7 @@ For each step:
 4. Assign the current hex as the player's origin hex if both of these
    conditions hold:
    - its distance from the game origin is greater than 15 hexes; and
-   - its distance from every initialized account origin hex is greater than 15
-     hexes.
+   - its distance from every initialized hex is greater than 15 hexes.
 5. Otherwise, repeat from step 1 at the current hex.
 
 The direction weighting produces:
@@ -88,13 +87,14 @@ The direction weighting produces:
 - 8 slots along an edge of a distance ring, where two moves increase distance.
 
 The assigned origin hex is persisted. For a fixed set of game seeds, normalized
-email, direction ordering, and initialized account origin hexes, the walk
-produces the same origin hex.
+email, direction ordering, and initialized hexes, the walk produces the same
+origin hex. Creating the account initializes its origin hex and terrain in the
+same transaction.
 
 Concurrent account creation may calculate placements from the same initialized
-set. The account-origin uniqueness constraint rejects identical origin hexes.
-Origins calculated concurrently may be within 15 hexes of each other, including
-on neighboring hexes.
+set. The coordinate primary key and account-origin uniqueness constraint reject
+identical origin hexes. Origins calculated concurrently may be within 15 hexes
+of each other, including on neighboring hexes.
 
 ## Player map rotation
 

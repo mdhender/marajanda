@@ -32,6 +32,16 @@ The main admin account has the game origin `(0, 0, 0)` and rotation `0`. Every
 later account, including an assistant admin, uses the deterministic placement
 and rotation rules in [Player origin reference](reference/player-origin.md).
 
+## Initialized hexes
+
+Each initialized map hex stores axial `q` and `r` coordinates as its composite
+primary key and a required terrain type. Account origins reference initialized
+hexes. Creating an account inserts the account and its initialized origin hex
+in one transaction.
+
+See [Terrain reference](reference/terrain.md) for the terrain values and
+deterministic generation rules.
+
 ## Factions
 
 Each player faction is associated with one account. Faction records store the faction name and its current axial `q` and `r` map coordinates. New faction records start at `(0, 0)`.

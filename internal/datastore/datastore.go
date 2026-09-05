@@ -39,6 +39,13 @@ var schema = sqlitemigration.Schema{
 			seed2 INTEGER NOT NULL
 		) STRICT;
 
+		CREATE TABLE hexes (
+			q       INTEGER NOT NULL,
+			r       INTEGER NOT NULL,
+			terrain TEXT NOT NULL CHECK (terrain IN ('grassland', 'forest', 'hills', 'marsh', 'mountains')),
+			PRIMARY KEY (q, r)
+		) STRICT;
+
 		CREATE TABLE accounts (
 			email       TEXT NOT NULL CHECK (email = lower(email)),
 			secret_hash BLOB NOT NULL,
@@ -48,7 +55,8 @@ var schema = sqlitemigration.Schema{
 			origin_r    INTEGER NOT NULL,
 			rotation    INTEGER NOT NULL CHECK (rotation BETWEEN 0 AND 5),
 			UNIQUE (origin_q, origin_r),
-			UNIQUE (email)
+			UNIQUE (email),
+			FOREIGN KEY (origin_q, origin_r) REFERENCES hexes (q, r) DEFERRABLE INITIALLY DEFERRED
 		) STRICT;
 
 		CREATE TABLE factions (
@@ -422,7 +430,7 @@ func (s *Store) seed(ctx context.Context, account SeedAccount, mainAdmin bool) e
 	return err
 }
 
-func (s *Store) createAccount(ctx context.Context, seed SeedAccount, hash []byte, mainAdmin, ignoreExisting bool) (Account, error) {
+func (s *Store) createAccount(ctx context.Context, seed SeedAccount, hash []byte, mainAdmin, ignoreExisting bool) (_ Account, err error) {
 	seed.Email = normalizeEmail(seed.Email)
 	conn, release, err := s.take(ctx)
 	if err != nil {
@@ -440,28 +448,42 @@ func (s *Store) createAccount(ctx context.Context, seed SeedAccount, hash []byte
 
 	origin := hexg.NewHex(0, 0)
 	rotation := 0
+	terrain := game.TerrainMountains
 	if !mainAdmin {
-		origin, rotation, err = accountPlacement(conn, seed.Email)
+		origin, rotation, terrain, err = accountPlacement(conn, seed.Email)
 		if err != nil {
 			return Account{}, err
 		}
 	}
 
+	end, err := sqlitex.ImmediateTransaction(conn)
+	if err != nil {
+		return Account{}, err
+	}
+	defer end(&err)
+
 	query := `INSERT INTO accounts
 		(email, secret_hash, handle, role, origin_q, origin_r, rotation)
 		VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);`
+	inserted := true
 	if ignoreExisting {
+		inserted = false
 		query = `INSERT INTO accounts
 			(email, secret_hash, handle, role, origin_q, origin_r, rotation)
 			VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-			ON CONFLICT (email) DO NOTHING;`
+			ON CONFLICT (email) DO NOTHING
+			RETURNING 1;`
 	}
 	if err := sqlitex.ExecuteTransient(conn, query, &sqlitex.ExecOptions{
 		Args: []any{seed.Email, hash, seed.Handle, seed.Role, origin.Q(), origin.R(), rotation},
+		ResultFunc: func(*sqlite.Stmt) error {
+			inserted = true
+			return nil
+		},
 	}); err != nil {
 		return Account{}, fmt.Errorf("create account: %w", err)
 	}
-	if ignoreExisting {
+	if !inserted {
 		account, found, err := readAccountRecord(conn, seed.Email)
 		if err != nil {
 			return Account{}, err
@@ -471,13 +493,19 @@ func (s *Store) createAccount(ctx context.Context, seed SeedAccount, hash []byte
 		}
 		return account, nil
 	}
+	if err := sqlitex.ExecuteTransient(conn, `
+		INSERT INTO hexes (q, r, terrain) VALUES (?1, ?2, ?3);`, &sqlitex.ExecOptions{
+		Args: []any{origin.Q(), origin.R(), string(terrain)},
+	}); err != nil {
+		return Account{}, fmt.Errorf("initialize account origin: %w", err)
+	}
 	return Account{
 		Email: seed.Email, Handle: seed.Handle, Role: seed.Role,
 		Origin: origin, Rotation: rotation,
 	}, nil
 }
 
-func accountPlacement(conn *sqlite.Conn, normalizedEmail string) (hexg.Hex, int, error) {
+func accountPlacement(conn *sqlite.Conn, normalizedEmail string) (hexg.Hex, int, game.Terrain, error) {
 	var storedSeeds Game
 	initialized := make([]hexg.Hex, 0)
 	foundGame := false
@@ -489,23 +517,23 @@ func accountPlacement(conn *sqlite.Conn, normalizedEmail string) (hexg.Hex, int,
 			return nil
 		},
 	}); err != nil {
-		return hexg.Hex{}, 0, fmt.Errorf("load game for account placement: %w", err)
+		return hexg.Hex{}, 0, "", fmt.Errorf("load game for account placement: %w", err)
 	}
 	if !foundGame {
-		return hexg.Hex{}, 0, errors.New("place account: game is not initialized")
+		return hexg.Hex{}, 0, "", errors.New("place account: game is not initialized")
 	}
-	if err := sqlitex.ExecuteTransient(conn, `SELECT origin_q, origin_r FROM accounts;`, &sqlitex.ExecOptions{
+	if err := sqlitex.ExecuteTransient(conn, `SELECT q, r FROM hexes;`, &sqlitex.ExecOptions{
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			initialized = append(initialized, hexg.NewHex(stmt.ColumnInt(0), stmt.ColumnInt(1)))
 			return nil
 		},
 	}); err != nil {
-		return hexg.Hex{}, 0, fmt.Errorf("load initialized account origins: %w", err)
+		return hexg.Hex{}, 0, "", fmt.Errorf("load initialized hexes: %w", err)
 	}
 
 	seeds := prng.New(uint64(storedSeeds.Seed1), uint64(storedSeeds.Seed2))
 	origin := game.AssignOrigin(seeds, normalizedEmail, initialized)
-	return origin, game.PlayerRotation(seeds, origin), nil
+	return origin, game.PlayerRotation(seeds, origin), game.TerrainAt(seeds, origin), nil
 }
 
 func readAccountRecord(conn *sqlite.Conn, normalizedEmail string) (Account, bool, error) {
