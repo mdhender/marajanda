@@ -4,7 +4,6 @@ package game
 
 import (
 	"github.com/maloquacious/hexg"
-	"github.com/mdhender/marajanda/internal/prng"
 )
 
 // rotations is the number of distinct map rotations an account may have.
@@ -13,13 +12,14 @@ const rotations = 6
 // Tile is one hex of a map view.
 //
 // Coord is expressed in the view's own frame: true map coordinates for
-// [AdminView], account-relative coordinates for [PlayerView]. Terrain is
-// meaningful only when Visible is true; a tile that is not visible carries no
-// terrain, because the account is not entitled to know it.
+// [AdminView], account-relative coordinates for [PlayerView]. Terrain and
+// Elevation are meaningful only when Visible is true; a tile that is not
+// visible carries neither, because the account is not entitled to know them.
 type Tile struct {
-	Coord   hexg.Hex
-	Terrain Terrain
-	Visible bool
+	Coord     hexg.Hex
+	Terrain   Terrain
+	Elevation int
+	Visible   bool
 }
 
 // ToPlayer converts a true map coordinate into the coordinate that an account's
@@ -48,13 +48,15 @@ func ToTrue(origin hexg.Hex, rotation int, location hexg.Hex) hexg.Hex {
 	return origin.Add(hex)
 }
 
-// AdminView returns every hex within radius of the game origin, in true map
-// coordinates. Admins see the whole disc.
-func AdminView(seeds prng.Seeds, radius int) []Tile {
-	coords := disc(radius)
-	tiles := make([]Tile, 0, len(coords))
-	for _, coord := range coords {
-		tiles = append(tiles, Tile{Coord: coord, Terrain: TerrainAt(seeds, coord), Visible: true})
+// AdminView returns every hex of the world, in true map coordinates. Admins
+// see all of it.
+func AdminView(world World) []Tile {
+	hexes := world.Hexes()
+	tiles := make([]Tile, 0, len(hexes))
+	for _, hex := range hexes {
+		tiles = append(tiles, Tile{
+			Coord: hex.Coord, Terrain: hex.Terrain, Elevation: hex.Elevation, Visible: true,
+		})
 	}
 	return tiles
 }
@@ -63,8 +65,10 @@ func AdminView(seeds prng.Seeds, radius int) []Tile {
 // coordinates that account's map displays.
 //
 // visible holds the true map coordinates the account can see. Hexes outside it
-// are returned as fog: present in the view, carrying no terrain.
-func PlayerView(seeds prng.Seeds, origin hexg.Hex, rotation, radius int, visible []hexg.Hex) []Tile {
+// are returned as fog: present in the view, carrying no terrain. So is anything
+// beyond the edge of the world, which a player has no way to tell apart from
+// land they have simply never seen.
+func PlayerView(world World, origin hexg.Hex, rotation, radius int, visible []hexg.Hex) []Tile {
 	seen := make(map[hexg.Hex]struct{}, len(visible))
 	for _, hex := range visible {
 		seen[hex] = struct{}{}
@@ -74,7 +78,9 @@ func PlayerView(seeds prng.Seeds, origin hexg.Hex, rotation, radius int, visible
 	for _, coord := range coords {
 		tile := Tile{Coord: coord}
 		if location := ToTrue(origin, rotation, coord); isVisible(seen, location) {
-			tile.Terrain, tile.Visible = TerrainAt(seeds, location), true
+			if hex, ok := world.At(location); ok {
+				tile.Terrain, tile.Elevation, tile.Visible = hex.Terrain, hex.Elevation, true
+			}
 		}
 		tiles = append(tiles, tile)
 	}

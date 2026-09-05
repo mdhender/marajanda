@@ -116,7 +116,8 @@ func TestDiscOrderIsStable(t *testing.T) {
 }
 
 func TestAdminViewShowsEveryHex(t *testing.T) {
-	tiles := AdminView(testSeeds(), 3)
+	world := GenerateWorld(testSeeds(), 3)
+	tiles := AdminView(world)
 	if want := len(disc(3)); len(tiles) != want {
 		t.Fatalf("AdminView returned %d tiles, want %d", len(tiles), want)
 	}
@@ -128,18 +129,18 @@ func TestAdminViewShowsEveryHex(t *testing.T) {
 			t.Fatalf("AdminView left %v without terrain", tile.Coord)
 		}
 	}
-	if got := tiles[len(tiles)/2]; !got.Coord.Equals(hexg.NewHex(0, 0)) || got.Terrain != TerrainMountains {
-		t.Fatalf("AdminView center = %v %q, want (0,0) %q", got.Coord, got.Terrain, TerrainMountains)
+	if got := tiles[len(tiles)/2]; !got.Coord.Equals(hexg.NewHex(0, 0)) || !got.Terrain.Valid() {
+		t.Fatalf("AdminView center = %v %q, want (0,0) with a valid terrain", got.Coord, got.Terrain)
 	}
 }
 
 func TestPlayerViewRevealsOnlyVisibleHexes(t *testing.T) {
-	seeds := testSeeds()
+	world := testWorld(t)
 	origin := hexg.NewHex(7, -16)
 	rotation := 2
 	neighbor := origin.Add(hexg.NewHex(1, 0))
 
-	tiles := PlayerView(seeds, origin, rotation, 2, []hexg.Hex{origin, neighbor})
+	tiles := PlayerView(world, origin, rotation, 2, []hexg.Hex{origin, neighbor})
 	if want := len(disc(2)); len(tiles) != want {
 		t.Fatalf("PlayerView returned %d tiles, want %d", len(tiles), want)
 	}
@@ -158,13 +159,30 @@ func TestPlayerViewRevealsOnlyVisibleHexes(t *testing.T) {
 		t.Fatalf("PlayerView revealed %d tiles, want 2", len(visible))
 	}
 
+	originHex, _ := world.At(origin)
 	center := hexg.NewHex(0, 0)
-	if got, ok := visible[center]; !ok || got != TerrainAt(seeds, origin) {
-		t.Fatalf("PlayerView origin tile = %q ok=%v, want %q", got, ok, TerrainAt(seeds, origin))
+	if got, ok := visible[center]; !ok || got != originHex.Terrain {
+		t.Fatalf("PlayerView origin tile = %q ok=%v, want %q", got, ok, originHex.Terrain)
 	}
+	neighborHex, _ := world.At(neighbor)
 	neighborCoord := ToPlayer(origin, rotation, neighbor)
-	if got, ok := visible[neighborCoord]; !ok || got != TerrainAt(seeds, neighbor) {
+	if got, ok := visible[neighborCoord]; !ok || got != neighborHex.Terrain {
 		t.Fatalf("PlayerView neighbor tile at %v = %q ok=%v", neighborCoord, got, ok)
+	}
+}
+
+// A visible hex beyond the edge of a bounded world has no terrain to show. It
+// must read as fog, exactly like ground the player has never seen, rather than
+// drawing a hole in the map.
+func TestPlayerViewFogsHexesOutsideTheWorld(t *testing.T) {
+	world := GenerateWorld(testSeeds(), 4)
+	origin := hexg.NewHex(4, 0)
+	outside := hexg.NewHex(6, 0)
+
+	for _, tile := range PlayerView(world, origin, 0, 2, []hexg.Hex{outside}) {
+		if tile.Visible {
+			t.Fatalf("PlayerView revealed %v from outside the world", tile.Coord)
+		}
 	}
 }
 
@@ -174,7 +192,7 @@ func TestPlayerViewIgnoresVisibleHexesOutsideTheDisc(t *testing.T) {
 	origin := hexg.NewHex(7, -16)
 	distant := hexg.NewHex(40, 3)
 
-	for _, tile := range PlayerView(testSeeds(), origin, 0, 2, []hexg.Hex{distant}) {
+	for _, tile := range PlayerView(testWorld(t), origin, 0, 2, []hexg.Hex{distant}) {
 		if tile.Visible {
 			t.Fatalf("PlayerView revealed %v from a hex outside the disc", tile.Coord)
 		}

@@ -19,7 +19,12 @@ import (
 	"zombiezen.com/go/sqlite/sqlitex"
 )
 
-var testGame = Game{Seed1: 98374, Seed2: -98}
+// testGame uses the smallest legal world so the suite generates and inserts as
+// little as possible while still exercising a world a player can be placed in.
+var testGame = Game{Seed1: 98374, Seed2: -98, Radius: MinimumWorldRadius}
+
+// testWorldHexes is how many hexes a world of the test radius holds.
+var testWorldHexes = int64(3*testGame.Radius*(testGame.Radius+1) + 1)
 
 func TestOpenPersistentCreatesMigratesAndSeeds(t *testing.T) {
 	root := t.TempDir()
@@ -39,8 +44,9 @@ func TestOpenPersistentCreatesMigratesAndSeeds(t *testing.T) {
 	if !account.origin.Equals(hexg.NewHex(0, 0)) || account.rotation != 0 {
 		t.Fatalf("main admin origin = %v rotation = %d, want (0,0,0) rotation 0", account.origin, account.rotation)
 	}
-	if terrain := readTerrain(t, store, account.origin); terrain != game.TerrainMountains {
-		t.Fatalf("main admin terrain = %q, want %q", terrain, game.TerrainMountains)
+	// The main admin sits on the game origin whatever the generator made of it.
+	if terrain := readTerrain(t, store, account.origin); !terrain.Valid() {
+		t.Fatalf("main admin terrain = %q, want a generated terrain", terrain)
 	}
 	if err := bcrypt.CompareHashAndPassword(account.hash, []byte("temporary")); err != nil {
 		t.Fatalf("compare password hash: %v", err)
@@ -163,11 +169,11 @@ func TestOpenMemorySeedsDefaults(t *testing.T) {
 	if player.origin.Length() <= 15 || player.rotation < 0 || player.rotation > 5 {
 		t.Fatalf("player origin = %v rotation = %d, want distance > 15 and rotation 0..5", player.origin, player.rotation)
 	}
-	if got, want := readTerrain(t, store, player.origin), terrainAt(player.origin); got != want {
-		t.Fatalf("player terrain = %q, want %q", got, want)
+	if terrain := readTerrain(t, store, player.origin); terrain.IsWater() {
+		t.Fatalf("player origin %v is %q, want dry land", player.origin, terrain)
 	}
-	if got := hexCount(t, store); got != 2 {
-		t.Fatalf("initialized hex count = %d, want 2", got)
+	if got := hexCount(t, store); got != testWorldHexes {
+		t.Fatalf("hex count = %d, want the whole world (%d)", got, testWorldHexes)
 	}
 	game, err := store.Game(t.Context())
 	if err != nil || game != testGame {
@@ -247,8 +253,9 @@ func TestFindOrCreateDevelopmentAccount(t *testing.T) {
 	if got := accountCount(t, store); got != 3 {
 		t.Fatalf("account count = %d, want 3", got)
 	}
-	if got := hexCount(t, store); got != 3 {
-		t.Fatalf("initialized hex count = %d, want 3", got)
+	// Creating an account no longer creates a hex: the world already holds it.
+	if got := hexCount(t, store); got != testWorldHexes {
+		t.Fatalf("hex count = %d, want the whole world (%d)", got, testWorldHexes)
 	}
 }
 
@@ -284,42 +291,104 @@ func TestCreateAccountAssignsDeterministicOriginToEveryRole(t *testing.T) {
 	if firstAccount.Origin.Length() <= 15 || firstAccount.Rotation < 0 || firstAccount.Rotation > 5 {
 		t.Fatalf("assistant origin = %v rotation = %d, want distance > 15 and rotation 0..5", firstAccount.Origin, firstAccount.Rotation)
 	}
-	if got, want := readTerrain(t, first, firstAccount.Origin), terrainAt(firstAccount.Origin); got != want {
-		t.Fatalf("assistant terrain = %q, want %q", got, want)
+	if terrain := readTerrain(t, first, firstAccount.Origin); terrain.IsWater() {
+		t.Fatalf("assistant origin %v is %q, want dry land", firstAccount.Origin, terrain)
 	}
 }
 
-func TestCreateAccountAvoidsEveryInitializedHex(t *testing.T) {
+// A new account keeps clear of the origins other accounts already hold.
+//
+// The exclusion set is those origins, read from accounts, and not the rows in
+// hexes: the whole world is generated before the first account exists, so
+// excluding every hex in the table would exclude everywhere.
+func TestCreateAccountAvoidsAssignedOrigins(t *testing.T) {
 	store, err := OpenMemory(t.Context(), testGame)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
-	email := "blocked-path@example.com"
-	initialized := readInitializedHexes(t, store)
-	blocked := game.AssignOrigin(testPRNGSeeds(), email, initialized)
-	conn, release, err := store.take(t.Context())
-	if err != nil {
-		t.Fatal(err)
+	origins := []hexg.Hex{
+		readAccount(t, store, "admin@marajanda.com").origin,
+		readAccount(t, store, "player@marajanda.com").origin,
 	}
-	err = sqlitex.ExecuteTransient(conn, `
-		INSERT INTO hexes (q, r, terrain) VALUES (?1, ?2, ?3);`, &sqlitex.ExecOptions{
-		Args: []any{blocked.Q(), blocked.R(), string(terrainAt(blocked))},
-	})
-	release()
-	if err != nil {
-		t.Fatal(err)
+	for index := range 3 {
+		account, err := store.CreateAccount(t.Context(), SeedAccount{
+			Email:  fmt.Sprintf("rival-%d@example.com", index),
+			Secret: "temporary",
+			Handle: fmt.Sprintf("rival-%d", index),
+			Role:   "player",
+		})
+		if err != nil {
+			t.Fatalf("create rival-%d: %v", index, err)
+		}
+		if account.Origin.Length() <= 15 {
+			t.Fatalf("rival-%d origin %v is %d from the game origin, want > 15",
+				index, account.Origin, account.Origin.Length())
+		}
+		if terrain := readTerrain(t, store, account.Origin); terrain.IsWater() {
+			t.Fatalf("rival-%d origin %v is %q, want dry land", index, account.Origin, terrain)
+		}
+		for _, origin := range origins[1:] {
+			if distance := account.Origin.Distance(origin); distance <= 15 {
+				t.Fatalf("rival-%d origin %v is %d hexes from %v, want > 15",
+					index, account.Origin, distance, origin)
+			}
+		}
+		origins = append(origins, account.Origin)
 	}
+}
 
-	account, err := store.CreateAccount(t.Context(), SeedAccount{
-		Email: email, Secret: "temporary", Handle: "blocked-path", Role: "player",
-	})
+// The world is the game's terrain of record, so what a store hands back must be
+// exactly what the generator produced for its seeds and radius.
+func TestWorldMatchesTheGenerator(t *testing.T) {
+	store, err := OpenMemory(t.Context(), testGame)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if distance := account.Origin.Distance(blocked); distance <= 15 {
-		t.Fatalf("account origin %v is %d hexes from initialized hex %v, want > 15", account.Origin, distance, blocked)
+	defer store.Close()
+
+	stored, err := store.World(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := game.GenerateWorld(testPRNGSeeds(), testGame.Radius)
+	if stored.Radius() != want.Radius() || stored.Len() != want.Len() {
+		t.Fatalf("World() = radius %d, %d hexes; want %d, %d",
+			stored.Radius(), stored.Len(), want.Radius(), want.Len())
+	}
+	for _, hex := range want.Hexes() {
+		got, ok := stored.At(hex.Coord)
+		if !ok || got != hex {
+			t.Fatalf("World() at %v = %+v ok=%v, want %+v", hex.Coord, got, ok, hex)
+		}
+	}
+}
+
+// The radius is persisted with the seeds and fixes the world's size forever, so
+// a nonsensical one has to be refused when the database is created rather than
+// discovered later by a player who cannot be placed.
+func TestOpenMemoryRejectsAnUnusableWorldRadius(t *testing.T) {
+	for _, radius := range []int{1, MinimumWorldRadius - 1, MaximumWorldRadius + 1} {
+		if _, err := OpenMemory(t.Context(), Game{Seed1: 1, Seed2: 2, Radius: radius}); err == nil {
+			t.Fatalf("OpenMemory(radius %d) succeeded, want an error", radius)
+		}
+	}
+}
+
+func TestOpenMemoryDefaultsTheWorldRadius(t *testing.T) {
+	store, err := OpenMemory(t.Context(), Game{Seed1: 1, Seed2: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	record, err := store.Game(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Radius != DefaultWorldRadius {
+		t.Fatalf("Game().Radius = %d, want %d", record.Radius, DefaultWorldRadius)
 	}
 }
 
@@ -407,17 +476,22 @@ func TestInitializedHexConstraints(t *testing.T) {
 	}{
 		{
 			name: "terrain required",
-			stmt: `INSERT INTO hexes (q, r) VALUES (100, 100);`,
+			stmt: `INSERT INTO hexes (q, r, elevation) VALUES (100, 100, 10);`,
 			want: sqlite.ResultConstraintNotNull,
 		},
 		{
 			name: "terrain constrained",
-			stmt: `INSERT INTO hexes (q, r, terrain) VALUES (100, 100, 'ocean');`,
+			stmt: `INSERT INTO hexes (q, r, terrain, elevation) VALUES (100, 100, 'desert', 10);`,
 			want: sqlite.ResultConstraintCheck,
 		},
 		{
+			name: "elevation required",
+			stmt: `INSERT INTO hexes (q, r, terrain) VALUES (100, 100, 'grassland');`,
+			want: sqlite.ResultConstraintNotNull,
+		},
+		{
 			name: "coordinates primary key",
-			stmt: `INSERT INTO hexes (q, r, terrain) VALUES (0, 0, 'grassland');`,
+			stmt: `INSERT INTO hexes (q, r, terrain, elevation) VALUES (0, 0, 'grassland', 10);`,
 			want: sqlite.ResultConstraintPrimaryKey,
 		},
 	} {
@@ -465,8 +539,8 @@ func TestCreateAccountConcurrentRaces(t *testing.T) {
 	if succeeded != 1 || constrained != 1 {
 		t.Fatalf("concurrent same-email creation = %d succeeded, %d constrained; want 1 and 1", succeeded, constrained)
 	}
-	if accounts, hexes := accountCount(t, store), hexCount(t, store); accounts != 3 || hexes != 3 {
-		t.Fatalf("after same-email race: %d accounts, %d hexes; want 3 and 3", accounts, hexes)
+	if accounts, hexes := accountCount(t, store), hexCount(t, store); accounts != 3 || hexes != testWorldHexes {
+		t.Fatalf("after same-email race: %d accounts, %d hexes; want 3 and %d", accounts, hexes, testWorldHexes)
 	}
 
 	results = make(chan error, 2)
@@ -486,8 +560,8 @@ func TestCreateAccountConcurrentRaces(t *testing.T) {
 			t.Fatalf("concurrent different-email creation: %v", err)
 		}
 	}
-	if accounts, hexes := accountCount(t, store), hexCount(t, store); accounts != 5 || hexes != 5 {
-		t.Fatalf("after different-email race: %d accounts, %d hexes; want 5 and 5", accounts, hexes)
+	if accounts, hexes := accountCount(t, store), hexCount(t, store); accounts != 5 || hexes != testWorldHexes {
+		t.Fatalf("after different-email race: %d accounts, %d hexes; want 5 and %d", accounts, hexes, testWorldHexes)
 	}
 }
 
@@ -655,29 +729,6 @@ func readTerrain(t *testing.T, store *Store, location hexg.Hex) game.Terrain {
 		t.Fatalf("initialized hex %v not found", location)
 	}
 	return terrain
-}
-
-func readInitializedHexes(t *testing.T, store *Store) []hexg.Hex {
-	t.Helper()
-	conn, release, err := store.take(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer release()
-	var initialized []hexg.Hex
-	if err := sqlitex.ExecuteTransient(conn, `SELECT q, r FROM hexes;`, &sqlitex.ExecOptions{
-		ResultFunc: func(stmt *sqlite.Stmt) error {
-			initialized = append(initialized, hexg.NewHex(stmt.ColumnInt(0), stmt.ColumnInt(1)))
-			return nil
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return initialized
-}
-
-func terrainAt(location hexg.Hex) game.Terrain {
-	return game.TerrainAt(testPRNGSeeds(), location)
 }
 
 func testPRNGSeeds() prng.Seeds {

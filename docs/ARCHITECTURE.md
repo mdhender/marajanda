@@ -26,6 +26,7 @@ The process entry point reads `ENV` to choose the dotenv environment and default
 | `--admin-secret` | `MARAJANDA_ADMIN_SECRET` | When creating a persistent database |
 | `--admin-handle` | `MARAJANDA_ADMIN_HANDLE` | When creating a persistent database |
 | `--game-seed` | `MARAJANDA_GAME_SEED` | When creating any database |
+| `--world-radius` | `MARAJANDA_WORLD_RADIUS` | No; defaults to `30` |
 | `--address` | `MARAJANDA_ADDRESS` | No; defaults to `127.0.0.1` |
 | `--port` | `MARAJANDA_PORT` | No; defaults to `8443` |
 | `--timeout` | `MARAJANDA_TIMEOUT` | No; defaults to `0` (disabled) |

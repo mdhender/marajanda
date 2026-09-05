@@ -19,7 +19,7 @@ Marajanda uses ZombieZen SQLite for persistent and in-memory data.
 
 ## Game
 
-The database contains exactly one game record. It stores two required signed 64-bit integer seeds used to initialize the game's deterministic PRNG. The seeds have no default values and do not change when the database is reopened.
+The database contains exactly one game record. It stores two required signed 64-bit integer seeds used to initialize the game's deterministic PRNG, and the required world radius. The seeds have no default values. The radius defaults to `30` when the database is created and must be between `20` and `120`. None of the three change when the database is reopened: the stored world was generated from all three and would no longer match if any of them did.
 
 ## Accounts
 
@@ -32,17 +32,23 @@ The main admin account has the game origin `(0, 0, 0)` and rotation `0`. Every
 later account, including an assistant admin, uses the deterministic placement
 and rotation rules in [Player origin reference](reference/player-origin.md).
 
-## Initialized hexes
+## Hexes
 
-Each initialized map hex stores axial `q` and `r` coordinates as its composite
-primary key and a required terrain type. Account origins reference initialized
-hexes. Creating an account inserts the account and its initialized origin hex
-in one transaction.
+Each map hex stores axial `q` and `r` coordinates as its composite primary key,
+a required terrain type, and a required elevation in metres.
 
-See [Terrain reference](reference/terrain.md) for the terrain values and
-deterministic generation rules. Drawing a map reads terrain from the
-deterministic function and initializes no hexes; see
-[Map view reference](reference/map-view.md).
+The table holds the whole world. Every hex within the world radius of the game
+origin is generated and inserted in one transaction when the database is
+created, in the same call that inserts the game record. No hexes are added or
+changed afterwards.
+
+Account origins reference hexes, so an account cannot be created on a
+coordinate the world does not contain. Creating an account inserts only the
+account: its origin hex already exists.
+
+See [Terrain reference](reference/terrain.md) for the terrain values, elevation,
+and generation rules, and [Map view reference](reference/map-view.md) for how a
+map is drawn from them.
 
 ## Factions
 
@@ -68,7 +74,7 @@ The server may create and migrate `marajanda.db` when the file does not exist.
 
 ## Initial data
 
-When `:memory:` is selected, `--game-seed` is required. The server creates and migrates an in-memory database, stores both game seeds, and seeds:
+When `:memory:` is selected, `--game-seed` is required. The server creates and migrates an in-memory database, stores both game seeds and the world radius, generates the world, and seeds:
 
 | Role | Email | Password |
 | --- | --- | --- |
@@ -79,4 +85,4 @@ The corresponding default handles are `admin` and `player`.
 
 These are intentional credentials for temporary server instances and do not produce warnings or errors.
 
-When the server creates a new persistent database, it requires `--game-seed`, migrates the database, stores both game seeds, and seeds the configured default admin account. Those values are normally configured in an environment-specific local dotenv file. Starting with an existing persistent database does not require seed options and does not reseed it.
+When the server creates a new persistent database, it requires `--game-seed`, migrates the database, stores both game seeds and the world radius, generates the world, and seeds the configured default admin account. Those values are normally configured in an environment-specific local dotenv file. Starting with an existing persistent database does not require seed options and does not reseed it.

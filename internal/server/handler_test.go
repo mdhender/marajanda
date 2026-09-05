@@ -12,6 +12,7 @@ import (
 
 	"github.com/maloquacious/hexg"
 	"github.com/mdhender/marajanda/internal/datastore"
+	"github.com/mdhender/marajanda/internal/game"
 )
 
 func TestLandingAndSignInForm(t *testing.T) {
@@ -27,7 +28,7 @@ func TestLandingAndSignInForm(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"v0.2.1-beta",
+		"v0.3.0-beta",
 		`href="https://github.com/mdhender/marajanda/issues"`,
 		`aria-label="Marajanda issues on GitHub"`,
 	} {
@@ -283,11 +284,16 @@ type testStore struct {
 	faction datastore.Faction
 	found   bool
 	game    datastore.Game
+	world   game.World
 	visible []hexg.Hex
 }
 
 func (s *testStore) Game(context.Context) (datastore.Game, error) {
 	return s.game, nil
+}
+
+func (s *testStore) World(context.Context) (game.World, error) {
+	return s.world, nil
 }
 
 func (s *testStore) Faction(context.Context, string) (datastore.Faction, bool, error) {

@@ -10,14 +10,9 @@ import (
 
 	"github.com/maloquacious/hexg"
 	"github.com/mdhender/marajanda/internal/game"
-	"github.com/mdhender/marajanda/internal/prng"
 )
 
 const (
-	// adminMapRadius is how far the admin map reaches from the game origin.
-	// The page has no pan or scroll, so this is the entire viewport.
-	adminMapRadius = 20
-
 	// playerMapRadius is how far a player map reaches from the account origin.
 	// It is smaller than the admin radius because a player can see almost
 	// nothing yet, and a wide field of fog reads as a broken page rather than
@@ -51,7 +46,10 @@ func (app *application) adminMap(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	seeds, ok := app.gameSeeds(w, r)
+	// The admin map draws the whole world rather than a window onto it. The
+	// world is bounded, so "all of it" is a finite thing to ask for, and an
+	// admin looking at a generated world wants to see what was generated.
+	world, ok := app.world(w, r)
 	if !ok {
 		return
 	}
@@ -59,7 +57,7 @@ func (app *application) adminMap(w http.ResponseWriter, r *http.Request) {
 		Title:   "Admin map",
 		View:    "admin-map",
 		Account: account,
-		Map:     buildMapView(game.AdminView(seeds, adminMapRadius)),
+		Map:     buildMapView(game.AdminView(world)),
 	})
 }
 
@@ -77,7 +75,7 @@ func (app *application) playerMap(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/player/faction", http.StatusSeeOther)
 		return
 	}
-	seeds, ok := app.gameSeeds(w, r)
+	world, ok := app.world(w, r)
 	if !ok {
 		return
 	}
@@ -91,17 +89,17 @@ func (app *application) playerMap(w http.ResponseWriter, r *http.Request) {
 		View:    "player-map",
 		Account: account,
 		Faction: faction,
-		Map:     buildMapView(game.PlayerView(seeds, account.Origin, account.Rotation, playerMapRadius, visible)),
+		Map:     buildMapView(game.PlayerView(world, account.Origin, account.Rotation, playerMapRadius, visible)),
 	})
 }
 
-func (app *application) gameSeeds(w http.ResponseWriter, r *http.Request) (prng.Seeds, bool) {
-	record, err := app.store.Game(r.Context())
+func (app *application) world(w http.ResponseWriter, r *http.Request) (game.World, bool) {
+	world, err := app.store.World(r.Context())
 	if err != nil {
-		http.Error(w, "Marajanda could not load the game.", http.StatusInternalServerError)
-		return prng.Seeds{}, false
+		http.Error(w, "Marajanda could not load the world.", http.StatusInternalServerError)
+		return game.World{}, false
 	}
-	return prng.New(uint64(record.Seed1), uint64(record.Seed2)), true
+	return world, true
 }
 
 // buildMapView turns game tiles into flat-top SVG geometry.
@@ -158,5 +156,14 @@ func tileLabel(tile game.Tile) string {
 	if !tile.Visible {
 		return fmt.Sprintf("(%d, %d) unexplored", tile.Coord.Q(), tile.Coord.R())
 	}
-	return fmt.Sprintf("(%d, %d) %s", tile.Coord.Q(), tile.Coord.R(), tile.Terrain)
+	return fmt.Sprintf("(%d, %d) %s, %s", tile.Coord.Q(), tile.Coord.R(), tile.Terrain, elevationLabel(tile.Elevation))
+}
+
+// elevationLabel reads a hex's elevation the way a map legend would, so that
+// water reads as depth rather than as negative height.
+func elevationLabel(elevation int) string {
+	if elevation < 0 {
+		return fmt.Sprintf("%d m deep", -elevation)
+	}
+	return fmt.Sprintf("%d m", elevation)
 }

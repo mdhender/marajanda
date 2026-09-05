@@ -98,11 +98,14 @@ func goldenInputs() golden {
 		{prng.TagTile, 3, -7, 4},    // shorter path (length is part of the address)
 		{prng.TagTile, 3, -7, 4, 1}, // hex (3, -7, 4), tile type 1
 		{prng.TagTile, 3, -7, 4, 2}, // sibling tile type must differ
+		{prng.TagWorld, 1},          // world field 1, whole-field draw
+		{prng.TagWorld, 1, 12, -5},  // world field 1, noise lattice point (12, -5)
 	}
 	derivePaths := [][]prng.Key{
 		{prng.TagMarajanda},
 		{prng.TagPlayer, 42},
 		{prng.TagHex, 3, -7, 4},
+		{prng.TagWorld, 1},
 	}
 	const s1, s2 = 0x0123456789abcdef, 0xfedcba9876543210
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/maloquacious/hexg"
@@ -17,8 +18,20 @@ import (
 )
 
 // playerOrigin is far enough from the game origin that its coordinates cannot
-// be confused with the player-relative ones the page is allowed to print.
+// be confused with the player-relative ones the page is allowed to print, and
+// it is dry land in the test world.
 var playerOrigin = hexg.NewHex(7, -16)
+
+// testMapWorld is the world the map tests draw. It is generated once: the
+// generator is deterministic, so a shared world cannot couple the tests, and
+// regenerating it per test would dominate their runtime.
+var testMapWorld = sync.OnceValue(func() game.World {
+	return game.GenerateWorld(testViewSeeds(), testMapRadius)
+})
+
+// testMapRadius is large enough to hold playerOrigin and a player map drawn
+// around it.
+const testMapRadius = 20
 
 func signedInMap(t *testing.T, account datastore.Account, store applicationStore, target string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -36,7 +49,7 @@ func signedInMap(t *testing.T, account datastore.Account, store applicationStore
 func TestAdminMapDrawsTheWholeDisc(t *testing.T) {
 	response := signedInMap(t,
 		datastore.Account{Email: "admin@example.com", Handle: "keeper", Role: "admin"},
-		&testStore{game: datastore.Game{Seed1: 98374, Seed2: -98}},
+		&testStore{game: testMapGame(), world: testMapWorld()},
 		"/admin/map")
 
 	if response.Code != http.StatusOK {
@@ -44,10 +57,18 @@ func TestAdminMapDrawsTheWholeDisc(t *testing.T) {
 	}
 	body := response.Body.String()
 
-	if want := len(game.AdminView(testViewSeeds(), adminMapRadius)); strings.Count(body, "<polygon") != want {
+	// The admin map draws the whole world, not a window onto it.
+	if want := testMapWorld().Len(); strings.Count(body, "<polygon") != want {
 		t.Fatalf("polygons = %d, want %d", strings.Count(body, "<polygon"), want)
 	}
-	for _, want := range []string{`<svg viewBox="`, `role="img"`, `<polygon class="mountains"`, "(0, 0) mountains", `href="/admin/dashboard"`} {
+	origin, ok := testMapWorld().At(hexg.NewHex(0, 0))
+	if !ok {
+		t.Fatal("test world is missing the game origin")
+	}
+	for _, want := range []string{
+		`<svg viewBox="`, `role="img"`, `<polygon class="mountains"`,
+		fmt.Sprintf("(0, 0) %s,", origin.Terrain), `href="/admin/dashboard"`,
+	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("admin map missing %q", want)
 		}
@@ -61,7 +82,8 @@ func TestPlayerMapRevealsOnlyVisibleHexes(t *testing.T) {
 	response := signedInMap(t,
 		datastore.Account{Email: "player@example.com", Handle: "wanderer", Role: "player", Origin: playerOrigin, Rotation: 3},
 		&testStore{
-			game:    datastore.Game{Seed1: 98374, Seed2: -98},
+			game:    testMapGame(),
+			world:   testMapWorld(),
 			faction: datastore.Faction{Name: "Star Kin", Location: hexg.NewHex(0, 0)},
 			found:   true,
 			visible: []hexg.Hex{playerOrigin},
@@ -74,7 +96,7 @@ func TestPlayerMapRevealsOnlyVisibleHexes(t *testing.T) {
 	body := response.Body.String()
 
 	polygons := strings.Count(body, "<polygon")
-	if want := len(game.PlayerView(testViewSeeds(), playerOrigin, 3, playerMapRadius, []hexg.Hex{playerOrigin})); polygons != want {
+	if want := len(game.PlayerView(testMapWorld(), playerOrigin, 3, playerMapRadius, []hexg.Hex{playerOrigin})); polygons != want {
 		t.Fatalf("polygons = %d, want %d", polygons, want)
 	}
 	if fog := strings.Count(body, `<polygon class="fog"`); fog != polygons-1 {
@@ -83,8 +105,11 @@ func TestPlayerMapRevealsOnlyVisibleHexes(t *testing.T) {
 
 	// The origin hex is the only terrain a player can see today, and it renders
 	// at the centre of their own map rather than at its true coordinate.
-	terrain := game.TerrainAt(testViewSeeds(), playerOrigin)
-	if want := "(0, 0) " + string(terrain); !strings.Contains(body, want) {
+	origin, ok := testMapWorld().At(playerOrigin)
+	if !ok {
+		t.Fatalf("test world is missing the player origin %v", playerOrigin)
+	}
+	if want := "(0, 0) " + string(origin.Terrain) + ","; !strings.Contains(body, want) {
 		t.Fatalf("player map missing %q", want)
 	}
 	if !strings.Contains(body, "Star Kin") || !strings.Contains(body, `href="/player/dashboard"`) {
@@ -100,7 +125,8 @@ func TestPlayerMapNeverPrintsTrueCoordinates(t *testing.T) {
 		response := signedInMap(t,
 			datastore.Account{Email: "player@example.com", Handle: "wanderer", Role: "player", Origin: playerOrigin, Rotation: rotation},
 			&testStore{
-				game:    datastore.Game{Seed1: 98374, Seed2: -98},
+				game:    testMapGame(),
+				world:   testMapWorld(),
 				faction: datastore.Faction{Name: "Star Kin", Location: hexg.NewHex(0, 0)},
 				found:   true,
 				visible: []hexg.Hex{playerOrigin},
@@ -108,8 +134,8 @@ func TestPlayerMapNeverPrintsTrueCoordinates(t *testing.T) {
 			"/player/map")
 		body := response.Body.String()
 
-		for _, coord := range game.AdminView(testViewSeeds(), playerMapRadius) {
-			location := game.ToTrue(playerOrigin, rotation, coord.Coord)
+		for _, tile := range game.PlayerView(testMapWorld(), playerOrigin, rotation, playerMapRadius, nil) {
+			location := game.ToTrue(playerOrigin, rotation, tile.Coord)
 			if location.Equals(hexg.NewHex(0, 0)) {
 				continue // the game origin is not this player's secret to keep
 			}
@@ -140,7 +166,7 @@ func TestMapsRequireSessionAndRole(t *testing.T) {
 			} else {
 				response = signedInMap(t,
 					datastore.Account{Email: test.role + "@example.com", Handle: "someone", Role: test.role},
-					&testStore{game: datastore.Game{Seed1: 98374, Seed2: -98}, found: true, faction: datastore.Faction{Name: "Star Kin"}},
+					&testStore{game: testMapGame(), world: testMapWorld(), found: true, faction: datastore.Faction{Name: "Star Kin"}},
 					test.target)
 			}
 			if response.Code != http.StatusSeeOther || response.Header().Get("Location") != test.want {
@@ -153,7 +179,7 @@ func TestMapsRequireSessionAndRole(t *testing.T) {
 func TestPlayerMapRequiresConfiguredFaction(t *testing.T) {
 	response := signedInMap(t,
 		datastore.Account{Email: "player@example.com", Handle: "wanderer", Role: "player", Origin: playerOrigin},
-		&testStore{game: datastore.Game{Seed1: 98374, Seed2: -98}},
+		&testStore{game: testMapGame(), world: testMapWorld()},
 		"/player/map")
 
 	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/player/faction" {
@@ -167,7 +193,8 @@ func TestBuildMapViewGeometry(t *testing.T) {
 		t.Fatalf("buildMapView(nil) = %#v, want an empty view", empty)
 	}
 
-	view := buildMapView(game.AdminView(testViewSeeds(), 1))
+	small := game.GenerateWorld(testViewSeeds(), 1)
+	view := buildMapView(game.AdminView(small))
 	if len(view.Tiles) != 7 {
 		t.Fatalf("tiles = %d, want 7", len(view.Tiles))
 	}
@@ -181,7 +208,7 @@ func TestBuildMapViewGeometry(t *testing.T) {
 	}
 	// Stable order in means stable markup out, so a rendered map does not churn
 	// between identical requests.
-	repeat := buildMapView(game.AdminView(testViewSeeds(), 1))
+	repeat := buildMapView(game.AdminView(small))
 	if repeat.ViewBox != view.ViewBox {
 		t.Fatalf("viewBox differs: %q then %q", view.ViewBox, repeat.ViewBox)
 	}
@@ -195,6 +222,10 @@ func TestBuildMapViewGeometry(t *testing.T) {
 func testViewSeeds() prng.Seeds {
 	seed2 := int64(-98)
 	return prng.New(98374, uint64(seed2))
+}
+
+func testMapGame() datastore.Game {
+	return datastore.Game{Seed1: 98374, Seed2: -98, Radius: testMapRadius}
 }
 
 func formatCoord(hex hexg.Hex) string {

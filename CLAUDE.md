@@ -90,11 +90,16 @@ Dependency direction is one-way: `cmd/marajanda` → `internal/server` →
   distinct modes; tests exercise both in-memory modes wherever connection
   sharing matters. During beta `schema.Migrations` is a **single squashed
   baseline** — amend it and delete existing databases rather than appending a
-  migration. Account creation inserts the account and its origin hex in one
-  transaction (deferred FK from `accounts` to `hexes`).
+  migration. Creating the database generates the world and inserts every hex;
+  `hexes` is the whole map, not a list of account origins, so the origin
+  exclusion set comes from `accounts` (deferred FK from `accounts` to `hexes`
+  now asserts an origin is a real hex of the world).
 - **`internal/game`** — pure deterministic rules over `github.com/maloquacious/hexg`:
-  `AssignOrigin`, `PlayerRotation`, `TerrainAt`, faction-name normalization. No
-  database or HTTP.
+  `GenerateWorld`, `AssignOrigin`, `PlayerRotation`, faction-name normalization.
+  No database or HTTP. `GenerateWorld` builds the whole bounded world in one
+  pass — sea level is a percentile of the entire field, a lake is water the
+  flood fill from the rim never reaches, and a rain shadow needs an upwind
+  neighbour — so terrain is generated once and stored, never recomputed per hex.
 - **`internal/prng`** — the determinism foundation. Read `internal/prng/doc.go`
   before touching anything downstream of it.
 
@@ -114,7 +119,9 @@ produce the same world regardless of draw order or map iteration order.
   determinism; only run `-update` for a deliberate, reviewed change.
 
 Game seeds are two comma-separated int64s (`--game-seed 98374,-98`), required
-whenever a database is created and immutable afterwards.
+whenever a database is created and immutable afterwards. `--world-radius`
+(default 30, range 20..120) joins them: the world is generated from all three
+and is fixed once written.
 
 ## Conventions
 

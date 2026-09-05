@@ -28,3 +28,7 @@ Accepted faction names do not need to be unique. Newly configured factions start
 ## Map coordinates
 
 The map uses a flat-top hex grid. Locations are displayed as axial `(q, r)` coordinates, with `(0, 0)` as the origin.
+
+## The world
+
+A game has one world, bounded and generated once from the game seeds when the game is created. It holds land, ocean, and lakes, and every hex has an elevation. A player faction starts on land. See [Terrain reference](reference/terrain.md).

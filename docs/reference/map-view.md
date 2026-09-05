@@ -16,25 +16,28 @@ dashboard.
 
 ## Viewport
 
-Each map draws every hex within a fixed radius of a center hex. The pages have
-no pan, zoom, or scroll, so the radius is the entire viewport.
+The pages have no pan, zoom, or scroll, so what each map draws is the entire
+viewport.
 
-| Map | Center | Radius |
-| --- | --- | ---: |
-| Admin | The game origin `(0, 0, 0)` | 20 |
-| Player | The account origin hex | 6 |
+| Map | Center | Extent |
+| --- | --- | --- |
+| Admin | The game origin `(0, 0, 0)` | The whole world |
+| Player | The account origin hex | Radius 6 |
 
-A disc of radius `n` contains `3n(n + 1) + 1` hexes.
+A disc of radius `n` contains `3n(n + 1) + 1` hexes. The world's radius is given
+in [Terrain reference](terrain.md).
 
 ## Admin map
 
-Every hex in the disc is drawn with its terrain. Coordinates are true axial
-`(q, r)` values. The game origin is mountains.
+Every hex of the world is drawn with its terrain. Coordinates are true axial
+`(q, r)` values.
 
 ## Player map
 
 Hexes the account can see are drawn with their terrain. Every other hex in the
-disc is drawn as fog: the hex outline, no terrain.
+disc is drawn as fog: the hex outline, no terrain. A hex outside the world is
+drawn as fog even when it is in the visible set, so the edge of the world is not
+distinguishable from unexplored ground.
 
 Coordinates are the account's own axial `(q, r)` values, in which the account
 origin hex is `(0, 0)`. The page contains no true map coordinate.
@@ -67,8 +70,8 @@ the game has no turn.
 
 ## Terrain
 
-Map terrain is read from the deterministic terrain function, not from the
-`hexes` table. Drawing a map initializes no hexes and writes no rows. See
+Map terrain and elevation are read from the `hexes` table, which holds the world
+generated when the database was created. Drawing a map writes no rows. See
 [Terrain reference](terrain.md).
 
 ## Rendering
@@ -79,7 +82,8 @@ Each map is one inline SVG element in the page.
 - One `polygon` element is drawn per hex. Its class is the terrain value, or
   `fog` when the hex is not visible.
 - Each `polygon` carries a `title` giving the hex coordinate in that page's
-  frame, and its terrain or `unexplored`.
+  frame, and either its terrain and elevation or `unexplored`. Elevation is
+  given as `N m` on land and `N m deep` in water.
 - The `viewBox` is computed from the drawn hexes and bounds the whole map, so
   the map scales to its container.
 - Hexes are drawn in a fixed order, so identical requests produce identical

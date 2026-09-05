@@ -28,21 +28,36 @@ const (
 	Filename = "marajanda.db"
 	// ApplicationID is the ASCII encoding of "MRJ0".
 	ApplicationID int32 = 0x4D524A30
+
+	// DefaultWorldRadius is how far a new world reaches from the game origin
+	// when no radius is given.
+	DefaultWorldRadius = 30
+
+	// MinimumWorldRadius is the smallest world that can hold a player. Origins
+	// sit more than fifteen hexes from the game origin, so anything tighter
+	// generates a world with nowhere to put anybody.
+	MinimumWorldRadius = 20
+
+	// MaximumWorldRadius bounds generation and the admin map, both of which
+	// grow with the square of the radius.
+	MaximumWorldRadius = 120
 )
 
 var schema = sqlitemigration.Schema{
 	AppID: ApplicationID,
 	Migrations: []string{
 		`CREATE TABLE game (
-			id    INTEGER PRIMARY KEY CHECK (id = 1),
-			seed1 INTEGER NOT NULL,
-			seed2 INTEGER NOT NULL
+			id     INTEGER PRIMARY KEY CHECK (id = 1),
+			seed1  INTEGER NOT NULL,
+			seed2  INTEGER NOT NULL,
+			radius INTEGER NOT NULL CHECK (radius > 0)
 		) STRICT;
 
 		CREATE TABLE hexes (
-			q       INTEGER NOT NULL,
-			r       INTEGER NOT NULL,
-			terrain TEXT NOT NULL CHECK (terrain IN ('grassland', 'forest', 'hills', 'marsh', 'mountains')),
+			q         INTEGER NOT NULL,
+			r         INTEGER NOT NULL,
+			terrain   TEXT NOT NULL CHECK (terrain IN ('grassland', 'forest', 'hills', 'marsh', 'mountains', 'ocean', 'lake')),
+			elevation INTEGER NOT NULL,
 			PRIMARY KEY (q, r)
 		) STRICT;
 
@@ -85,10 +100,19 @@ type Account struct {
 	Rotation int
 }
 
-// Game contains the persisted state shared by the entire game.
+// Game contains the persisted state shared by the entire game. Like the seeds,
+// the radius is fixed when the database is created: the world is generated once
+// from all three, and changing any of them afterwards would describe a
+// different world than the one on disk.
 type Game struct {
-	Seed1 int64
-	Seed2 int64
+	Seed1  int64
+	Seed2  int64
+	Radius int
+}
+
+// Seeds returns the game's PRNG seeds.
+func (g Game) Seeds() prng.Seeds {
+	return prng.New(uint64(g.Seed1), uint64(g.Seed2))
 }
 
 // Faction contains a player's faction metadata.
@@ -268,22 +292,72 @@ func (s *Store) Game(ctx context.Context) (Game, error) {
 	}
 	defer release()
 
-	var game Game
-	found := false
-	if err := sqlitex.ExecuteTransient(conn, `SELECT seed1, seed2 FROM game WHERE id = 1;`, &sqlitex.ExecOptions{
-		ResultFunc: func(stmt *sqlite.Stmt) error {
-			game.Seed1 = stmt.ColumnInt64(0)
-			game.Seed2 = stmt.ColumnInt64(1)
-			found = true
-			return nil
-		},
-	}); err != nil {
-		return Game{}, fmt.Errorf("load game: %w", err)
+	record, found, err := readGameRecord(conn)
+	if err != nil {
+		return Game{}, err
 	}
 	if !found {
 		return Game{}, errors.New("game is not initialized")
 	}
-	return game, nil
+	return record, nil
+}
+
+// World returns the generated world.
+//
+// The world is immutable once created, so this is a pure read. It loads every
+// hex: the admin map draws all of them, and a player map needs an arbitrary
+// scattering of them as visibility spreads, which is not a shape a WHERE clause
+// serves better than one sequential scan.
+func (s *Store) World(ctx context.Context) (game.World, error) {
+	conn, release, err := s.take(ctx)
+	if err != nil {
+		return game.World{}, err
+	}
+	defer release()
+
+	record, found, err := readGameRecord(conn)
+	if err != nil {
+		return game.World{}, err
+	}
+	if !found {
+		return game.World{}, errors.New("load world: game is not initialized")
+	}
+	return readWorld(conn, record.Radius)
+}
+
+func readWorld(conn *sqlite.Conn, radius int) (game.World, error) {
+	hexes := make([]game.Hex, 0)
+	if err := sqlitex.ExecuteTransient(conn, `
+		SELECT q, r, terrain, elevation FROM hexes ORDER BY q, r;`, &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			hexes = append(hexes, game.Hex{
+				Coord:     hexg.NewHex(stmt.ColumnInt(0), stmt.ColumnInt(1)),
+				Terrain:   game.Terrain(stmt.ColumnText(2)),
+				Elevation: stmt.ColumnInt(3),
+			})
+			return nil
+		},
+	}); err != nil {
+		return game.World{}, fmt.Errorf("load world: %w", err)
+	}
+	return game.NewWorld(radius, hexes), nil
+}
+
+func readGameRecord(conn *sqlite.Conn) (Game, bool, error) {
+	var record Game
+	found := false
+	if err := sqlitex.ExecuteTransient(conn, `SELECT seed1, seed2, radius FROM game WHERE id = 1;`, &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			record.Seed1 = stmt.ColumnInt64(0)
+			record.Seed2 = stmt.ColumnInt64(1)
+			record.Radius = stmt.ColumnInt(2)
+			found = true
+			return nil
+		},
+	}); err != nil {
+		return Game{}, false, fmt.Errorf("load game: %w", err)
+	}
+	return record, found, nil
 }
 
 // Faction returns the faction controlled by an account.
@@ -423,19 +497,71 @@ func (s *Store) seedDefaults(ctx context.Context, game Game) error {
 	return nil
 }
 
-func (s *Store) seedGame(ctx context.Context, game Game) error {
+func (s *Store) seedGame(ctx context.Context, record Game) error {
+	if record.Radius == 0 {
+		record.Radius = DefaultWorldRadius
+	}
+	if record.Radius < MinimumWorldRadius || record.Radius > MaximumWorldRadius {
+		return fmt.Errorf("seed game: world radius %d is outside %d..%d",
+			record.Radius, MinimumWorldRadius, MaximumWorldRadius)
+	}
+
 	conn, release, err := s.take(ctx)
 	if err != nil {
 		return err
 	}
 	defer release()
 
+	inserted := false
 	if err := sqlitex.ExecuteTransient(conn, `
-		INSERT INTO game (id, seed1, seed2) VALUES (1, ?1, ?2)
-		ON CONFLICT (id) DO NOTHING;`, &sqlitex.ExecOptions{
-		Args: []any{game.Seed1, game.Seed2},
+		INSERT INTO game (id, seed1, seed2, radius) VALUES (1, ?1, ?2, ?3)
+		ON CONFLICT (id) DO NOTHING
+		RETURNING 1;`, &sqlitex.ExecOptions{
+		Args: []any{record.Seed1, record.Seed2, record.Radius},
+		ResultFunc: func(*sqlite.Stmt) error {
+			inserted = true
+			return nil
+		},
 	}); err != nil {
 		return fmt.Errorf("seed game: %w", err)
+	}
+	if !inserted {
+		// The game already exists, and with it the world generated from it.
+		return nil
+	}
+	return seedWorld(conn, record)
+}
+
+// seedWorld generates the world and writes it. It runs once, inside the same
+// call that creates the game row, because the world is a function of the seeds
+// and radius stored there and must never disagree with them.
+func seedWorld(conn *sqlite.Conn, record Game) (err error) {
+	world := game.GenerateWorld(record.Seeds(), record.Radius)
+
+	end, err := sqlitex.ImmediateTransaction(conn)
+	if err != nil {
+		return err
+	}
+	defer end(&err)
+
+	statement, err := conn.Prepare(`INSERT INTO hexes (q, r, terrain, elevation) VALUES (?1, ?2, ?3, ?4);`)
+	if err != nil {
+		return fmt.Errorf("prepare world insert: %w", err)
+	}
+	for _, hex := range world.Hexes() {
+		statement.BindInt64(1, int64(hex.Coord.Q()))
+		statement.BindInt64(2, int64(hex.Coord.R()))
+		statement.BindText(3, string(hex.Terrain))
+		statement.BindInt64(4, int64(hex.Elevation))
+		if _, err := statement.Step(); err != nil {
+			return fmt.Errorf("seed world: %w", err)
+		}
+		if err := statement.Reset(); err != nil {
+			return fmt.Errorf("seed world: %w", err)
+		}
+	}
+	if err := statement.Finalize(); err != nil {
+		return fmt.Errorf("seed world: %w", err)
 	}
 	return nil
 }
@@ -471,9 +597,8 @@ func (s *Store) createAccount(ctx context.Context, seed SeedAccount, hash []byte
 
 	origin := hexg.NewHex(0, 0)
 	rotation := 0
-	terrain := game.TerrainMountains
 	if !mainAdmin {
-		origin, rotation, terrain, err = accountPlacement(conn, seed.Email)
+		origin, rotation, err = accountPlacement(conn, seed.Email)
 		if err != nil {
 			return Account{}, err
 		}
@@ -516,47 +641,50 @@ func (s *Store) createAccount(ctx context.Context, seed SeedAccount, hash []byte
 		}
 		return account, nil
 	}
-	if err := sqlitex.ExecuteTransient(conn, `
-		INSERT INTO hexes (q, r, terrain) VALUES (?1, ?2, ?3);`, &sqlitex.ExecOptions{
-		Args: []any{origin.Q(), origin.R(), string(terrain)},
-	}); err != nil {
-		return Account{}, fmt.Errorf("initialize account origin: %w", err)
-	}
+	// The origin hex is not created here: the world already holds it. The
+	// deferred foreign key from accounts to hexes now does real work, rejecting
+	// an origin that is not a hex of this world.
 	return Account{
 		Email: seed.Email, Handle: seed.Handle, Role: seed.Role,
 		Origin: origin, Rotation: rotation,
 	}, nil
 }
 
-func accountPlacement(conn *sqlite.Conn, normalizedEmail string) (hexg.Hex, int, game.Terrain, error) {
-	var storedSeeds Game
-	initialized := make([]hexg.Hex, 0)
-	foundGame := false
-	if err := sqlitex.ExecuteTransient(conn, `SELECT seed1, seed2 FROM game WHERE id = 1;`, &sqlitex.ExecOptions{
-		ResultFunc: func(stmt *sqlite.Stmt) error {
-			storedSeeds.Seed1 = stmt.ColumnInt64(0)
-			storedSeeds.Seed2 = stmt.ColumnInt64(1)
-			foundGame = true
-			return nil
-		},
-	}); err != nil {
-		return hexg.Hex{}, 0, "", fmt.Errorf("load game for account placement: %w", err)
+// accountPlacement chooses an account's origin hex and map rotation.
+//
+// The exclusion set is the origins other accounts already hold, read from
+// accounts. It is deliberately not every row in hexes: those are the world, and
+// every hex of it exists before the first account does.
+func accountPlacement(conn *sqlite.Conn, normalizedEmail string) (hexg.Hex, int, error) {
+	record, foundGame, err := readGameRecord(conn)
+	if err != nil {
+		return hexg.Hex{}, 0, fmt.Errorf("load game for account placement: %w", err)
 	}
 	if !foundGame {
-		return hexg.Hex{}, 0, "", errors.New("place account: game is not initialized")
+		return hexg.Hex{}, 0, errors.New("place account: game is not initialized")
 	}
-	if err := sqlitex.ExecuteTransient(conn, `SELECT q, r FROM hexes;`, &sqlitex.ExecOptions{
+
+	world, err := readWorld(conn, record.Radius)
+	if err != nil {
+		return hexg.Hex{}, 0, err
+	}
+
+	taken := make([]hexg.Hex, 0)
+	if err := sqlitex.ExecuteTransient(conn, `SELECT origin_q, origin_r FROM accounts;`, &sqlitex.ExecOptions{
 		ResultFunc: func(stmt *sqlite.Stmt) error {
-			initialized = append(initialized, hexg.NewHex(stmt.ColumnInt(0), stmt.ColumnInt(1)))
+			taken = append(taken, hexg.NewHex(stmt.ColumnInt(0), stmt.ColumnInt(1)))
 			return nil
 		},
 	}); err != nil {
-		return hexg.Hex{}, 0, "", fmt.Errorf("load initialized hexes: %w", err)
+		return hexg.Hex{}, 0, fmt.Errorf("load assigned origins: %w", err)
 	}
 
-	seeds := prng.New(uint64(storedSeeds.Seed1), uint64(storedSeeds.Seed2))
-	origin := game.AssignOrigin(seeds, normalizedEmail, initialized)
-	return origin, game.PlayerRotation(seeds, origin), game.TerrainAt(seeds, origin), nil
+	seeds := record.Seeds()
+	origin, err := game.AssignOrigin(seeds, normalizedEmail, world, taken)
+	if err != nil {
+		return hexg.Hex{}, 0, fmt.Errorf("place account: %w", err)
+	}
+	return origin, game.PlayerRotation(seeds, origin), nil
 }
 
 func readAccountRecord(conn *sqlite.Conn, normalizedEmail string) (Account, bool, error) {

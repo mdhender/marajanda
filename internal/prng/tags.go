@@ -29,4 +29,10 @@ const (
 	TagFaction              // 3: per-faction draws, addressed by faction number
 	TagHex                  // 4: per-hex contents, addressed by (q, r, s)
 	TagTile                 // 5: per-tile contents, addressed by (q, r, s, tile_type)
+	TagWorld                // 6: world-scale draws, addressed by noise lattice point or field name
+
+	// tagLimit is one past the last registered tag. It is not a tag: it bounds
+	// the registry check in validatePath. Append new tags above it so the bound
+	// maintains itself.
+	tagLimit
 )
