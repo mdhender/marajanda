@@ -2,9 +2,9 @@
 # which points Overmind at this file instead of the default ./Procfile).
 #
 # Prerequisites, none of which this file starts:
-#   - .env.development.local, holding MARAJANDA_ROOT and the MARAJANDA_ADMIN_*
-#     seed values. MARAJANDA_ADDRESS and MARAJANDA_PORT must match the upstream
-#     the Caddyfile dials, currently 127.0.0.1:18443.
+#   - .env.development.local, holding MARAJANDA_ROOT, MARAJANDA_GAME_SEED, and
+#     the MARAJANDA_ADMIN_* seed values. MARAJANDA_ADDRESS and MARAJANDA_PORT
+#     must match the upstream the Caddyfile dials, currently 127.0.0.1:18443.
 #   - The directory MARAJANDA_ROOT names. It is git-ignored, so a fresh clone
 #     has to create it; the daemon creates the SQLite files inside it.
 #   - Caddy, shared with the other apps on this machine and run as a service

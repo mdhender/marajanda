@@ -25,11 +25,14 @@ The process entry point reads `ENV` to choose the dotenv environment and default
 | `--admin-email` | `MARAJANDA_ADMIN_EMAIL` | When creating a persistent database |
 | `--admin-secret` | `MARAJANDA_ADMIN_SECRET` | When creating a persistent database |
 | `--admin-handle` | `MARAJANDA_ADMIN_HANDLE` | When creating a persistent database |
+| `--game-seed` | `MARAJANDA_GAME_SEED` | When creating any database |
 | `--address` | `MARAJANDA_ADDRESS` | No; defaults to `127.0.0.1` |
 | `--port` | `MARAJANDA_PORT` | No; defaults to `8443` |
 | `--timeout` | `MARAJANDA_TIMEOUT` | No; defaults to `0` (disabled) |
 
-The root value may be `:memory:`. In-memory databases ignore configured admin seed values and use the documented defaults.
+The game seed contains exactly two comma-separated signed 64-bit integers, for example `98374,-98`. Neither integer has a default value.
+
+The root value may be `:memory:`. In-memory databases ignore configured admin seed values and use the documented account defaults, but still require `--game-seed`.
 
 ## Server lifecycle
 

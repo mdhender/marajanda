@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mdhender/marajanda/internal/datastore"
 )
 
 func TestHealthz(t *testing.T) {
@@ -39,6 +41,7 @@ func TestRunStopsAfterTimeout(t *testing.T) {
 	start := time.Now()
 	err := Run(t.Context(), Config{
 		Root:    ":memory:",
+		Game:    new(datastore.Game{Seed1: 98374, Seed2: -98}),
 		Address: DefaultAddress,
 		Port:    0,
 		Timeout: 10 * time.Millisecond,
@@ -59,6 +62,7 @@ func TestRunRejectsInvalidConfiguration(t *testing.T) {
 	}{
 		{name: "port", cfg: Config{Port: -1}, want: "invalid server port"},
 		{name: "timeout", cfg: Config{Timeout: -time.Second}, want: "invalid server timeout"},
+		{name: "game seed", cfg: Config{Root: ":memory:"}, want: "game seed is required"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := Run(t.Context(), test.cfg)

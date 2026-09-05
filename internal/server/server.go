@@ -29,6 +29,7 @@ type Config struct {
 	AdminEmail  string
 	AdminSecret string
 	AdminHandle string
+	Game        *datastore.Game
 	Environment string
 	Address     string
 	Port        int
@@ -47,7 +48,10 @@ func Run(ctx context.Context, cfg Config) (err error) {
 
 	var store *datastore.Store
 	if cfg.Root == ":memory:" {
-		store, err = datastore.OpenMemory(ctx)
+		if cfg.Game == nil {
+			return errors.New("game seed is required when seeding a new database")
+		}
+		store, err = datastore.OpenMemory(ctx, *cfg.Game)
 		if err != nil {
 			return err
 		}
@@ -59,7 +63,7 @@ func Run(ctx context.Context, cfg Config) (err error) {
 			Email:  cfg.AdminEmail,
 			Secret: cfg.AdminSecret,
 			Handle: cfg.AdminHandle,
-		})
+		}, cfg.Game)
 		if err != nil {
 			return err
 		}

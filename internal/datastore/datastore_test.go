@@ -15,13 +15,15 @@ import (
 	"zombiezen.com/go/sqlite/sqlitex"
 )
 
+var testGame = Game{Seed1: 98374, Seed2: -98}
+
 func TestOpenPersistentCreatesMigratesAndSeeds(t *testing.T) {
 	root := t.TempDir()
 	store, err := Open(t.Context(), root, SeedAccount{
 		Email:  "ADMIN@EXAMPLE.COM",
 		Secret: "temporary",
 		Handle: "keeper",
-	})
+	}, new(testGame))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,6 +38,13 @@ func TestOpenPersistentCreatesMigratesAndSeeds(t *testing.T) {
 	if cost, err := bcrypt.Cost(account.hash); err != nil || cost != bcrypt.MinCost {
 		t.Fatalf("bcrypt cost = %d, %v; want %d", cost, err, bcrypt.MinCost)
 	}
+	game, err := store.Game(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if game != testGame {
+		t.Fatalf("Game = %#v, want %#v", game, testGame)
+	}
 	assertPragma(t, store, "application_id", int64(ApplicationID))
 	assertPragma(t, store, "user_version", int64(len(schema.Migrations)))
 	assertPragma(t, store, "foreign_keys", 1)
@@ -47,7 +56,7 @@ func TestOpenPersistentCreatesMigratesAndSeeds(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, Filename)); err != nil {
 		t.Fatalf("stat database: %v", err)
 	}
-	reopened, err := Open(t.Context(), root, SeedAccount{})
+	reopened, err := Open(t.Context(), root, SeedAccount{}, nil)
 	if err != nil {
 		t.Fatalf("reopen without seed configuration: %v", err)
 	}
@@ -55,11 +64,15 @@ func TestOpenPersistentCreatesMigratesAndSeeds(t *testing.T) {
 	if got := accountCount(t, reopened); got != 1 {
 		t.Fatalf("account count after reopen = %d, want 1", got)
 	}
+	game, err = reopened.Game(t.Context())
+	if err != nil || game != testGame {
+		t.Fatalf("Game after reopen = %#v, %v; want %#v", game, err, testGame)
+	}
 }
 
 func TestOpenPersistentRejectsMissingRootAndMissingSeed(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing")
-	if _, err := Open(t.Context(), missing, SeedAccount{}); !errors.Is(err, os.ErrNotExist) {
+	if _, err := Open(t.Context(), missing, SeedAccount{}, nil); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Open missing root error = %v, want os.ErrNotExist", err)
 	}
 	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
@@ -67,7 +80,7 @@ func TestOpenPersistentRejectsMissingRootAndMissingSeed(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	if _, err := Open(t.Context(), root, SeedAccount{}); err == nil || !strings.Contains(err.Error(), "admin email is required") {
+	if _, err := Open(t.Context(), root, SeedAccount{}, new(testGame)); err == nil || !strings.Contains(err.Error(), "admin email is required") {
 		t.Fatalf("Open missing seed error = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, Filename)); !errors.Is(err, os.ErrNotExist) {
@@ -79,7 +92,7 @@ func TestOpenPersistentRejectsNewerSchema(t *testing.T) {
 	root := t.TempDir()
 	store, err := Open(t.Context(), root, SeedAccount{
 		Email: "admin@example.com", Secret: "temporary", Handle: "admin",
-	})
+	}, new(testGame))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,52 +112,25 @@ func TestOpenPersistentRejectsNewerSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = Open(t.Context(), root, SeedAccount{})
+	_, err = Open(t.Context(), root, SeedAccount{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "newer than supported") {
 		t.Fatalf("Open newer schema error = %v", err)
 	}
 }
 
-func TestOpenPersistentMigratesFactionSchema(t *testing.T) {
+func TestOpenPersistentRejectsMissingGameSeed(t *testing.T) {
 	root := t.TempDir()
-	conn, err := sqlite.OpenConn(filepath.Join(root, Filename), sqlite.OpenReadWrite|sqlite.OpenCreate)
-	if err != nil {
-		t.Fatal(err)
+	admin := SeedAccount{Email: "admin@example.com", Secret: "temporary", Handle: "admin"}
+	if _, err := Open(t.Context(), root, admin, nil); err == nil || !strings.Contains(err.Error(), "game seed is required") {
+		t.Fatalf("Open missing game seed error = %v", err)
 	}
-	if err := sqlitex.ExecuteScript(conn, schema.Migrations[0], nil); err != nil {
-		conn.Close()
-		t.Fatal(err)
-	}
-	if err := sqlitex.ExecuteTransient(conn, fmt.Sprintf("PRAGMA application_id = %d;", ApplicationID), nil); err != nil {
-		conn.Close()
-		t.Fatal(err)
-	}
-	if err := sqlitex.ExecuteTransient(conn, "PRAGMA user_version = 1;", nil); err != nil {
-		conn.Close()
-		t.Fatal(err)
-	}
-	if err := conn.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err := Open(t.Context(), root, SeedAccount{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	assertPragma(t, store, "user_version", int64(len(schema.Migrations)))
-	conn, release, err := store.take(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer release()
-	if err := sqlitex.ExecuteTransient(conn, "SELECT count(*) FROM factions;", nil); err != nil {
-		t.Fatalf("query migrated factions table: %v", err)
+	if _, err := os.Stat(filepath.Join(root, Filename)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("database created despite missing game seed: %v", err)
 	}
 }
 
 func TestOpenMemorySeedsDefaults(t *testing.T) {
-	store, err := OpenMemory(t.Context())
+	store, err := OpenMemory(t.Context(), testGame)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,12 +145,16 @@ func TestOpenMemorySeedsDefaults(t *testing.T) {
 			t.Fatalf("%s password: %v", email, err)
 		}
 	}
+	game, err := store.Game(t.Context())
+	if err != nil || game != testGame {
+		t.Fatalf("Game = %#v, %v; want %#v", game, err, testGame)
+	}
 	assertPragma(t, store, "foreign_keys", 1)
 	assertTextPragma(t, store, "journal_mode", "memory")
 }
 
 func TestAuthenticate(t *testing.T) {
-	store, err := OpenMemory(t.Context())
+	store, err := OpenMemory(t.Context(), testGame)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +189,7 @@ func TestAuthenticate(t *testing.T) {
 }
 
 func TestFindOrCreateDevelopmentAccount(t *testing.T) {
-	store, err := OpenMemory(t.Context())
+	store, err := OpenMemory(t.Context(), testGame)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,13 +223,13 @@ func TestFindOrCreateDevelopmentAccount(t *testing.T) {
 }
 
 func TestOpenSharedMemoryUsesNamedDatabase(t *testing.T) {
-	first, err := OpenSharedMemory(t.Context(), t.Name())
+	first, err := OpenSharedMemory(t.Context(), t.Name(), testGame)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer first.Close()
 
-	second, err := OpenSharedMemory(t.Context(), t.Name())
+	second, err := OpenSharedMemory(t.Context(), t.Name(), Game{Seed1: 1, Seed2: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,11 +237,15 @@ func TestOpenSharedMemoryUsesNamedDatabase(t *testing.T) {
 	if got := accountCount(t, second); got != 2 {
 		t.Fatalf("account count from second pool = %d, want 2", got)
 	}
+	game, err := second.Game(t.Context())
+	if err != nil || game != testGame {
+		t.Fatalf("shared Game = %#v, %v; want original %#v", game, err, testGame)
+	}
 	assertPragma(t, second, "foreign_keys", 1)
 }
 
 func TestFactionStartsAtOrigin(t *testing.T) {
-	store, err := OpenMemory(t.Context())
+	store, err := OpenMemory(t.Context(), testGame)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,12 +267,12 @@ func TestFactionStartsAtOrigin(t *testing.T) {
 }
 
 func TestFactionIsVisibleAcrossSharedMemoryConnections(t *testing.T) {
-	first, err := OpenSharedMemory(t.Context(), t.Name())
+	first, err := OpenSharedMemory(t.Context(), t.Name(), testGame)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer first.Close()
-	second, err := OpenSharedMemory(t.Context(), t.Name())
+	second, err := OpenSharedMemory(t.Context(), t.Name(), testGame)
 	if err != nil {
 		t.Fatal(err)
 	}

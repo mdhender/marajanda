@@ -17,8 +17,8 @@ tmp_dir = "tmp"
   cmd = "go build -o ./tmp/marajanda ./cmd/marajanda"
   bin = "./tmp/marajanda"
 
-  # No arguments: the daemon takes --root, --address, and --port from
-  # MARAJANDA_* in .env.development.local, which the process loads itself
+  # No arguments: the daemon takes --root, --game-seed, --address, and --port
+  # from MARAJANDA_* in .env.development.local, which the process loads itself
   # through internal/dotenv. MARAJANDA_ROOT is relative to this directory, and
   # air always starts the binary here, so the daemon's Chdir lands in the same
   # place a manual `go run ./cmd/marajanda` would.

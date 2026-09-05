@@ -15,6 +15,11 @@ Marajanda uses ZombieZen SQLite for persistent and in-memory data.
 - Migrate down is not supported.
 - Schema versions use ZombieZen's SQL migration package. Marajanda does not maintain a custom migration-version table or mechanism.
 - Open fails when the database schema version is newer than the version the application supports.
+- During beta, migrations are a squashed baseline. Databases created by an earlier beta schema are unsupported and must be deleted and recreated.
+
+## Game
+
+The database contains exactly one game record. It stores two required signed 64-bit integer seeds used to initialize the game's deterministic PRNG. The seeds have no default values and do not change when the database is reopened.
 
 ## Factions
 
@@ -40,7 +45,7 @@ The server may create and migrate `marajanda.db` when the file does not exist.
 
 ## Initial data
 
-When `:memory:` is selected, the server creates and migrates an in-memory database and seeds:
+When `:memory:` is selected, `--game-seed` is required. The server creates and migrates an in-memory database, stores both game seeds, and seeds:
 
 | Role | Email | Password |
 | --- | --- | --- |
@@ -51,4 +56,4 @@ The corresponding default handles are `admin` and `player`.
 
 These are intentional credentials for temporary server instances and do not produce warnings or errors.
 
-When the server creates a new persistent database, it migrates the database and seeds the configured default admin account. That account is normally configured in an environment-specific local dotenv file. Starting with an existing persistent database does not reseed it.
+When the server creates a new persistent database, it requires `--game-seed`, migrates the database, stores both game seeds, and seeds the configured default admin account. Those values are normally configured in an environment-specific local dotenv file. Starting with an existing persistent database does not require seed options and does not reseed it.

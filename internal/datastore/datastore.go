@@ -31,13 +31,20 @@ const (
 var schema = sqlitemigration.Schema{
 	AppID: ApplicationID,
 	Migrations: []string{
-		`CREATE TABLE accounts (
+		`CREATE TABLE game (
+			id    INTEGER PRIMARY KEY CHECK (id = 1),
+			seed1 INTEGER NOT NULL,
+			seed2 INTEGER NOT NULL
+		) STRICT;
+
+		CREATE TABLE accounts (
 			email       TEXT PRIMARY KEY CHECK (email = lower(email)),
 			secret_hash BLOB NOT NULL,
 			handle      TEXT NOT NULL UNIQUE,
 			role        TEXT NOT NULL CHECK (role IN ('admin', 'player'))
-		) STRICT;`,
-		`CREATE TABLE factions (
+		) STRICT;
+
+		CREATE TABLE factions (
 			account_email TEXT PRIMARY KEY REFERENCES accounts (email) ON DELETE CASCADE,
 			name          TEXT NOT NULL,
 			location_q    INTEGER NOT NULL DEFAULT 0,
@@ -61,6 +68,12 @@ type Account struct {
 	Role   string
 }
 
+// Game contains the persisted state shared by the entire game.
+type Game struct {
+	Seed1 int64
+	Seed2 int64
+}
+
 // Faction contains a player's faction metadata.
 type Faction struct {
 	Name     string
@@ -78,9 +91,10 @@ type Store struct {
 	pool *sqlitemigration.Pool
 }
 
-// Open opens marajanda.db in root, migrates it, and seeds admin if the file is new.
-// Open never creates root.
-func Open(ctx context.Context, root string, admin SeedAccount) (_ *Store, err error) {
+// Open opens marajanda.db in root, migrates it, and seeds the game and admin if
+// the file is new. game is required only for a new database. Open never creates
+// root.
+func Open(ctx context.Context, root string, admin SeedAccount, game *Game) (_ *Store, err error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, fmt.Errorf("open datastore root: %w", err)
@@ -98,6 +112,9 @@ func Open(ctx context.Context, root string, admin SeedAccount) (_ *Store, err er
 		admin.Role = "admin"
 		if err := validateSeed(admin); err != nil {
 			return nil, fmt.Errorf("seed persistent database: %w", err)
+		}
+		if game == nil {
+			return nil, errors.New("seed persistent database: game seed is required")
 		}
 	}
 
@@ -124,16 +141,23 @@ func Open(ctx context.Context, root string, admin SeedAccount) (_ *Store, err er
 		return nil, fmt.Errorf("open persistent datastore: %w", err)
 	}
 	if newDatabase {
+		if err := store.seedGame(ctx, *game); err != nil {
+			store.Close()
+			return nil, fmt.Errorf("seed persistent datastore: %w", err)
+		}
 		if err := store.seed(ctx, admin); err != nil {
 			store.Close()
 			return nil, fmt.Errorf("seed persistent datastore: %w", err)
 		}
+	} else if _, err := store.Game(ctx); err != nil {
+		store.Close()
+		return nil, fmt.Errorf("open persistent datastore: %w", err)
 	}
 	return store, nil
 }
 
 // OpenMemory creates, migrates, and seeds a private in-memory database.
-func OpenMemory(ctx context.Context) (*Store, error) {
+func OpenMemory(ctx context.Context, game Game) (*Store, error) {
 	conn, err := sqlite.OpenConn(":memory:", sqlite.OpenReadWrite|sqlite.OpenCreate)
 	if err != nil {
 		return nil, fmt.Errorf("open in-memory datastore: %w", err)
@@ -143,7 +167,7 @@ func OpenMemory(ctx context.Context) (*Store, error) {
 		conn.Close()
 		return nil, fmt.Errorf("open in-memory datastore: %w", err)
 	}
-	if err := store.seedDefaults(ctx); err != nil {
+	if err := store.seedDefaults(ctx, game); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("seed in-memory datastore: %w", err)
 	}
@@ -151,7 +175,7 @@ func OpenMemory(ctx context.Context) (*Store, error) {
 }
 
 // OpenSharedMemory opens, migrates, and seeds a named shared in-memory database.
-func OpenSharedMemory(ctx context.Context, name string) (*Store, error) {
+func OpenSharedMemory(ctx context.Context, name string, game Game) (*Store, error) {
 	if name == "" {
 		return nil, errors.New("open shared in-memory datastore: missing name")
 	}
@@ -165,7 +189,7 @@ func OpenSharedMemory(ctx context.Context, name string) (*Store, error) {
 		pool.Close()
 		return nil, fmt.Errorf("open shared in-memory datastore: %w", err)
 	}
-	if err := store.seedDefaults(ctx); err != nil {
+	if err := store.seedDefaults(ctx, game); err != nil {
 		store.Close()
 		return nil, fmt.Errorf("seed shared in-memory datastore: %w", err)
 	}
@@ -214,6 +238,32 @@ func (s *Store) Authenticate(ctx context.Context, email, secret string) (Account
 		return Account{}, false, fmt.Errorf("verify account secret: %w", err)
 	}
 	return account, true, nil
+}
+
+// Game returns the game's persisted PRNG seeds.
+func (s *Store) Game(ctx context.Context) (Game, error) {
+	conn, release, err := s.take(ctx)
+	if err != nil {
+		return Game{}, err
+	}
+	defer release()
+
+	var game Game
+	found := false
+	if err := sqlitex.ExecuteTransient(conn, `SELECT seed1, seed2 FROM game WHERE id = 1;`, &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			game.Seed1 = stmt.ColumnInt64(0)
+			game.Seed2 = stmt.ColumnInt64(1)
+			found = true
+			return nil
+		},
+	}); err != nil {
+		return Game{}, fmt.Errorf("load game: %w", err)
+	}
+	if !found {
+		return Game{}, errors.New("game is not initialized")
+	}
+	return game, nil
 }
 
 // Faction returns the faction controlled by an account.
@@ -331,7 +381,10 @@ func (s *Store) take(ctx context.Context) (*sqlite.Conn, func(), error) {
 	return conn, func() { s.pool.Put(conn) }, nil
 }
 
-func (s *Store) seedDefaults(ctx context.Context) error {
+func (s *Store) seedDefaults(ctx context.Context, game Game) error {
+	if err := s.seedGame(ctx, game); err != nil {
+		return err
+	}
 	for _, account := range []SeedAccount{
 		{Email: "admin@marajanda.com", Secret: "good.luck", Handle: "admin", Role: "admin"},
 		{Email: "player@marajanda.com", Secret: "good.luck", Handle: "player", Role: "player"},
@@ -339,6 +392,23 @@ func (s *Store) seedDefaults(ctx context.Context) error {
 		if err := s.seed(ctx, account); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (s *Store) seedGame(ctx context.Context, game Game) error {
+	conn, release, err := s.take(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	if err := sqlitex.ExecuteTransient(conn, `
+		INSERT INTO game (id, seed1, seed2) VALUES (1, ?1, ?2)
+		ON CONFLICT (id) DO NOTHING;`, &sqlitex.ExecOptions{
+		Args: []any{game.Seed1, game.Seed2},
+	}); err != nil {
+		return fmt.Errorf("seed game: %w", err)
 	}
 	return nil
 }
