@@ -28,6 +28,8 @@ Submitting `POST /sign-out` invalidates the current session, expires its cookie,
 
 Non-production builds register `GET /__agents/log-me-in/{email}` when `ENV` is not `production`. The route finds the normalized account or creates a player account with a generated handle and secret, starts a normal browser session, and redirects to the safe same-origin path supplied by `returnTo`. Missing, absolute, protocol-relative, and malformed return paths redirect to `/`.
 
+A player account reached through this route is given a randomly generated faction name if it has no configured faction, so that the player dashboard does not divert the session to `/player/faction`. An already configured faction is never replaced, and admin accounts receive no faction. The name is drawn from a passphrase generator, not from the game PRNG.
+
 The `production` build tag omits the route. Setting `ENV=production` also prevents registration in a non-production build.
 
 ## Invitations

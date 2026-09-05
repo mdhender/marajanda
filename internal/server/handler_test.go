@@ -27,7 +27,7 @@ func TestLandingAndSignInForm(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"v0.2.0-beta",
+		"v0.2.1-beta",
 		`href="https://github.com/mdhender/marajanda/issues"`,
 		`aria-label="Marajanda issues on GitHub"`,
 	} {

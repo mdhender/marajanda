@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/mdhender/marajanda/internal/datastore"
+	"github.com/mdhender/marajanda/internal/game"
 )
 
 func TestAgentSignInCreatesNormalSession(t *testing.T) {
@@ -92,5 +93,76 @@ func TestAgentSignInNotRegisteredInProductionEnvironment(t *testing.T) {
 	response := serveRequest(handler, http.MethodGet, "/__agents/log-me-in/agent@example.test")
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+}
+
+func TestAgentSignInGeneratesFactionWhenMissing(t *testing.T) {
+	store := &testStore{}
+	handler := newConfiguredHandler(nil, func(_ context.Context, email string) (datastore.Account, error) {
+		return datastore.Account{Email: email, Handle: "agent", Role: "player"}, nil
+	}, store, "development")
+
+	response := serveRequest(handler, http.MethodGet, "/__agents/log-me-in/agent@example.test?returnTo=%2Fplayer%2Fdashboard")
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/player/dashboard" {
+		t.Fatalf("response = %d %q, want %d %q", response.Code, response.Header().Get("Location"), http.StatusSeeOther, "/player/dashboard")
+	}
+	if store.email != "agent@example.test" {
+		t.Fatalf("saved faction for %q, want agent@example.test", store.email)
+	}
+	if !store.faction.Configured() {
+		t.Fatal("development account left without a faction")
+	}
+	if _, err := game.NormalizeFactionName(store.faction.Name); err != nil {
+		t.Fatalf("generated faction name %q is invalid: %v", store.faction.Name, err)
+	}
+
+	// The whole point is that the guard has nothing to block, so the dashboard
+	// must now answer rather than divert to the configuration form.
+	cookie := response.Result().Cookies()[0]
+	dashboard := requestWithCookie(handler, http.MethodGet, "/player/dashboard", cookie, "")
+	if dashboard.Code != http.StatusOK || !strings.Contains(dashboard.Body.String(), store.faction.Name) {
+		t.Fatalf("dashboard = %d %q, want the generated faction", dashboard.Code, dashboard.Body.String())
+	}
+}
+
+func TestAgentSignInKeepsAnExistingFaction(t *testing.T) {
+	store := &testStore{faction: datastore.Faction{Name: "Star Kin"}, found: true}
+	handler := newConfiguredHandler(nil, func(_ context.Context, email string) (datastore.Account, error) {
+		return datastore.Account{Email: email, Handle: "agent", Role: "player"}, nil
+	}, store, "development")
+
+	serveRequest(handler, http.MethodGet, "/__agents/log-me-in/agent@example.test?returnTo=%2Fplayer%2Fdashboard")
+
+	if store.email != "" || store.faction.Name != "Star Kin" {
+		t.Fatalf("faction = %q saved for %q, want Star Kin untouched", store.faction.Name, store.email)
+	}
+}
+
+func TestAgentSignInLeavesAdminsWithoutAFaction(t *testing.T) {
+	store := &testStore{}
+	handler := newConfiguredHandler(nil, func(_ context.Context, email string) (datastore.Account, error) {
+		return datastore.Account{Email: email, Handle: "keeper", Role: "admin"}, nil
+	}, store, "development")
+
+	serveRequest(handler, http.MethodGet, "/__agents/log-me-in/keeper@example.test?returnTo=%2Fadmin%2Fdashboard")
+
+	if store.email != "" || store.faction.Configured() {
+		t.Fatalf("admin received faction %q, want none", store.faction.Name)
+	}
+}
+
+// TestAgentFactionNameAlwaysValid pins the property the route depends on: the
+// generator can never produce a name the faction rules reject, so a development
+// sign-in cannot fail on a random draw.
+func TestAgentFactionNameAlwaysValid(t *testing.T) {
+	for range 500 {
+		name := agentFactionName()
+		normalized, err := game.NormalizeFactionName(name)
+		if err != nil {
+			t.Fatalf("generated %q, which the faction rules reject: %v", name, err)
+		}
+		if normalized != name {
+			t.Fatalf("generated %q, which normalizes to %q", name, normalized)
+		}
 	}
 }
