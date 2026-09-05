@@ -27,7 +27,7 @@ func TestLandingAndSignInForm(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"v0.1.13-beta",
+		"v0.2.0-beta",
 		`href="https://github.com/mdhender/marajanda/issues"`,
 		`aria-label="Marajanda issues on GitHub"`,
 	} {
@@ -283,6 +283,7 @@ type testStore struct {
 	faction datastore.Faction
 	found   bool
 	game    datastore.Game
+	visible []hexg.Hex
 }
 
 func (s *testStore) Game(context.Context) (datastore.Game, error) {
@@ -291,6 +292,10 @@ func (s *testStore) Game(context.Context) (datastore.Game, error) {
 
 func (s *testStore) Faction(context.Context, string) (datastore.Faction, bool, error) {
 	return s.faction, s.found, nil
+}
+
+func (s *testStore) VisibleHexes(context.Context, string) ([]hexg.Hex, error) {
+	return s.visible, nil
 }
 
 func (s *testStore) SaveFaction(_ context.Context, email, name string) error {

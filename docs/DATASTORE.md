@@ -40,7 +40,9 @@ hexes. Creating an account inserts the account and its initialized origin hex
 in one transaction.
 
 See [Terrain reference](reference/terrain.md) for the terrain values and
-deterministic generation rules.
+deterministic generation rules. Drawing a map reads terrain from the
+deterministic function and initializes no hexes; see
+[Map view reference](reference/map-view.md).
 
 ## Factions
 

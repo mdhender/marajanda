@@ -330,6 +330,29 @@ func (s *Store) SaveFaction(ctx context.Context, email, name string) error {
 	return nil
 }
 
+// VisibleHexes returns the true map coordinates an account can currently see.
+//
+// Visibility is not visitation. A player will eventually see terrain in hexes
+// they have never entered, so a map draws this set rather than a travel
+// history. Today an account sees only its origin hex, which the account record
+// already holds, so there is no visibility table to query yet.
+func (s *Store) VisibleHexes(ctx context.Context, email string) ([]hexg.Hex, error) {
+	conn, release, err := s.take(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	account, found, err := readAccountRecord(conn, normalizeEmail(email))
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, errors.New("look up visible hexes: unknown account")
+	}
+	return []hexg.Hex{account.Origin}, nil
+}
+
 // FindOrCreateDevelopmentAccount returns an account for development-only sign-in.
 // Accounts created by this method are players with generated handles and secrets.
 func (s *Store) FindOrCreateDevelopmentAccount(ctx context.Context, email string) (account Account, err error) {

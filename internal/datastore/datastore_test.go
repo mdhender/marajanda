@@ -725,3 +725,38 @@ func assertTextPragma(t *testing.T, store *Store, name, want string) {
 		t.Fatalf("PRAGMA %s = %q, want %q", name, got, want)
 	}
 }
+
+func TestVisibleHexes(t *testing.T) {
+	store, err := OpenMemory(t.Context(), testGame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// The main admin sits on the game origin, so its visible set is the one
+	// place every account agrees about.
+	admin := readAccount(t, store, "admin@marajanda.com")
+	visible, err := store.VisibleHexes(t.Context(), "admin@marajanda.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(visible) != 1 || !visible[0].Equals(admin.origin) {
+		t.Fatalf("admin visible hexes = %v, want [%v]", visible, admin.origin)
+	}
+
+	player := readAccount(t, store, "player@marajanda.com")
+	visible, err = store.VisibleHexes(t.Context(), " PLAYER@MARAJANDA.COM ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(visible) != 1 || !visible[0].Equals(player.origin) {
+		t.Fatalf("player visible hexes = %v, want [%v]", visible, player.origin)
+	}
+	if visible[0].Equals(admin.origin) {
+		t.Fatal("player sees the admin origin")
+	}
+
+	if _, err := store.VisibleHexes(t.Context(), "stranger@example.com"); err == nil {
+		t.Fatal("VisibleHexes(unknown account) = nil error, want an error")
+	}
+}

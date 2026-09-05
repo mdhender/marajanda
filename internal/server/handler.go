@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/maloquacious/hexg"
 	"github.com/mdhender/marajanda"
 	"github.com/mdhender/marajanda/internal/datastore"
 	"github.com/mdhender/marajanda/internal/game"
@@ -26,6 +27,7 @@ type applicationStore interface {
 	Game(context.Context) (datastore.Game, error)
 	Faction(context.Context, string) (datastore.Faction, bool, error)
 	SaveFaction(context.Context, string, string) error
+	VisibleHexes(context.Context, string) ([]hexg.Hex, error)
 }
 
 type application struct {
@@ -45,6 +47,7 @@ type pageData struct {
 	Faction datastore.Faction
 	Game    datastore.Game
 	Name    string
+	Map     mapView
 }
 
 func newHandler(authenticate authenticateFunc, store applicationStore) http.Handler {
@@ -67,7 +70,9 @@ func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCrea
 	mux.HandleFunc("POST /sign-in", app.signIn)
 	mux.HandleFunc("POST /sign-out", app.signOut)
 	mux.HandleFunc("GET /admin/dashboard", app.dashboard("admin"))
+	mux.HandleFunc("GET /admin/map", app.adminMap)
 	mux.HandleFunc("GET /player/dashboard", app.dashboard("player"))
+	mux.HandleFunc("GET /player/map", app.playerMap)
 	mux.HandleFunc("GET /player/faction", app.factionForm)
 	mux.HandleFunc("POST /player/faction", app.configureFaction)
 	registerAgentRoutes(mux, app, environment)
@@ -255,17 +260,25 @@ func (app *application) configureFaction(w http.ResponseWriter, r *http.Request)
 }
 
 func (app *application) requirePlayer(w http.ResponseWriter, r *http.Request) (datastore.Account, bool) {
+	return app.requireRole(w, r, "player")
+}
+
+// requireRole resolves the session account and confirms it holds role. It
+// redirects to sign-in without a session and to the account's own dashboard
+// when the role does not match, so no page answers for a role it does not
+// belong to.
+func (app *application) requireRole(w http.ResponseWriter, r *http.Request, role string) (datastore.Account, bool) {
 	account, ok := app.currentAccount(r)
 	if !ok {
 		http.Redirect(w, r, "/sign-in", http.StatusSeeOther)
 		return datastore.Account{}, false
 	}
-	if account.Role != "player" {
+	if account.Role != role {
 		http.Redirect(w, r, dashboardPath(account), http.StatusSeeOther)
 		return datastore.Account{}, false
 	}
 	if app.store == nil {
-		http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
+		http.Error(w, "Marajanda could not load the game.", http.StatusInternalServerError)
 		return datastore.Account{}, false
 	}
 	return account, true
@@ -327,7 +340,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Title}} · Marajanda</title>
   <style>
-    :root { color-scheme: dark; --ink: #f7f1dc; --muted: #bfb89f; --gold: #e5bd68; --ember: #c66a43; --night: #0d171c; --panel: #14252a; --line: rgba(229,189,104,.24); }
+    :root { color-scheme: dark; --ink: #f7f1dc; --muted: #bfb89f; --gold: #e5bd68; --ember: #c66a43; --night: #0d171c; --panel: #14252a; --line: rgba(229,189,104,.24); --grassland: #7f9c5a; --forest: #3f6b46; --hills: #a98a4e; --marsh: #5b7d78; --mountains: #8a8378; --fog: #1b2e35; }
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; color: var(--ink); background: radial-gradient(circle at 78% 12%, rgba(67,117,106,.28), transparent 31rem), radial-gradient(circle at 15% 85%, rgba(198,106,67,.16), transparent 28rem), var(--night); font: 1rem/1.6 Georgia, 'Times New Roman', serif; }
     body::before { content: ''; position: fixed; inset: 0; pointer-events: none; opacity: .18; background-image: linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px); background-size: 36px 36px; mask-image: linear-gradient(to bottom, black, transparent 80%); }
@@ -370,6 +383,19 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 	.faction-summary .label { margin: 0; color: var(--gold); font: 700 .72rem/1.2 system-ui, sans-serif; letter-spacing: .16em; text-transform: uppercase; }
 	.location { min-width: 9rem; padding-left: 2rem; border-left: 1px solid var(--line); }
 	.location strong { display: block; margin-top: .35rem; color: var(--ink); font: 400 1.65rem/1.2 Georgia, 'Times New Roman', serif; }
+    .map { margin-top: 2.5rem; padding: 1rem; background: rgba(13,23,28,.6); border: 1px solid var(--line); }
+    .map svg { display: block; width: 100%; height: auto; }
+    .map polygon { stroke: rgba(13,23,28,.55); stroke-width: 1; }
+    .map .grassland, .legend .grassland { fill: var(--grassland); background: var(--grassland); }
+    .map .forest, .legend .forest { fill: var(--forest); background: var(--forest); }
+    .map .hills, .legend .hills { fill: var(--hills); background: var(--hills); }
+    .map .marsh, .legend .marsh { fill: var(--marsh); background: var(--marsh); }
+    .map .mountains, .legend .mountains { fill: var(--mountains); background: var(--mountains); }
+    .map .fog, .legend .fog { fill: var(--fog); background: var(--fog); }
+    .legend { display: flex; flex-wrap: wrap; gap: 1.1rem; margin: 1.25rem 0 0; padding: 0; color: var(--muted); font: .72rem/1.2 system-ui, sans-serif; letter-spacing: .14em; list-style: none; text-transform: uppercase; }
+    .legend li { display: flex; align-items: center; gap: .5rem; }
+    .legend i { width: .95rem; height: .95rem; border: 1px solid var(--line); }
+    .map-actions { margin-top: 2rem; }
     footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 2rem 0 3rem; color: #898674; border-top: 1px solid var(--line); font-size: .85rem; }
     .project-meta { display: flex; align-items: center; gap: .65rem; }
     .github-link { display: flex; color: var(--muted); }
@@ -383,7 +409,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     <header>
       <a class="brand" href="/">Marajanda</a>
       {{if eq .View "landing"}}<a class="sign-link" href="/sign-in">Sign in</a>{{end}}
-      {{if or (eq .View "admin") (eq .View "player") (eq .View "faction")}}<form class="sign-out-form" action="/sign-out" method="post"><button class="sign-link" type="submit">Sign out</button></form>{{end}}
+      {{if or (eq .View "admin") (eq .View "player") (eq .View "faction") (eq .View "admin-map") (eq .View "player-map")}}<form class="sign-out-form" action="/sign-out" method="post"><button class="sign-link" type="submit">Sign out</button></form>{{end}}
     </header>
     <main>
       {{if eq .View "landing"}}
@@ -422,6 +448,37 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		  <button class="primary" type="submit">Establish faction</button>
 		</form>
 	  </section>
+	  {{else if or (eq .View "admin-map") (eq .View "player-map")}}
+	  <section class="dashboard">
+		{{if eq .View "admin-map"}}
+		<p class="eyebrow">The true map</p>
+		<h1>Marajanda</h1>
+		<p class="lede">Every hex within twenty of the game origin, in true coordinates. The origin itself is mountains.</p>
+		{{else}}
+		<p class="eyebrow">Your map</p>
+		<h1>{{.Faction.Name}}</h1>
+		<p class="lede">The land your people have seen, drawn from your origin outward. Everything beyond it is still rumour.</p>
+		{{end}}
+		<div class="map">
+		  {{if .Map.Tiles}}
+		  <svg viewBox="{{.Map.ViewBox}}" role="img" aria-label="{{if eq .View "admin-map"}}Hex map centred on the game origin{{else}}Hex map centred on your origin{{end}}">
+			{{range .Map.Tiles}}<polygon class="{{.Terrain}}" points="{{.Points}}"><title>{{.Label}}</title></polygon>
+			{{end}}
+		  </svg>
+		  {{else}}
+		  <p class="lede">There is nothing to draw yet.</p>
+		  {{end}}
+		</div>
+		<ul class="legend">
+		  <li><i class="grassland"></i>Grassland</li>
+		  <li><i class="forest"></i>Forest</li>
+		  <li><i class="hills"></i>Hills</li>
+		  <li><i class="marsh"></i>Marsh</li>
+		  <li><i class="mountains"></i>Mountains</li>
+		  {{if eq .View "player-map"}}<li><i class="fog"></i>Unexplored</li>{{end}}
+		</ul>
+		<p class="map-actions"><a class="sign-link" href="{{if eq .View "admin-map"}}/admin/dashboard{{else}}/player/dashboard{{end}}">Back to dashboard</a></p>
+	  </section>
 	  {{else}}
       <section class="dashboard">
         <p class="eyebrow">{{if eq .View "admin"}}Steward of Marajanda{{else}}Faction command{{end}}</p>
@@ -435,6 +492,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 			<div><dt>Seed 1</dt><dd>{{.Game.Seed1}}</dd></div>
 			<div><dt>Seed 2</dt><dd>{{.Game.Seed2}}</dd></div>
 		  </dl>
+		  <p class="map-actions"><a class="sign-link" href="/admin/map">View the map</a></p>
 		  {{else}}
 		  <div class="faction-summary">
 			<div>
@@ -447,6 +505,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 			  <strong>({{.Faction.Location.Q}}, {{.Faction.Location.R}})</strong>
 			</div>
 		  </div>
+		  <p class="map-actions"><a class="sign-link" href="/player/map">View your map</a></p>
 		  {{end}}
         </div>
       </section>

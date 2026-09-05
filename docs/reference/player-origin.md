@@ -22,6 +22,9 @@ number. Database row identifiers are not player numbers.
 
 Hex coordinates and operations use `github.com/maloquacious/hexg`.
 
+The transform between true and player coordinates, and the maps that apply it,
+are described in [Map view reference](map-view.md).
+
 ## Placement stream
 
 Player-origin placement uses the account's normalized email address. Email

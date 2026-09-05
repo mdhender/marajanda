@@ -18,7 +18,7 @@ The sign-in form labels the email identifier as `Account` and renders it as a te
 
 Successful authentication creates a cryptographically random in-memory session. The browser receives the session identifier in a host-only `Secure`, `HttpOnly`, `SameSite=Lax` cookie without a persistent expiration. The session ends when the browser or server restarts.
 
-Authenticated admins are directed to `/admin/dashboard`. Authenticated players are directed to `/player/dashboard`. Requests for either dashboard without a valid session are directed to `/sign-in`.
+Authenticated admins are directed to `/admin/dashboard`. Authenticated players are directed to `/player/dashboard`. Requests for either dashboard without a valid session are directed to `/sign-in`. The same role and session rules apply to the map pages described in [Map view reference](reference/map-view.md).
 
 The player dashboard directs players with incomplete required faction metadata to `/player/faction`. Accepted faction configuration directs the player back to `/player/dashboard`.
 
