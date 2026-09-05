@@ -20,7 +20,7 @@ func TestAgentSignInCreatesNormalSession(t *testing.T) {
 	handler := newConfiguredHandler(nil, func(_ context.Context, email string) (datastore.Account, error) {
 		gotEmail = email
 		return datastore.Account{Email: email, Handle: "reviewer", Role: "player"}, nil
-	}, &testFactionStore{faction: datastore.Faction{Name: "Reviewers"}, found: true}, "development")
+	}, &testStore{faction: datastore.Faction{Name: "Reviewers"}, found: true}, "development")
 	response := serveRequest(handler, http.MethodGet, "/__agents/log-me-in/Reviewer@Example.Test?returnTo=%2Fplayer%2Fdashboard")
 
 	if gotEmail != "reviewer@example.test" {

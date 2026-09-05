@@ -27,7 +27,7 @@ func TestLandingAndSignInForm(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"v0.1.10-beta",
+		"v0.1.11-beta",
 		`href="https://github.com/mdhender/marajanda/issues"`,
 		`aria-label="Marajanda issues on GitHub"`,
 	} {
@@ -95,17 +95,19 @@ func TestSignInCreatesSessionAndRoutesByRole(t *testing.T) {
 		otherPath     string
 		wantDashboard []string
 	}{
-		{role: "admin", handle: "keeper", wantPath: "/admin/dashboard", otherPath: "/player/dashboard", wantDashboard: []string{"The realm awaits its keeper."}},
+		{role: "admin", handle: "keeper", wantPath: "/admin/dashboard", otherPath: "/player/dashboard", wantDashboard: []string{"Game seeds", "Seed 1", "98374", "Seed 2", "-98", "cannot be changed"}},
 		{role: "player", handle: "wanderer", wantPath: "/player/dashboard", otherPath: "/admin/dashboard", wantDashboard: []string{"The Wayfarers", "(2, -1)"}},
 	} {
 		t.Run(test.role, func(t *testing.T) {
-			var factions factionStore
+			var store applicationStore
 			if test.role == "player" {
-				factions = &testFactionStore{faction: datastore.Faction{Name: "The Wayfarers", Location: hexg.NewHex(2, -1)}, found: true}
+				store = &testStore{faction: datastore.Faction{Name: "The Wayfarers", Location: hexg.NewHex(2, -1)}, found: true}
+			} else {
+				store = &testStore{game: datastore.Game{Seed1: 98374, Seed2: -98}}
 			}
 			handler := newHandler(func(context.Context, string, string) (datastore.Account, bool, error) {
 				return datastore.Account{Email: test.role + "@example.com", Handle: test.handle, Role: test.role}, true, nil
-			}, factions)
+			}, store)
 			response := submitSignIn(handler, test.role+"@example.com", "good.luck")
 			if response.Code != http.StatusSeeOther || response.Header().Get("Location") != test.wantPath {
 				t.Fatalf("sign-in response = %d %q, want %d %q", response.Code, response.Header().Get("Location"), http.StatusSeeOther, test.wantPath)
@@ -136,6 +138,9 @@ func TestSignInCreatesSessionAndRoutesByRole(t *testing.T) {
 				if !strings.Contains(dashboard.Body.String(), want) {
 					t.Fatalf("dashboard body missing %q", want)
 				}
+			}
+			if test.role == "admin" && strings.Contains(dashboard.Body.String(), "<input") {
+				t.Fatal("admin dashboard contains an editable input")
 			}
 
 			otherRequest := httptest.NewRequest(http.MethodGet, test.otherPath, nil)
@@ -190,7 +195,7 @@ func TestDashboardRequiresSession(t *testing.T) {
 }
 
 func TestPlayerConfiguresFactionBeforeDashboard(t *testing.T) {
-	factions := &testFactionStore{}
+	factions := &testStore{}
 	handler := newHandler(func(context.Context, string, string) (datastore.Account, bool, error) {
 		return datastore.Account{Email: "player@example.com", Handle: "wanderer", Role: "player"}, true, nil
 	}, factions)
@@ -273,17 +278,22 @@ func requestWithCookie(handler http.Handler, method, target string, cookie *http
 	return response
 }
 
-type testFactionStore struct {
+type testStore struct {
 	email   string
 	faction datastore.Faction
 	found   bool
+	game    datastore.Game
 }
 
-func (s *testFactionStore) Faction(context.Context, string) (datastore.Faction, bool, error) {
+func (s *testStore) Game(context.Context) (datastore.Game, error) {
+	return s.game, nil
+}
+
+func (s *testStore) Faction(context.Context, string) (datastore.Faction, bool, error) {
 	return s.faction, s.found, nil
 }
 
-func (s *testFactionStore) SaveFaction(_ context.Context, email, name string) error {
+func (s *testStore) SaveFaction(_ context.Context, email, name string) error {
 	s.email = email
 	s.faction = datastore.Faction{Name: name, Location: hexg.NewHex(0, 0)}
 	s.found = true

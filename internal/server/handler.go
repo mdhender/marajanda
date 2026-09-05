@@ -22,7 +22,8 @@ const sessionCookieName = "marajanda_session"
 type authenticateFunc func(context.Context, string, string) (datastore.Account, bool, error)
 type findOrCreateFunc func(context.Context, string) (datastore.Account, error)
 
-type factionStore interface {
+type applicationStore interface {
+	Game(context.Context) (datastore.Game, error)
 	Faction(context.Context, string) (datastore.Faction, bool, error)
 	SaveFaction(context.Context, string, string) error
 }
@@ -30,7 +31,7 @@ type factionStore interface {
 type application struct {
 	authenticate        authenticateFunc
 	findOrCreateAccount findOrCreateFunc
-	factions            factionStore
+	store               applicationStore
 	sessionsMu          sync.RWMutex
 	sessions            map[string]datastore.Account
 }
@@ -42,18 +43,19 @@ type pageData struct {
 	Version string
 	Account datastore.Account
 	Faction datastore.Faction
+	Game    datastore.Game
 	Name    string
 }
 
-func newHandler(authenticate authenticateFunc, factions factionStore) http.Handler {
-	return newConfiguredHandler(authenticate, nil, factions, "production")
+func newHandler(authenticate authenticateFunc, store applicationStore) http.Handler {
+	return newConfiguredHandler(authenticate, nil, store, "production")
 }
 
-func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCreateFunc, factions factionStore, environment string) http.Handler {
+func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCreateFunc, store applicationStore, environment string) http.Handler {
 	app := &application{
 		authenticate:        authenticate,
 		findOrCreateAccount: findOrCreate,
-		factions:            factions,
+		store:               store,
 		sessions:            make(map[string]datastore.Account),
 	}
 	mux := http.NewServeMux()
@@ -166,15 +168,24 @@ func (app *application) dashboard(role string) http.HandlerFunc {
 			http.Redirect(w, r, dashboardPath(account), http.StatusSeeOther)
 			return
 		}
-		var faction datastore.Faction
-		if role == "player" {
-			if app.factions == nil {
+		var data pageData
+		if role == "admin" {
+			if app.store == nil {
+				http.Error(w, "Marajanda could not load the game.", http.StatusInternalServerError)
+				return
+			}
+			game, err := app.store.Game(r.Context())
+			if err != nil {
+				http.Error(w, "Marajanda could not load the game.", http.StatusInternalServerError)
+				return
+			}
+			data.Game = game
+		} else {
+			if app.store == nil {
 				http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
 				return
 			}
-			var found bool
-			var err error
-			faction, found, err = app.factions.Faction(r.Context(), account.Email)
+			faction, found, err := app.store.Faction(r.Context(), account.Email)
 			if err != nil {
 				http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
 				return
@@ -183,12 +194,16 @@ func (app *application) dashboard(role string) http.HandlerFunc {
 				http.Redirect(w, r, "/player/faction", http.StatusSeeOther)
 				return
 			}
+			data.Faction = faction
 		}
 		title := "Player dashboard"
 		if role == "admin" {
 			title = "Admin dashboard"
 		}
-		app.render(w, http.StatusOK, pageData{Title: title, View: role, Account: account, Faction: faction})
+		data.Title = title
+		data.View = role
+		data.Account = account
+		app.render(w, http.StatusOK, data)
 	}
 }
 
@@ -197,7 +212,7 @@ func (app *application) factionForm(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	faction, found, err := app.factions.Faction(r.Context(), account.Email)
+	faction, found, err := app.store.Faction(r.Context(), account.Email)
 	if err != nil {
 		http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
 		return
@@ -214,7 +229,7 @@ func (app *application) configureFaction(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	faction, found, err := app.factions.Faction(r.Context(), account.Email)
+	faction, found, err := app.store.Faction(r.Context(), account.Email)
 	if err != nil {
 		http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
 		return
@@ -232,7 +247,7 @@ func (app *application) configureFaction(w http.ResponseWriter, r *http.Request)
 		app.render(w, http.StatusUnprocessableEntity, pageData{Title: "Configure faction", View: "faction", Account: account, Name: r.FormValue("name"), Message: err.Error()})
 		return
 	}
-	if err := app.factions.SaveFaction(r.Context(), account.Email, name); err != nil {
+	if err := app.store.SaveFaction(r.Context(), account.Email, name); err != nil {
 		http.Error(w, "Marajanda could not save your faction.", http.StatusInternalServerError)
 		return
 	}
@@ -249,7 +264,7 @@ func (app *application) requirePlayer(w http.ResponseWriter, r *http.Request) (d
 		http.Redirect(w, r, dashboardPath(account), http.StatusSeeOther)
 		return datastore.Account{}, false
 	}
-	if app.factions == nil {
+	if app.store == nil {
 		http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
 		return datastore.Account{}, false
 	}
@@ -346,6 +361,10 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .dashboard-panel { margin-top: 3rem; padding: 2rem; background: rgba(20,37,42,.7); border: 1px solid var(--line); }
     .dashboard-panel h2 { margin-top: 0; font-weight: 400; }
     .dashboard-panel p { margin-bottom: 0; color: var(--muted); }
+	.game-seeds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin: 1.5rem 0 0; background: var(--line); border: 1px solid var(--line); }
+	.game-seeds div { padding: 1.25rem; background: rgba(13,23,28,.88); }
+	.game-seeds dt { color: var(--gold); font: 700 .72rem/1.2 system-ui, sans-serif; letter-spacing: .16em; text-transform: uppercase; }
+	.game-seeds dd { margin: .45rem 0 0; overflow-wrap: anywhere; font: 400 1.65rem/1.2 Georgia, 'Times New Roman', serif; }
 	.faction-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 2rem; }
 	.faction-summary h2 { margin-bottom: .35rem; font-size: clamp(1.75rem, 4vw, 2.5rem); }
 	.faction-summary .label { margin: 0; color: var(--gold); font: 700 .72rem/1.2 system-ui, sans-serif; letter-spacing: .16em; text-transform: uppercase; }
@@ -356,7 +375,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .github-link { display: flex; color: var(--muted); }
     .github-link:hover { color: var(--gold); }
     .github-link svg { width: 1.15rem; height: 1.15rem; fill: currentColor; }
-    @media (max-width: 720px) { .wonders { grid-template-columns: 1fr; } .wonder { min-height: auto; } .wonder h2 { margin-top: 1.5rem; } .faction-summary { grid-template-columns: 1fr; } .location { padding: 1.5rem 0 0; border-top: 1px solid var(--line); border-left: 0; } footer { align-items: flex-start; flex-direction: column; } }
+    @media (max-width: 720px) { .wonders, .game-seeds { grid-template-columns: 1fr; } .wonder { min-height: auto; } .wonder h2 { margin-top: 1.5rem; } .faction-summary { grid-template-columns: 1fr; } .location { padding: 1.5rem 0 0; border-top: 1px solid var(--line); border-left: 0; } footer { align-items: flex-start; flex-direction: column; } }
   </style>
 </head>
 <body>
@@ -410,8 +429,12 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
         <p class="lede">Your place in Marajanda is ready, even while the world beyond it is still taking shape.</p>
         <div class="dashboard-panel">
 		  {{if eq .View "admin"}}
-		  <h2>The realm awaits its keeper.</h2>
-		  <p>Soon this dashboard will hold the instruments for guiding the server, its people, and the singular power of Marajanda.</p>
+		  <h2>Game seeds</h2>
+		  <p>These values were set when the realm was created and cannot be changed.</p>
+		  <dl class="game-seeds">
+			<div><dt>Seed 1</dt><dd>{{.Game.Seed1}}</dd></div>
+			<div><dt>Seed 2</dt><dd>{{.Game.Seed2}}</dd></div>
+		  </dl>
 		  {{else}}
 		  <div class="faction-summary">
 			<div>
