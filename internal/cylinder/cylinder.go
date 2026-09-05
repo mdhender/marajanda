@@ -16,11 +16,15 @@
 //
 // # Canonical form
 //
-// A hex is canonical when its q lies in the window [lo, lo+columns-1], where
-// lo is -(columns/2). For an odd column count that window is symmetric about
-// the origin and every hex has exactly one canonical name. For an even count it
-// is lopsided by one, because a symmetric window would span one more integer
-// than there are columns and the two endpoints would name the same hex.
+// A world has an odd number of columns, so its canonical window is symmetric:
+// a hex is canonical when its q lies in [-HalfWidth, +HalfWidth]. Every hex has
+// exactly one canonical name, and the origin sits in the true centre of the
+// world rather than half a column off it.
+//
+// An even column count is rejected rather than supported. A symmetric window
+// would span one more integer than there are columns, so the two ends would
+// name the same hex and one would have to be excluded arbitrarily - a lopsided
+// convention that every caller then has to remember the direction of.
 //
 // Normalize before using a hex as a key of anything. Marajanda derives a
 // private PRNG stream from hex coordinates, so a hex reached from the east
@@ -37,10 +41,27 @@
 package cylinder
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 
 	"github.com/maloquacious/hexg"
+)
+
+// minColumns is the narrowest world with ordinary hex geometry: the origin plus
+// one column either side. Below it a hex becomes its own neighbour in some
+// directions and has fewer than six distinct neighbours, which is a shape no
+// caller wants by accident.
+const minColumns = 3
+
+var (
+	// ErrTooFewColumns reports a world narrower than the origin plus one column
+	// either side.
+	ErrTooFewColumns = errors.New("a cylinder needs at least 3 columns")
+
+	// ErrEvenColumns reports an even column count, which has no window that is
+	// both symmetric about the origin and free of aliasing.
+	ErrEvenColumns = errors.New("a cylinder needs an odd number of columns")
 )
 
 // Cylinder is a hex world of a fixed column count that wraps east-west.
@@ -50,33 +71,40 @@ type Cylinder struct {
 	columns int
 }
 
-// New returns a cylinder of the given total column count.
+// New returns a cylinder of the given total column count, which must be odd and
+// at least 3.
 //
 // columns is the whole width of the world, never a half-extent. A caller that
 // thinks in half-extents - marajanda's --width is the number of columns either
-// side of the origin - passes 2*half+1 and keeps the factor of two visible at
-// its own call site, which is the only place it can be checked.
+// side of the origin - passes 2*width+1 and keeps the factor of two visible at
+// its own call site, which is the only place it can be checked. [Cylinder.HalfWidth]
+// converts back.
 //
-// Panics if columns is not positive. That is a programmer error rather than a
-// runtime condition: a world size arrives from a validated flag, and a
-// cylinder of zero columns has no meaningful behaviour to fall back on.
-func New(columns int) Cylinder {
-	if columns < 1 {
-		panic(fmt.Sprintf("cylinder: columns must be positive, got %d", columns))
+// This returns an error where [Cylinder.Ring] and [Cylinder.Spiral] panic. The
+// difference is deliberate: a column count originates in configuration a person
+// supplied and belongs in the error path, while a negative radius is a bug in
+// the caller's own arithmetic, which is how hexg treats it too.
+func New(columns int) (Cylinder, error) {
+	if columns < minColumns {
+		return Cylinder{}, fmt.Errorf("%w: got %d", ErrTooFewColumns, columns)
 	}
-	return Cylinder{columns: columns}
+	if columns%2 == 0 {
+		return Cylinder{}, fmt.Errorf("%w: got %d", ErrEvenColumns, columns)
+	}
+	return Cylinder{columns: columns}, nil
 }
 
 // Columns returns the total column count.
 func (c Cylinder) Columns() int { return c.columns }
 
-// low returns the westmost canonical q.
-func (c Cylinder) low() int { return -(c.columns / 2) }
+// HalfWidth returns the number of columns either side of the origin, so the
+// canonical window is [-HalfWidth, +HalfWidth].
+func (c Cylinder) HalfWidth() int { return (c.columns - 1) / 2 }
 
 // wrapQ brings a q coordinate into the canonical window.
 func (c Cylinder) wrapQ(q int) int {
-	lo := c.low()
-	return ((q-lo)%c.columns+c.columns)%c.columns + lo
+	half := c.HalfWidth()
+	return ((q+half)%c.columns+c.columns)%c.columns - half
 }
 
 // Normalize returns the canonical representative of h. The row is untouched.
@@ -147,7 +175,8 @@ func (c Cylinder) Neighbor(h hexg.Hex, direction int) hexg.Hex {
 // not rescue it. This derives the ring from wrapped distance instead once the
 // cheap path stops being exact.
 //
-// Panics if radius is negative, as hexg does.
+// Panics if radius is negative, as hexg does. See [New] on why that is a panic
+// and a bad column count is not.
 func (c Cylinder) Ring(center hexg.Hex, radius int) []hexg.Hex {
 	if radius < 0 {
 		panic(fmt.Sprintf("cylinder: radius must be non-negative, got %d", radius))
@@ -157,7 +186,7 @@ func (c Cylinder) Ring(center hexg.Hex, radius int) []hexg.Hex {
 	}
 
 	var hexes []hexg.Hex
-	if radius <= (c.columns-1)/2 {
+	if radius <= c.HalfWidth() {
 		// The planar ring is exact and duplicate-free at this size.
 		hexes = make([]hexg.Hex, 0, 6*radius)
 		for _, h := range center.Ring(radius) {
@@ -166,9 +195,9 @@ func (c Cylinder) Ring(center hexg.Hex, radius int) []hexg.Hex {
 	} else {
 		// A hex at distance radius is at most radius rows away, so this scan is
 		// bounded even though it is not clever.
-		lo := c.low()
+		half := c.HalfWidth()
 		for r := center.R() - radius; r <= center.R()+radius; r++ {
-			for q := lo; q < lo+c.columns; q++ {
+			for q := -half; q <= half; q++ {
 				h := hexg.NewHex(q, r)
 				if c.Distance(center, h) == radius {
 					hexes = append(hexes, h)

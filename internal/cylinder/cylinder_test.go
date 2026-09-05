@@ -3,12 +3,25 @@
 package cylinder_test
 
 import (
+	"errors"
 	"slices"
 	"testing"
 
 	"github.com/maloquacious/hexg"
 	"github.com/mdhender/marajanda/internal/cylinder"
 )
+
+// sizes are odd and at least 3, which is every width [cylinder.New] accepts.
+var sizes = []int{3, 5, 7, 11, 21}
+
+func mustNew(t *testing.T, columns int) cylinder.Cylinder {
+	t.Helper()
+	c, err := cylinder.New(columns)
+	if err != nil {
+		t.Fatalf("New(%d): %v", columns, err)
+	}
+	return c
+}
 
 // referenceDistance is an independent wrapped distance, deliberately not built
 // from anything in the package under test. It brute-forces several laps in each
@@ -26,31 +39,62 @@ func referenceDistance(columns int, a, b hexg.Hex) int {
 
 // window returns every canonical hex in the given row span.
 func window(columns, rows int) []hexg.Hex {
-	lo := -(columns / 2)
+	half := (columns - 1) / 2
 	var hexes []hexg.Hex
 	for r := -rows; r <= rows; r++ {
-		for q := lo; q < lo+columns; q++ {
+		for q := -half; q <= half; q++ {
 			hexes = append(hexes, hexg.NewHex(q, r))
 		}
 	}
 	return hexes
 }
 
-var sizes = []int{1, 2, 5, 7, 8, 11, 12, 21}
+func TestNewRejectsBadWidths(t *testing.T) {
+	for _, tc := range []struct {
+		columns int
+		want    error
+	}{
+		{-1, cylinder.ErrTooFewColumns},
+		{0, cylinder.ErrTooFewColumns},
+		{1, cylinder.ErrTooFewColumns},
+		{2, cylinder.ErrTooFewColumns}, // too few is reported before even
+		{4, cylinder.ErrEvenColumns},
+		{510, cylinder.ErrEvenColumns},
+	} {
+		if _, err := cylinder.New(tc.columns); !errors.Is(err, tc.want) {
+			t.Errorf("New(%d) error = %v, want %v", tc.columns, err, tc.want)
+		}
+	}
+}
+
+func TestNewAcceptsOddWidths(t *testing.T) {
+	for _, columns := range []int{3, 5, 511} {
+		c, err := cylinder.New(columns)
+		if err != nil {
+			t.Fatalf("New(%d): %v", columns, err)
+		}
+		if got := c.Columns(); got != columns {
+			t.Errorf("New(%d).Columns() = %d", columns, got)
+		}
+		if got, want := c.HalfWidth(), (columns-1)/2; got != want {
+			t.Errorf("New(%d).HalfWidth() = %d, want %d", columns, got, want)
+		}
+	}
+}
 
 func TestNormalize(t *testing.T) {
 	for _, columns := range sizes {
-		c := cylinder.New(columns)
-		lo := -(columns / 2)
+		c := mustNew(t, columns)
+		half := c.HalfWidth()
 
 		distinct := make(map[hexg.Hex]struct{})
 		for q := -3 * columns; q <= 3*columns; q++ {
 			h := hexg.NewHex(q, 0)
 			got := c.Normalize(h)
 
-			if got.Q() < lo || got.Q() >= lo+columns {
-				t.Errorf("columns=%d: Normalize(q=%d) = %d, outside window [%d,%d]",
-					columns, q, got.Q(), lo, lo+columns-1)
+			if got.Q() < -half || got.Q() > half {
+				t.Errorf("columns=%d: Normalize(q=%d) = %d, outside [-%d,%d]",
+					columns, q, got.Q(), half, half)
 			}
 			if got.R() != h.R() {
 				t.Errorf("columns=%d: Normalize(q=%d) changed the row", columns, q)
@@ -75,7 +119,7 @@ func TestNormalize(t *testing.T) {
 
 func TestDistance(t *testing.T) {
 	for _, columns := range sizes {
-		c := cylinder.New(columns)
+		c := mustNew(t, columns)
 		hexes := window(columns, 4)
 
 		for _, a := range hexes {
@@ -96,7 +140,7 @@ func TestDistance(t *testing.T) {
 }
 
 func TestDistanceTriangleInequality(t *testing.T) {
-	c := cylinder.New(11)
+	c := mustNew(t, 11)
 	hexes := window(11, 2)
 	for _, a := range hexes {
 		for _, b := range hexes {
@@ -111,7 +155,7 @@ func TestDistanceTriangleInequality(t *testing.T) {
 
 func TestNearest(t *testing.T) {
 	for _, columns := range sizes {
-		c := cylinder.New(columns)
+		c := mustNew(t, columns)
 		hexes := window(columns, 3)
 		for _, origin := range hexes {
 			for _, h := range hexes {
@@ -135,7 +179,7 @@ func TestNearest(t *testing.T) {
 func TestNearestIsWhatRenderingNeeds(t *testing.T) {
 	// A player standing against the seam. Their eastern neighbour must draw one
 	// hex east, not most of a world away.
-	c := cylinder.New(511)
+	c := mustNew(t, 511)
 	player := hexg.NewHex(255, 0) // the eastmost canonical column
 	east := c.Neighbor(player, 0)
 
@@ -152,7 +196,7 @@ func TestNearestIsWhatRenderingNeeds(t *testing.T) {
 
 func TestNeighbor(t *testing.T) {
 	for _, columns := range sizes {
-		c := cylinder.New(columns)
+		c := mustNew(t, columns)
 		for _, h := range window(columns, 2) {
 			seen := make(map[hexg.Hex]struct{})
 			for direction := range 6 {
@@ -160,18 +204,16 @@ func TestNeighbor(t *testing.T) {
 				if !c.IsCanonical(n) {
 					t.Fatalf("columns=%d: Neighbor(%v,%d) is not canonical", columns, h, direction)
 				}
-				if columns > 2 {
-					if got := c.Distance(h, n); got != 1 {
-						t.Fatalf("columns=%d: Neighbor(%v,%d) is %d away", columns, h, direction, got)
-					}
-					seen[n] = struct{}{}
+				if got := c.Distance(h, n); got != 1 {
+					t.Fatalf("columns=%d: Neighbor(%v,%d) is %d away", columns, h, direction, got)
 				}
+				seen[n] = struct{}{}
 				// Stepping back the opposite way returns home.
 				if back := c.Neighbor(n, direction+3); back != c.Normalize(h) {
 					t.Fatalf("columns=%d: %v -> %d -> back gave %v", columns, h, direction, back)
 				}
 			}
-			if columns > 2 && len(seen) != 6 {
+			if len(seen) != 6 {
 				t.Fatalf("columns=%d: %v has %d distinct neighbours, want 6", columns, h, len(seen))
 			}
 		}
@@ -179,11 +221,11 @@ func TestNeighbor(t *testing.T) {
 }
 
 func TestRingMatchesDistance(t *testing.T) {
-	// Radii deliberately sweep past (columns-1)/2, where the cheap planar path
-	// stops being exact and the implementation switches strategies. The switch
-	// must be invisible.
+	// Radii deliberately sweep past HalfWidth, where the cheap planar path stops
+	// being exact and the implementation switches strategies. The switch must be
+	// invisible.
 	for _, columns := range sizes {
-		c := cylinder.New(columns)
+		c := mustNew(t, columns)
 		center := hexg.NewHex(0, 0)
 
 		for radius := range 2*columns + 2 {
@@ -214,7 +256,7 @@ func TestRingMatchesDistance(t *testing.T) {
 
 func TestSpiral(t *testing.T) {
 	for _, columns := range sizes {
-		c := cylinder.New(columns)
+		c := mustNew(t, columns)
 		center := hexg.NewHex(1, -1)
 
 		for radius := range columns + 2 {
@@ -245,7 +287,7 @@ func TestSpiral(t *testing.T) {
 
 func TestLineDraw(t *testing.T) {
 	for _, columns := range sizes {
-		c := cylinder.New(columns)
+		c := mustNew(t, columns)
 		hexes := window(columns, 3)
 		for _, a := range hexes {
 			for _, b := range hexes {
@@ -275,10 +317,13 @@ func TestLineDraw(t *testing.T) {
 func TestMarajandaWorld(t *testing.T) {
 	// The shape issue #16 settles: --width 255 -> 511 columns.
 	const halfWidth = 255
-	c := cylinder.New(2*halfWidth + 1)
+	c := mustNew(t, 2*halfWidth+1)
 
 	if got := c.Columns(); got != 511 {
 		t.Fatalf("Columns() = %d, want 511", got)
+	}
+	if got := c.HalfWidth(); got != halfWidth {
+		t.Fatalf("HalfWidth() = %d, want %d", got, halfWidth)
 	}
 
 	// Every canonical column, exactly once, symmetric about the origin.
@@ -296,26 +341,25 @@ func TestMarajandaWorld(t *testing.T) {
 
 	// Four hexes west of the origin on a 7-column world is three hexes east:
 	// the worked example from the issue thread.
-	small := cylinder.New(7)
+	small := mustNew(t, 7)
 	if got := small.Normalize(hexg.NewHex(-4, 0)); got != hexg.NewHex(3, 0) {
 		t.Fatalf("on 7 columns, four west of origin = %v, want (3,0,-3)", got)
 	}
 }
 
-func TestPanics(t *testing.T) {
+func TestNegativeRadiusPanics(t *testing.T) {
+	c := mustNew(t, 11)
 	for _, tc := range []struct {
 		name string
 		call func()
 	}{
-		{"New(0)", func() { cylinder.New(0) }},
-		{"New(-1)", func() { cylinder.New(-1) }},
-		{"Ring(-1)", func() { cylinder.New(11).Ring(hexg.NewHex(0, 0), -1) }},
-		{"Spiral(-1)", func() { cylinder.New(11).Spiral(hexg.NewHex(0, 0), -1) }},
+		{"Ring", func() { c.Ring(hexg.NewHex(0, 0), -1) }},
+		{"Spiral", func() { c.Spiral(hexg.NewHex(0, 0), -1) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			defer func() {
 				if recover() == nil {
-					t.Errorf("%s did not panic", tc.name)
+					t.Errorf("%s(-1) did not panic", tc.name)
 				}
 			}()
 			tc.call()
