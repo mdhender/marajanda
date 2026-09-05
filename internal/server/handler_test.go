@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/maloquacious/hexg"
+	"github.com/mdhender/marajanda"
 	"github.com/mdhender/marajanda/internal/datastore"
 	"github.com/mdhender/marajanda/internal/game"
 )
@@ -28,7 +29,7 @@ func TestLandingAndSignInForm(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"v0.3.0-beta",
+		"v" + marajanda.Version().Short(),
 		`href="https://github.com/mdhender/marajanda/issues"`,
 		`aria-label="Marajanda issues on GitHub"`,
 	} {
