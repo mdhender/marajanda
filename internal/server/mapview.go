@@ -190,12 +190,55 @@ func (app *application) world(w http.ResponseWriter, r *http.Request) (game.Worl
 }
 
 // mapCenter reads the window centre from the query, defaulting to the game
-// origin. A column outside the world wraps back into it; a row outside it is
-// clamped, because rows are the one thing a cylinder does not wrap.
+// origin.
+//
+// The jump box answers as "at", and the pan links as "q" and "r", so a jump is
+// read first and the links are what is left. The two are read differently on
+// purpose: see mapJump.
+//
+// For the links, a column outside the world wraps back into it and a row
+// outside it is clamped, because rows are the one thing a cylinder does not
+// wrap. Half a window past a pole is still a window a person asked for.
 func mapCenter(r *http.Request, world game.World) hexg.Hex {
+	if query := r.URL.Query(); query.Has("at") {
+		return mapJump(world, query.Get("at"))
+	}
 	q := queryInt(r, "q")
 	row := min(world.Height(), max(-world.Height(), queryInt(r, "r")))
 	return world.Normalize(hexg.NewHex(q, row))
+}
+
+// mapJump reads the jump box: a coordinate pair as "q,r", with whitespace
+// anywhere around either number, naming the hex to centre the window on.
+//
+// Anything that is not such a hex returns the game origin, which is where the
+// page's own "Back to the origin" link goes. Columns wrap, so a column past
+// the meridian is a real hex of the cylinder and Normalize names it; rows do
+// not, and a row past a pole is a typo rather than a request to look at the
+// ice. That is why this does not take mapCenter's lenient path and clamp: a
+// person who meant a pole can pan to one, and a person who mistyped a
+// coordinate is better told than quietly moved somewhere near it.
+func mapJump(world game.World, value string) hexg.Hex {
+	origin := hexg.NewHex(0, 0)
+	column, row, split := strings.Cut(value, ",")
+	if !split {
+		return origin
+	}
+	q, err := strconv.Atoi(strings.TrimSpace(column))
+	if err != nil {
+		return origin
+	}
+	// A second comma lands here as part of the row and fails, which is what
+	// makes "1,2,3" a typo rather than a hex.
+	rr, err := strconv.Atoi(strings.TrimSpace(row))
+	if err != nil {
+		return origin
+	}
+	coord := world.Normalize(hexg.NewHex(q, rr))
+	if !world.Contains(coord) {
+		return origin
+	}
+	return coord
 }
 
 func queryInt(r *http.Request, name string) int {

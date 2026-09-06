@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -421,4 +422,129 @@ func TestRectangularCutTilesTheWorld(t *testing.T) {
 	if maxX > want*1.02 {
 		t.Fatalf("map is %.0f wide, want about %.0f: the cut is leaning", maxX, want)
 	}
+}
+
+// jumpForm returns the jump box's markup, so a test can assert on the field
+// itself rather than on the whole page.
+func jumpForm(t *testing.T, body string) string {
+	t.Helper()
+	start := strings.Index(body, `<form class="map-jump"`)
+	if start < 0 {
+		t.Fatal("the page has no jump box")
+	}
+	end := strings.Index(body[start:], "</form>")
+	if end < 0 {
+		t.Fatal("the jump box is not closed")
+	}
+	return body[start : start+end]
+}
+
+// The jump box belongs to the admin's window: it moves the window, and a
+// player has no window to move.
+func TestJumpBoxBelongsToTheAdminMap(t *testing.T) {
+	store := &testStore{game: testMapGame(), world: testMapWorld()}
+	form := jumpForm(t, signedInMap(t,
+		datastore.Account{Email: "admin@example.com", Handle: "keeper", Role: "admin"},
+		store, "/admin/map").Body.String())
+
+	for _, want := range []string{`action="/admin/map"`, `method="get"`, `name="at"`} {
+		if !strings.Contains(form, want) {
+			t.Fatalf("jump box missing %q", want)
+		}
+	}
+
+	player := signedInMap(t,
+		datastore.Account{Email: "player@example.com", Handle: "wanderer", Role: "player", Origin: playerOrigin},
+		&testStore{
+			game:    testMapGame(),
+			world:   testMapWorld(),
+			faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman, Location: hexg.NewHex(0, 0)},
+			found:   true,
+			visible: []hexg.Hex{playerOrigin},
+		},
+		"/player/map").Body.String()
+	// The stylesheet is the whole site's, so the class name alone is on every
+	// page. It is the form that must not be.
+	if strings.Contains(player, `<form class="map-jump"`) || strings.Contains(player, `name="at"`) {
+		t.Fatal("the player map offers a jump box")
+	}
+}
+
+// A coordinate a person can name centres the window on it, and anything that is
+// not a hex of the world goes back to the origin instead. Either way the box
+// comes back empty: the page's centre says where the window is.
+func TestAdminMapJumpsToACoordinate(t *testing.T) {
+	world := testMapWorld()
+	store := &testStore{game: testMapGame(), world: world}
+	account := datastore.Account{Email: "admin@example.com", Handle: "keeper", Role: "admin"}
+
+	target := hexg.NewHex(12, -4)
+	if !world.Contains(target) {
+		t.Fatalf("the test world is missing %v", formatCoord(target))
+	}
+	// The same hex named from a column past the meridian: columns wrap, so this
+	// is a real hex of the cylinder rather than a typo.
+	wrapped := hexg.NewHex(target.Q()+world.Columns(), target.R())
+	if world.Normalize(wrapped) != target {
+		t.Fatalf("%v does not normalize to %v", formatCoord(wrapped), formatCoord(target))
+	}
+
+	origin := hexg.NewHex(0, 0)
+	for _, test := range []struct {
+		name string
+		at   string
+		want hexg.Hex
+	}{
+		{name: "a coordinate", at: "12,-4", want: target},
+		{name: "surrounding whitespace", at: "  12 , -4  ", want: target},
+		{name: "a wrapping column", at: formatPair(wrapped), want: target},
+		{name: "not a number", at: "abc", want: origin},
+		{name: "one number", at: "12", want: origin},
+		{name: "three numbers", at: "1,2,3", want: origin},
+		{name: "empty", at: "", want: origin},
+		{name: "a row past the south pole", at: fmt.Sprintf("0,%d", world.Height()+1), want: origin},
+		{name: "a row past the north pole", at: fmt.Sprintf("0,%d", -world.Height()-1), want: origin},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := signedInMap(t, account, store,
+				"/admin/map?"+url.Values{"at": {test.at}}.Encode())
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+			}
+			body := response.Body.String()
+			if want := `<span class="here">` + formatCoord(test.want) + `</span>`; !strings.Contains(body, want) {
+				t.Fatalf("the window is not centred on %v", formatCoord(test.want))
+			}
+			if strings.Count(body, "<polygon") == 0 {
+				t.Fatal("the jump drew nothing")
+			}
+			// Nothing echoes the submitted coordinate back into the box.
+			if form := jumpForm(t, body); strings.Contains(form, "value=") {
+				t.Fatalf("the jump box came back filled in: %s", form)
+			}
+		})
+	}
+}
+
+// The pan links keep their own reading of the query, which clamps a row rather
+// than refusing it: half a window past a pole is a window a person asked for.
+func TestPanLinksStillClampWhileJumpsDoNot(t *testing.T) {
+	world := testMapWorld()
+	store := &testStore{game: testMapGame(), world: world}
+	account := datastore.Account{Email: "admin@example.com", Handle: "keeper", Role: "admin"}
+	row := world.Height() + 1
+
+	panned := signedInMap(t, account, store, fmt.Sprintf("/admin/map?q=0&r=%d", row)).Body.String()
+	if want := formatCoord(hexg.NewHex(0, world.Height())); !strings.Contains(panned, want) {
+		t.Fatalf("a pan to row %d is no longer clamped to %s", row, want)
+	}
+	jumped := signedInMap(t, account, store, fmt.Sprintf("/admin/map?at=0%%2C%d", row)).Body.String()
+	if want := `<span class="here">(0, 0)</span>`; !strings.Contains(jumped, want) {
+		t.Fatalf("a jump to row %d did not return to the origin", row)
+	}
+}
+
+// formatPair writes a coordinate the way the jump box takes it.
+func formatPair(hex hexg.Hex) string {
+	return fmt.Sprintf("%d,%d", hex.Q(), hex.R())
 }

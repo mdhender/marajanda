@@ -457,6 +457,11 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .map-pan .west { grid-area: west; }
     .map-pan .east { grid-area: east; }
     .map-pan .here { grid-area: here; align-self: center; color: var(--muted); font: .78rem/1.2 system-ui, sans-serif; letter-spacing: .1em; text-align: center; }
+    .map-jump { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: .5rem .75rem; margin-top: 1.25rem; }
+    .map-jump label { flex: none; }
+    .map-jump input { width: 9rem; padding: .5rem .75rem; }
+    .map-jump .primary { padding: .6rem 1rem; }
+    .map-jump small { flex-basis: 100%; color: var(--muted); font: .78rem/1.4 system-ui, sans-serif; text-align: center; }
     .map polygon { stroke: rgba(13,23,28,.55); stroke-width: 1; }
     .map .grassland, .legend .grassland { fill: var(--grassland); background: var(--grassland); }
     .map .forest, .legend .forest { fill: var(--forest); background: var(--forest); }
@@ -554,6 +559,18 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		  <a class="sign-link east" href="{{.Map.Pan.East}}">East</a>
 		  <a class="sign-link south" href="{{.Map.Pan.South}}">South</a>
 		</nav>
+		{{/* The box is deliberately empty on the way back. A jump is a new
+		     window, which is a new page, so nothing echoes the submitted
+		     coordinate into value= and the field arrives blank whether the
+		     jump landed or was a typo sent back to the origin. The page's
+		     own centre says where the window is; a value= would only argue
+		     with it. */}}
+		<form class="map-jump" action="/admin/map" method="get">
+		  <label for="map-jump-at">Jump to</label>
+		  <input id="map-jump-at" name="at" type="text" placeholder="q,r" autocomplete="off" spellcheck="false" aria-describedby="map-jump-help">
+		  <button class="primary" type="submit">Go</button>
+		  <small id="map-jump-help">A coordinate pair, such as 12,-4. Anything that is not a hex of the world returns to the origin.</small>
+		</form>
 		{{end}}
 		<ul class="legend">
 		  <li><i class="grassland"></i>Grassland</li>
