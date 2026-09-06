@@ -16,6 +16,36 @@
   before it is seated and takes its origin hex when it configures its faction,
   because placement depends on the faction's race. An account that cannot be
   seated is refused, and no partially built account remains.
+- Every account is active or deactivated. Accounts are created active.
+
+## Deactivation
+
+A deactivated account cannot sign in. The refusal is in `Store.Authenticate`,
+beside the password comparison, so authentication is one question with one
+answer and no caller has a second check to remember. `Authenticate` returns
+`ErrAccountInactive` for an account that presented the right passphrase and is
+not allowed in.
+
+| Credentials | Answer |
+| --- | --- |
+| Unknown account, or a wrong passphrase | `401`, and the message every rejected credential gets |
+| The right passphrase, deactivated account | `403`, and a message naming the deactivation |
+
+The passphrase is checked before the flag, so an account nobody holds the
+passphrase to is refused as a wrong passphrase whether it is active or not. An
+email address alone still says nothing about which accounts exist.
+
+`GET /__agents/log-me-in/{email}` honours the flag as well, answering `403`,
+or the development route would be a way around it. An account that route
+creates is active, like any other new account.
+
+Sessions are a map in memory and are taken at sign-in, so deactivating an
+account does not end a session it already holds.
+
+An account's flag is independent of its faction's. Deactivating a faction stops
+it giving orders and leaves its player able to sign in and look at their game;
+see [Orders reference](reference/orders.md#routes). Both flags are set by hand
+during beta.
 
 ## Sign-in and sessions
 

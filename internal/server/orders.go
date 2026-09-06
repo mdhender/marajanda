@@ -288,10 +288,33 @@ func (app *application) playerFaction(w http.ResponseWriter, r *http.Request) (d
 		return datastore.Account{}, datastore.Faction{}, false
 	}
 	if !found || !faction.Configured() {
-		http.Redirect(w, r, "/player/faction", http.StatusSeeOther)
+		redirectPlayer(w, r, "/player/faction")
+		return datastore.Account{}, datastore.Faction{}, false
+	}
+	// A deactivated faction is sent to its dashboard rather than to the faction
+	// form: it is configured, and the form would ask it to build a faction it
+	// already has. The dashboard is where the page says why.
+	if !faction.Active {
+		redirectPlayer(w, r, "/player/dashboard")
 		return datastore.Account{}, datastore.Faction{}, false
 	}
 	return account, faction, true
+}
+
+// redirectPlayer sends a request away from a page it may not have, in the one
+// way that works for both shapes of request the orders page makes.
+//
+// A 303 is right for a browser navigation and wrong for a fragment: HTMX
+// follows the redirect itself and swaps whatever comes back into the region it
+// asked for, so a whole dashboard page lands inside the orders form. HX-Redirect
+// asks the browser to leave the page instead, which is what a gate means.
+func redirectPlayer(w http.ResponseWriter, r *http.Request, path string) {
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("HX-Redirect", path)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	http.Redirect(w, r, path, http.StatusSeeOther)
 }
 
 // renderOrders reads the turn back and draws the page from it.
@@ -567,6 +590,13 @@ func orderWriteFeedback(err error, entity int64, seq int) orderFeedback {
 		return orderFeedback{
 			message: "The turn advanced while this page was open. These are your orders for the new turn.",
 			status:  http.StatusConflict,
+		}
+	case errors.Is(err, datastore.ErrFactionInactive):
+		// The page declines to show the controls, so this answers a request
+		// built by hand rather than one the page made.
+		return orderFeedback{
+			message: "This faction is not active. It cannot be given orders.",
+			status:  http.StatusForbidden,
 		}
 	case errors.Is(err, datastore.ErrOrderKindRefused):
 		feedback.message = "That order is not one this can be given."

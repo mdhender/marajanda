@@ -263,7 +263,7 @@ func TestFindOrCreateDevelopmentAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if existing != (Account{Email: "admin@marajanda.com", Handle: "admin", Role: "admin", Seated: true}) {
+	if existing != (Account{Email: "admin@marajanda.com", Handle: "admin", Role: "admin", Seated: true, Active: true}) {
 		t.Fatalf("existing account = %#v, want the seated main admin", existing)
 	}
 

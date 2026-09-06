@@ -160,7 +160,7 @@ func TestPlayerMapRendersTheRegionWithoutControls(t *testing.T) {
 	store := &testStore{
 		game:    testMapGame(),
 		world:   testMapWorld(),
-		faction: datastore.Faction{Name: "The Hearth", Race: game.RaceHuman},
+		faction: datastore.Faction{Name: "The Hearth", Race: game.RaceHuman, Active: true},
 		found:   true,
 		visible: []hexg.Hex{playerOrigin},
 	}

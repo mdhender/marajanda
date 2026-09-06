@@ -121,11 +121,18 @@ CREATE TABLE hexes (
 -- placement exclusion set depends on. It is not a current position:
 -- nothing stands on the map but an entity, and an entity carries its
 -- own location.
+--
+-- is_active is the flag that takes an account away. A row written with no
+-- opinion is active: everything that exists is active, and 0 is the value
+-- that shuts something out. STRICT tables have no boolean, so it is an
+-- integer with a check, which is the shape every other constrained column
+-- here already has.
 CREATE TABLE accounts (
 	email       TEXT NOT NULL CHECK (email = lower(email)),
 	secret_hash BLOB NOT NULL,
 	handle      TEXT NOT NULL UNIQUE,
 	role        TEXT NOT NULL CHECK (role IN ('admin', 'player')),
+	is_active   INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
 	origin_q    INTEGER,
 	origin_r    INTEGER,
 	CHECK ((origin_q IS NULL) = (origin_r IS NULL)),
@@ -136,10 +143,15 @@ CREATE TABLE accounts (
 
 -- A faction has no coordinates. It owns entities, and they have the
 -- locations.
+--
+-- is_active is the account flag's twin, and the two are independent:
+-- deactivating a faction stops it acting without shutting its player out,
+-- and deactivating an account says nothing about its faction.
 CREATE TABLE factions (
 	account_email TEXT PRIMARY KEY REFERENCES accounts (email) ON DELETE CASCADE,
 	name          TEXT NOT NULL,
-	race          TEXT NOT NULL DEFAULT 'human' CHECK (race IN ('human', 'elf', 'dwarf', 'orc', 'kobold', 'halfling'))
+	race          TEXT NOT NULL DEFAULT 'human' CHECK (race IN ('human', 'elf', 'dwarf', 'orc', 'kobold', 'halfling')),
+	is_active     INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))
 ) STRICT;
 
 -- An entity is anything that stands in the world. Its identity is this
@@ -268,6 +280,10 @@ type Account struct {
 	Role   string
 	Origin hexg.Hex
 	Seated bool
+	// Active is the account's own flag, independent of its faction's. An
+	// inactive account is not authenticated; see Authenticate, which is where
+	// the flag is enforced rather than left to a caller to remember.
+	Active bool
 }
 
 // Game contains the persisted state shared by the entire game. Like the seeds,
@@ -297,6 +313,13 @@ func (g Game) Seeds() prng.Seeds {
 type Faction struct {
 	Name string
 	Race game.Race
+	// Active is whether the faction may act. An inactive faction gives no
+	// orders; see ErrFactionInactive.
+	//
+	// It is not Configured's business. A faction that is configured and
+	// inactive is still configured, and conflating the two would send its
+	// player back to the faction form to build a faction they already have.
+	Active bool
 }
 
 // Configured reports whether all required faction metadata is present.
@@ -432,7 +455,20 @@ func (s *Store) Close() error {
 	return s.pool.Close()
 }
 
+// ErrAccountInactive reports an account that presented the right passphrase and
+// is not allowed in. It is returned rather than reported as a plain refusal so
+// that a caller can say which of the two happened, and so that a caller that
+// tells them apart badly refuses the sign-in rather than allowing it.
+var ErrAccountInactive = errors.New("that account is not active")
+
 // Authenticate verifies an account's credentials and returns its dashboard identity.
+//
+// A deactivated account is refused here, beside the password comparison, rather
+// than by every caller: authentication is one question with one answer, and a
+// caller that has to remember a second check is a caller that will forget it.
+// It is refused with ErrAccountInactive, which says the passphrase was right
+// and the account is not; an unknown account and a wrong passphrase are still
+// one indistinguishable refusal.
 func (s *Store) Authenticate(ctx context.Context, email, secret string) (Account, bool, error) {
 	conn, release, err := s.take(ctx)
 	if err != nil {
@@ -443,7 +479,7 @@ func (s *Store) Authenticate(ctx context.Context, email, secret string) (Account
 	var account Account
 	var hash []byte
 	if err := sqlitex.ExecuteTransient(conn, `
-		SELECT email, secret_hash, handle, role, origin_q, origin_r
+		SELECT email, secret_hash, handle, role, is_active, origin_q, origin_r
 		FROM accounts WHERE email = ?1;`, &sqlitex.ExecOptions{
 		Args: []any{normalizeEmail(email)},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
@@ -452,7 +488,8 @@ func (s *Store) Authenticate(ctx context.Context, email, secret string) (Account
 			stmt.ColumnBytes(1, hash)
 			account.Handle = stmt.ColumnText(2)
 			account.Role = stmt.ColumnText(3)
-			account.Origin, account.Seated = readOrigin(stmt, 4)
+			account.Active = stmt.ColumnInt(4) != 0
+			account.Origin, account.Seated = readOrigin(stmt, 5)
 			return nil
 		},
 	}); err != nil {
@@ -466,6 +503,12 @@ func (s *Store) Authenticate(ctx context.Context, email, secret string) (Account
 			return Account{}, false, nil
 		}
 		return Account{}, false, fmt.Errorf("verify account secret: %w", err)
+	}
+	// The passphrase is checked before the flag so that the answer never
+	// depends on which of the two is wrong first: an account nobody holds the
+	// passphrase to is refused as a wrong passphrase, active or not.
+	if !account.Active {
+		return Account{}, false, fmt.Errorf("%w: %s", ErrAccountInactive, account.Email)
 	}
 	return account, true, nil
 }
@@ -572,11 +615,12 @@ func (s *Store) Faction(ctx context.Context, email string) (Faction, bool, error
 	var faction Faction
 	found := false
 	if err := sqlitex.ExecuteTransient(conn, `
-		SELECT name, race FROM factions WHERE account_email = ?1;`, &sqlitex.ExecOptions{
+		SELECT name, race, is_active FROM factions WHERE account_email = ?1;`, &sqlitex.ExecOptions{
 		Args: []any{normalizeEmail(email)},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			faction.Name = stmt.ColumnText(0)
 			faction.Race = game.Race(stmt.ColumnText(1))
+			faction.Active = stmt.ColumnInt(2) != 0
 			found = true
 			return nil
 		},
@@ -700,6 +744,10 @@ func (s *Store) VisibleHexes(ctx context.Context, email string) ([]hexg.Hex, err
 
 // FindOrCreateDevelopmentAccount returns an account for development-only sign-in.
 // Accounts created by this method are players with generated handles and secrets.
+//
+// An account it finds deactivated is refused with ErrAccountInactive. The
+// development route would otherwise be a way around the flag. An account it
+// creates is active, like any other new account.
 func (s *Store) FindOrCreateDevelopmentAccount(ctx context.Context, email string) (account Account, err error) {
 	random := make([]byte, 32)
 	if _, err := rand.Read(random); err != nil {
@@ -714,9 +762,16 @@ func (s *Store) FindOrCreateDevelopmentAccount(ctx context.Context, email string
 	}
 	handle := "agent-" + hex.EncodeToString(random[:8])
 
-	return s.createAccount(ctx, SeedAccount{
+	account, err = s.createAccount(ctx, SeedAccount{
 		Email: email, Handle: handle, Role: "player",
 	}, hash, false, true)
+	if err != nil {
+		return Account{}, err
+	}
+	if !account.Active {
+		return Account{}, fmt.Errorf("%w: %s", ErrAccountInactive, account.Email)
+	}
+	return account, nil
 }
 
 // CreateAccount creates an account. An admin is seated deterministically as it
@@ -937,9 +992,11 @@ func (s *Store) createAccount(ctx context.Context, seed SeedAccount, hash []byte
 	// The origin hex is not created here: the world already holds it. The
 	// deferred foreign key from accounts to hexes now does real work, rejecting
 	// an origin that is not a hex of this world.
+	// An account is created active. The column defaults to 1 and the INSERT
+	// has no opinion, so this is the row that was written.
 	return Account{
 		Email: seed.Email, Handle: seed.Handle, Role: seed.Role,
-		Origin: origin, Seated: seated,
+		Origin: origin, Seated: seated, Active: true,
 	}, nil
 }
 
@@ -993,14 +1050,15 @@ func readAccountRecord(conn *sqlite.Conn, normalizedEmail string) (Account, bool
 	var account Account
 	found := false
 	if err := sqlitex.ExecuteTransient(conn, `
-		SELECT email, handle, role, origin_q, origin_r
+		SELECT email, handle, role, is_active, origin_q, origin_r
 		FROM accounts WHERE email = ?1;`, &sqlitex.ExecOptions{
 		Args: []any{normalizedEmail},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			account.Email = stmt.ColumnText(0)
 			account.Handle = stmt.ColumnText(1)
 			account.Role = stmt.ColumnText(2)
-			account.Origin, account.Seated = readOrigin(stmt, 3)
+			account.Active = stmt.ColumnInt(3) != 0
+			account.Origin, account.Seated = readOrigin(stmt, 4)
 			found = true
 			return nil
 		},

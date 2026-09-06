@@ -1,5 +1,13 @@
 # Glossary
 
+## Active
+
+Whether a thing may act.
+An account and a [faction](#faction) each carry the flag, and the two are independent.
+A deactivated account cannot sign in; a deactivated faction cannot give [orders](#order), and its player can still sign in and look at their game.
+Everything is created active, and the flag is set by hand during beta.
+See [Accounts reference](../ACCOUNTS.md#deactivation).
+
 ## Code
 
 An [entity](#entity)'s permanent label: its kind, then a per-faction sequence for that kind.

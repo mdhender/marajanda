@@ -106,7 +106,7 @@ func TestSignInCreatesSessionAndRoutesByRole(t *testing.T) {
 			var store applicationStore
 			if test.role == "player" {
 				store = &testStore{
-					faction: datastore.Faction{Name: "The Wayfarers", Race: game.RaceHuman},
+					faction: datastore.Faction{Name: "The Wayfarers", Race: game.RaceHuman, Active: true},
 					found:   true,
 					turn:    3,
 					entities: []datastore.Entity{
@@ -257,7 +257,7 @@ func TestPlayerConfiguresFactionBeforeDashboard(t *testing.T) {
 // question for the latest answer.
 func TestPlayerDashboardReadsEntitiesAsOfTheTurnItShows(t *testing.T) {
 	store := &testStore{
-		faction: datastore.Faction{Name: "Star Kin", Race: game.RaceElf},
+		faction: datastore.Faction{Name: "Star Kin", Race: game.RaceElf, Active: true},
 		found:   true,
 		turn:    7,
 		entities: []datastore.Entity{
@@ -585,7 +585,7 @@ func (s *testStore) SaveFaction(_ context.Context, email, name string, race game
 		return datastore.Account{}, s.saveErr
 	}
 	s.email = email
-	s.faction = datastore.Faction{Name: name, Race: race}
+	s.faction = datastore.Faction{Name: name, Race: race, Active: true}
 	s.found = true
 	// Saving a faction founds it, the way the store does: a leader and a hamlet
 	// standing on the seat the save handed back.

@@ -6,6 +6,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -21,7 +22,7 @@ func TestAgentSignInCreatesNormalSession(t *testing.T) {
 	handler := newConfiguredHandler(nil, func(_ context.Context, email string) (datastore.Account, error) {
 		gotEmail = email
 		return datastore.Account{Email: email, Handle: "reviewer", Role: "player"}, nil
-	}, &testStore{faction: datastore.Faction{Name: "Reviewers", Race: game.RaceHuman}, found: true}, "development")
+	}, &testStore{faction: datastore.Faction{Name: "Reviewers", Race: game.RaceHuman, Active: true}, found: true}, "development")
 	response := serveRequest(handler, http.MethodGet, "/__agents/log-me-in/Reviewer@Example.Test?returnTo=%2Fplayer%2Fdashboard")
 
 	if gotEmail != "reviewer@example.test" {
@@ -126,7 +127,7 @@ func TestAgentSignInGeneratesFactionWhenMissing(t *testing.T) {
 }
 
 func TestAgentSignInKeepsAnExistingFaction(t *testing.T) {
-	store := &testStore{faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman}, found: true}
+	store := &testStore{faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman, Active: true}, found: true}
 	handler := newConfiguredHandler(nil, func(_ context.Context, email string) (datastore.Account, error) {
 		return datastore.Account{Email: email, Handle: "agent", Role: "player"}, nil
 	}, store, "development")
@@ -164,5 +165,20 @@ func TestAgentFactionNameAlwaysValid(t *testing.T) {
 		if normalized != name {
 			t.Fatalf("generated %q, which normalizes to %q", name, normalized)
 		}
+	}
+}
+
+// The development route honours the account flag, or it is a way around it.
+func TestAgentSignInRefusesADeactivatedAccount(t *testing.T) {
+	handler := newConfiguredHandler(nil, func(context.Context, string) (datastore.Account, error) {
+		return datastore.Account{}, fmt.Errorf("%w: %s", datastore.ErrAccountInactive, "agent@example.test")
+	}, &testStore{}, "development")
+
+	response := serveRequest(handler, http.MethodGet, "/__agents/log-me-in/agent@example.test")
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+	if len(response.Result().Cookies()) != 0 {
+		t.Fatal("a refused development sign-in started a session")
 	}
 }

@@ -114,6 +114,7 @@ Every write is refused with a sentinel error a caller can tell apart:
 | `ErrUnknownOrder` | The entity has no order with that sequence number. |
 | `ErrUnknownStep` | The step is outside the boxes the order shows. |
 | `ErrTooManySteps` | The order would carry more than `MaxOrderSteps` steps. |
+| `ErrFactionInactive` | The faction has been deactivated. |
 
 `SetOrderStep` addresses a box the page showed: one of the stored steps, or the
 blank box on the end, which is the step count plus one. Choosing a direction
@@ -133,6 +134,18 @@ A request without a valid session is directed to `/sign-in`. A request whose
 account holds the other role is directed to that account's dashboard. A player
 whose required faction metadata is incomplete is directed to `/player/faction`.
 The player dashboard links to the orders page. Admins have no orders page.
+
+A player whose faction is deactivated is directed to `/player/dashboard` from
+every one of the four orders routes, not to `/player/faction`: the faction is
+configured, and the form would ask for a faction the player already has. That
+dashboard says the faction is not active and omits the link to the orders page.
+Everything else the player has stays reachable, including the map and sign-out.
+
+The store refuses the writes as well as the page. A hand-built request that
+reaches one is answered `403` with `ErrFactionInactive`, which is the rule
+order legality already follows: a request cannot do what the form declines to
+show. An account that should be shut out entirely is deactivated on the
+account; see [Accounts reference](../ACCOUNTS.md#deactivation).
 
 `POST /admin/turn` increments `game.current_turn` and nothing else. Processing
 the orders of the turn it closes is separate work.

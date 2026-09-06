@@ -53,6 +53,12 @@ The main admin account has the game origin `(0, 0, 0)`. Every later account,
 including an assistant admin, uses the deterministic placement rules in
 [Player origin reference](reference/player-origin.md).
 
+Every account carries `is_active`, an integer constrained to `0` or `1` and
+defaulting to `1`. `STRICT` tables have no boolean type, so a constrained value
+is an integer with a check. An account written without an opinion is active;
+`0` is the value that takes an account away. A deactivated account is not
+authenticated. See [Accounts reference](ACCOUNTS.md#deactivation).
+
 ## Hexes
 
 Each map hex stores axial `q` and `r` coordinates as its composite primary key,
@@ -75,6 +81,19 @@ map is drawn from them.
 Each player faction is associated with one account. Faction records store the faction name and the faction's race. A faction has no coordinates: it owns entities, and each entity carries its own location.
 
 Configuring a faction founds it. Seating the account, writing the faction record, and creating its founding entities happen in one transaction, so a placement that fails leaves no account seat, no faction and no entity behind. A faction is founded once; reconfiguring it renames its people and does not create a second set of entities.
+
+Every faction carries `is_active`, in the same shape and with the same default
+as the account column: an integer constrained to `0` or `1`, defaulting to `1`.
+A deactivated faction gives no orders, and the store refuses every order write
+for one with `ErrFactionInactive`. See
+[Orders reference](reference/orders.md#store-methods).
+
+The two flags are independent. Deactivating an account says nothing about its
+faction, and deactivating a faction leaves its account able to sign in. A
+faction that is configured and inactive is still configured: the flag is not
+read as a reason to send a player back to the faction form.
+
+Both flags are set by hand during beta. There is no interface for either.
 
 Race is required and defaults to `human`. It is constrained to `human`, `elf`, `dwarf`, `orc`, `kobold`, and `halfling`. An account that holds an origin but controls no faction, which includes every admin, is treated as `human` by placement.
 

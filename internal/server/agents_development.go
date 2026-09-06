@@ -6,6 +6,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -30,6 +31,11 @@ func (app *application) agentSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	account, err := app.findOrCreateAccount(r.Context(), email)
 	if err != nil {
+		// The flag holds here too, or this route is a way around it.
+		if errors.Is(err, datastore.ErrAccountInactive) {
+			http.Error(w, "that account is not active", http.StatusForbidden)
+			return
+		}
 		http.Error(w, "Marajanda could not create the development session.", http.StatusInternalServerError)
 		return
 	}

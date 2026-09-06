@@ -142,6 +142,18 @@ func (app *application) signIn(w http.ResponseWriter, r *http.Request) {
 	}
 	account, ok, err := app.authenticate(r.Context(), email, r.FormValue("passphrase"))
 	if err != nil {
+		// A deactivated account that presented the right passphrase is told so
+		// plainly. It costs the enumeration guard nothing an attacker does not
+		// already have: they had to know the passphrase to be told anything but
+		// the one refusal below.
+		if errors.Is(err, datastore.ErrAccountInactive) {
+			app.render(w, http.StatusForbidden, pageData{
+				Title:   "Sign in",
+				View:    "sign-in",
+				Message: "That account is not active. Ask the game's administrator to restore it.",
+			})
+			return
+		}
 		http.Error(w, "Marajanda could not complete the sign-in request.", http.StatusInternalServerError)
 		return
 	}
@@ -739,7 +751,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 			  <p class="label">Your faction</p>
 			  <h2>{{.Faction.Name}}</h2>
 			  <p class="people">{{.Faction.Race}}</p>
-			  <p>Your people await their first command.</p>
+			  {{if .Faction.Active}}<p>Your people await their first command.</p>{{else}}<p>Your people are still here. They are taking no commands.</p>{{end}}
 			</div>
 			<div class="location">
 			  <p class="label">Turn</p>
@@ -764,7 +776,12 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 			<p>Your faction controls nothing yet.</p>
 			{{end}}
 		  </section>
-		  <p class="map-actions"><a class="sign-link" href="/player/map">View your map</a><a class="sign-link" href="/player/orders">Give orders</a></p>
+		  {{/* A deactivated faction gives no orders, so the page does not
+		       offer the link. Everything else it has stays reachable: the
+		       flag stops a faction acting, it does not lock a person out of
+		       looking at their own game. */}}
+		  {{if not .Faction.Active}}<p class="message" role="status">This faction is not active. It cannot be given orders until an administrator restores it.</p>{{end}}
+		  <p class="map-actions"><a class="sign-link" href="/player/map">View your map</a>{{if .Faction.Active}}<a class="sign-link" href="/player/orders">Give orders</a>{{end}}</p>
 		  {{end}}
         </div>
       </section>

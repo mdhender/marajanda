@@ -210,7 +210,7 @@ func TestPlayerMapRevealsOnlyVisibleHexes(t *testing.T) {
 		&testStore{
 			game:    testMapGame(),
 			world:   testMapWorld(),
-			faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman},
+			faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman, Active: true},
 			found:   true,
 			visible: []hexg.Hex{playerOrigin},
 		},
@@ -264,7 +264,7 @@ func TestPlayerMapDoesNotLocateFog(t *testing.T) {
 		&testStore{
 			game:    testMapGame(),
 			world:   world,
-			faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman},
+			faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman, Active: true},
 			found:   true,
 			visible: []hexg.Hex{origin},
 		},
@@ -303,7 +303,7 @@ func TestMapsRequireSessionAndRole(t *testing.T) {
 			} else {
 				response = signedInMap(t,
 					datastore.Account{Email: test.role + "@example.com", Handle: "someone", Role: test.role},
-					&testStore{game: testMapGame(), world: testMapWorld(), found: true, faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman}},
+					&testStore{game: testMapGame(), world: testMapWorld(), found: true, faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman, Active: true}},
 					test.target)
 			}
 			if response.Code != http.StatusSeeOther || response.Header().Get("Location") != test.want {
@@ -473,7 +473,7 @@ func TestJumpBoxBelongsToTheAdminMap(t *testing.T) {
 		&testStore{
 			game:    testMapGame(),
 			world:   testMapWorld(),
-			faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman},
+			faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman, Active: true},
 			found:   true,
 			visible: []hexg.Hex{playerOrigin},
 		},
@@ -648,7 +648,7 @@ func TestPlayerMapListsNoNeighbours(t *testing.T) {
 	response := signedInMap(t, account, &testStore{
 		game:    testMapGame(),
 		world:   testMapWorld(),
-		faction: datastore.Faction{Name: "The Hearth", Race: game.RaceHuman},
+		faction: datastore.Faction{Name: "The Hearth", Race: game.RaceHuman, Active: true},
 		found:   true,
 		visible: []hexg.Hex{playerOrigin},
 	}, "/player/map")

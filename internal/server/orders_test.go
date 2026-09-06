@@ -24,7 +24,7 @@ var orderSeat = hexg.NewHex(2, -1)
 // with, on the turn it is playing.
 func ordersStore() *testStore {
 	return &testStore{
-		faction: datastore.Faction{Name: "The Wayfarers", Race: game.RaceHuman},
+		faction: datastore.Faction{Name: "The Wayfarers", Race: game.RaceHuman, Active: true},
 		found:   true,
 		turn:    3,
 		entities: []datastore.Entity{

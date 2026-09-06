@@ -41,6 +41,11 @@ var (
 	// ErrTooManySteps reports an order longer than storage allows. It is a
 	// sanity limit and not the movement allowance; see MaxOrderSteps.
 	ErrTooManySteps = fmt.Errorf("an order carries at most %d steps", MaxOrderSteps)
+
+	// ErrFactionInactive reports a write by a faction that has been
+	// deactivated. A deactivated faction cannot give orders; its player can
+	// still sign in and look at their game.
+	ErrFactionInactive = errors.New("that faction is not active")
 )
 
 // Order is one stanza of an entity's orders for a turn: an order kind and, for
@@ -104,6 +109,9 @@ func (s *Store) AddOrder(ctx context.Context, email string, turn int, entityID i
 	}
 	defer end(&err)
 
+	if err := requireActiveFaction(conn, email); err != nil {
+		return 0, err
+	}
 	if err := requireOpenTurn(conn, turn); err != nil {
 		return 0, err
 	}
@@ -148,6 +156,9 @@ func (s *Store) SetOrderStep(ctx context.Context, email string, turn int, entity
 	}
 	defer end(&err)
 
+	if err := requireActiveFaction(conn, email); err != nil {
+		return err
+	}
 	if err := requireOpenTurn(conn, turn); err != nil {
 		return err
 	}
@@ -206,6 +217,9 @@ func (s *Store) SetOrderSteps(ctx context.Context, email string, turn int, stanz
 	}
 	defer end(&err)
 
+	if err := requireActiveFaction(conn, email); err != nil {
+		return err
+	}
 	if err := requireOpenTurn(conn, turn); err != nil {
 		return err
 	}
@@ -249,6 +263,9 @@ func (s *Store) RemoveOrder(ctx context.Context, email string, turn int, entityI
 	}
 	defer end(&err)
 
+	if err := requireActiveFaction(conn, email); err != nil {
+		return err
+	}
 	if err := requireOpenTurn(conn, turn); err != nil {
 		return err
 	}
@@ -316,6 +333,33 @@ func requireOpenTurn(conn *sqlite.Conn, turn int) error {
 	}
 	if turn != current {
 		return fmt.Errorf("%w: turn %d, and the game is on turn %d", ErrTurnClosed, turn, current)
+	}
+	return nil
+}
+
+// requireActiveFaction refuses a write by a faction that has been deactivated.
+//
+// It sits beside requireOpenTurn and does the same kind of work: it is the
+// store's own invariant rather than a check a caller can arrange to pass. The
+// page declines to show the controls, and this is what a hand-built request
+// meets - the rule order legality already follows.
+//
+// A missing faction is refused too. Nothing without a faction row owns an
+// entity, so this is a floor rather than a rendered state.
+func requireActiveFaction(conn *sqlite.Conn, normalizedEmail string) error {
+	active := false
+	if err := sqlitex.ExecuteTransient(conn, `
+		SELECT is_active FROM factions WHERE account_email = ?1;`, &sqlitex.ExecOptions{
+		Args: []any{normalizedEmail},
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			active = stmt.ColumnInt(0) != 0
+			return nil
+		},
+	}); err != nil {
+		return fmt.Errorf("look up faction: %w", err)
+	}
+	if !active {
+		return fmt.Errorf("%w: %s", ErrFactionInactive, normalizedEmail)
 	}
 	return nil
 }
