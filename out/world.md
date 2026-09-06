@@ -1,0 +1,63 @@
+# World 511 x 255
+
+Rebuild it with:
+
+```sh
+go run ./cmd/worldmap --game-seed 98374,-98 --width 255 --height 127 --hex-size 4
+```
+
+That reproduces the map only against the generator below. Terrain is a
+pure function of the seeds, the dimensions and every one of these knobs,
+so changing any of them gives a different world from the same seeds.
+
+## Generator
+
+| knob | value | meaning |
+| --- | --- | --- |
+| `layout` | `even-r pointy-top, size 1` | how hexes are placed in the plane for noise sampling |
+| `waterFraction` | `0.42` | share of the world below sea level |
+| `elevationOctaves` | `5` | octaves summed for the elevation field |
+| `elevationPeriods` | `6` | elevation features across the world, not cycles per hex |
+| `warpPeriods` | `2` | domain-warp features across the world |
+| `warpAmplitude` | `9` | how far the warp bends the field, in hexes |
+| `moistureOctaves` | `4` | octaves summed for the moisture field |
+| `moisturePeriods` | `5` | moisture features across the world |
+| `hillsRank` | `0.62` | elevation rank above which land is hills |
+| `mountainsRank` | `0.88` | elevation rank above which land is mountains |
+| `forestRank` | `0.45` | moisture rank above which lowland is forest |
+| `marshRank` | `0.74` | moisture rank above which low lowland is marsh |
+| `marshLandRank` | `0.22` | elevation rank below which wet ground can be marsh |
+| `forestHillsRank` | `0.72` | moisture rank above which hills grow forest |
+| `lowlandCeiling` | `400` | metres at the top of the lowland band |
+| `hillsCeiling` | `1200` | metres at the top of the hills band |
+| `mountainsCeiling` | `4200` | metres at the top of the mountains band |
+| `shelfDepth` | `60` | metres deep just off the coast |
+| `abyssDepth` | `6000` | metres deep in the open ocean |
+| `shelfFalloff` | `10` | hexes from land over which the abyss is approached |
+| `lakeDepth` | `90` | metres at the deepest of an inland lake |
+| `windBaselineRate` | `0.16` | share of carried moisture dropped on level ground |
+| `windOrographicK` | `2.4` | extra rain per unit of climb |
+| `windEvaporation` | `0.22` | moisture picked up crossing water |
+| `windInitialLoad` | `0.6` | moisture the wind enters the world carrying |
+| `windLaps` | `3` | laps a purely east-west wind circles before its rain is kept |
+| `moistureNoiseShare` | `0.45` | share of moisture from noise rather than transport |
+| `tagWorld` | `6` | PRNG domain tag for world-scale draws |
+| `fieldElevation` | `1` | PRNG field number for the elevation lattice |
+| `fieldWarpX` | `2` | PRNG field number for the x warp lattice |
+| `fieldWarpY` | `3` | PRNG field number for the y warp lattice |
+| `fieldMoisture` | `4` | PRNG field number for the moisture lattice |
+| `fieldWind` | `5` | PRNG field number for the prevailing wind draw |
+
+## Result
+
+130305 hexes, 58.0% land, neighbouring hexes agree 93.9% of the time.
+
+| terrain | hexes | share |
+| --- | ---: | ---: |
+| forest | 13869 | 10.6% |
+| grassland | 32101 | 24.6% |
+| hills | 18731 | 14.4% |
+| lake | 3563 | 2.7% |
+| marsh | 1806 | 1.4% |
+| mountains | 9070 | 7.0% |
+| ocean | 51165 | 39.3% |
