@@ -16,6 +16,9 @@
 # build files that shouldn't be committed
 /marajanda
 /worldmap
+
+# scratch renders and screenshots
+/out/
 tmp/
 
 # overmind's control socket for a running instance
