@@ -538,6 +538,9 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 	.force .entity-name { min-width: 8rem; color: var(--ink); }
 	.force .entity-kind { color: var(--muted); text-transform: capitalize; }
 	.force .entity-coord { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+	.turn { margin-top: 2.5rem; }
+	.turn h2 { font: 400 1.15rem/1.3 Georgia, 'Times New Roman', serif; }
+	.turn p { margin: .35rem 0 1rem; font: .82rem/1.5 system-ui, sans-serif; }
 	.turn-control { display: flex; align-items: baseline; gap: 1rem; margin: 0; }
 	.turn-control .primary { padding: .6rem 1.1rem; }
 	.orders-page { max-width: 60rem; }
@@ -722,12 +725,14 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		  {{/* Advancing the turn is all this does. It moves the clock, which is
 		       what freezes the orders of the turn left behind; processing them
 		       is separate work. */}}
-		  <h2>The turn</h2>
-		  <p>Advancing the turn closes the orders factions have built for it. Nothing is processed yet.</p>
-		  <form class="turn-control" action="/admin/turn" method="post">
-			<strong>Turn {{.Turn}}</strong>
-			<button class="primary" type="submit">Advance the turn</button>
-		  </form>
+		  <section class="turn" aria-label="The turn">
+			<h2>The turn</h2>
+			<p>Advancing the turn closes the orders factions have built for it. Nothing is processed yet.</p>
+			<form class="turn-control" action="/admin/turn" method="post">
+			  <strong>Turn {{.Turn}}</strong>
+			  <button class="primary" type="submit">Advance the turn</button>
+			</form>
+		  </section>
 		  {{else}}
 		  <div class="faction-summary">
 			<div>
