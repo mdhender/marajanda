@@ -1,4 +1,4 @@
-# Air rebuilds and restarts the Go server for `overmind start` (see Procfile.dev).
+# Air rebuilds and restarts the Go server.
 #
 # The binary built here speaks plain HTTP. In development a shared Caddy
 # instance (/opt/homebrew/etc/Caddyfile) terminates TLS for
