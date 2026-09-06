@@ -32,8 +32,13 @@ the query:
 
 | Parameter | Meaning | Default |
 | --- | --- | --- |
+| `at` | The window's centre as a `q,r` pair | Absent; `q` and `r` are read instead |
 | `q` | The axial `q` of the window's centre | `0` |
 | `r` | The axial `r` of the window's centre | `0` |
+
+`at` is read first. When it is present `q` and `r` are ignored; when it is
+absent they give the centre. The two are read by different rules, described
+under Panning and Jumping below.
 
 `q` outside the canonical range wraps back into it. `r` outside the world is
 clamped to the nearest pole, and a window that would reach past a pole is drawn
@@ -50,6 +55,30 @@ returns the window to the game origin.
 
 Each is an ordinary link to `/admin/map` with a new `q` and `r`. Panning is a
 new window, which is a new page.
+
+### Jumping
+
+A text box beside the pan links takes a coordinate as `q,r` and centres the
+window on that hex. It submits `at` as an ordinary `GET` to `/admin/map`: a jump
+is a new window, which is a new page, and needs no script.
+
+Whitespace around either number and around the comma is accepted. A column
+outside the canonical range wraps back into it, so a column past the meridian
+names a real hex of the cylinder.
+
+Anything else centres the window on the game origin `(0, 0)`, the same hex the
+"Back to the origin" link reaches. Input is invalid when it is:
+
+- not two integers separated by one comma, or
+- a row outside the world.
+
+A row past a pole is not clamped here. Clamping is the pan links' rule, where
+half a window past the ice is still a window that was asked for; a typed row
+past a pole is a typo.
+
+The box renders empty on every request. Neither a jump that landed nor one that
+was refused is echoed back into it, and the window's own centre reports where
+the map is.
 
 ### The world image
 
