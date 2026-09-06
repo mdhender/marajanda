@@ -26,12 +26,15 @@ The process entry point reads `ENV` to choose the dotenv environment and default
 | `--admin-secret` | `MARAJANDA_ADMIN_SECRET` | When creating a persistent database |
 | `--admin-handle` | `MARAJANDA_ADMIN_HANDLE` | When creating a persistent database |
 | `--game-seed` | `MARAJANDA_GAME_SEED` | When creating any database |
-| `--world-radius` | `MARAJANDA_WORLD_RADIUS` | No; defaults to `30` |
+| `--width` | `MARAJANDA_WIDTH` | No; defaults to `255` |
+| `--height` | `MARAJANDA_HEIGHT` | No; defaults to `127` |
 | `--address` | `MARAJANDA_ADDRESS` | No; defaults to `127.0.0.1` |
 | `--port` | `MARAJANDA_PORT` | No; defaults to `8443` |
 | `--timeout` | `MARAJANDA_TIMEOUT` | No; defaults to `0` (disabled) |
 
 The game seed contains exactly two comma-separated signed 64-bit integers, for example `98374,-98`. Neither integer has a default value.
+
+The width and height are half-extents: the world is `2*width+1` columns by `2*height+1` rows, so the defaults give 511 by 255. They apply only when a database is created and are stored with the game seeds. See [Terrain reference](reference/terrain.md#the-world) for their accepted ranges.
 
 The root value may be `:memory:`. In-memory databases ignore configured admin seed values and use the documented account defaults, but still require `--game-seed`.
 

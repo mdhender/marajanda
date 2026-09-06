@@ -95,11 +95,12 @@ Dependency direction is one-way: `cmd/marajanda` → `internal/server` →
   exclusion set comes from `accounts` (deferred FK from `accounts` to `hexes`
   now asserts an origin is a real hex of the world).
 - **`internal/game`** — pure deterministic rules over `github.com/maloquacious/hexg`:
-  `GenerateWorld`, `AssignOrigin`, `PlayerRotation`, faction-name normalization.
-  No database or HTTP. `GenerateWorld` builds the whole bounded world in one
-  pass — sea level is a percentile of the entire field, a lake is water the
-  flood fill from the rim never reaches, and a rain shadow needs an upwind
-  neighbour — so terrain is generated once and stored, never recomputed per hex.
+  `GenerateWorld`, `AssignOrigin`, `WindowView`/`PlayerView`, faction-name
+  normalization. No database or HTTP. `GenerateWorld` builds the whole bounded
+  world in one pass — sea level is a percentile of the entire field, a lake is
+  water the flood fill from the rim never reaches, and a rain shadow needs an
+  upwind neighbour — so terrain is generated once and stored, never recomputed
+  per hex.
 - **`internal/prng`** — the determinism foundation. Read `internal/prng/doc.go`
   before touching anything downstream of it.
 
@@ -119,9 +120,10 @@ produce the same world regardless of draw order or map iteration order.
   determinism; only run `-update` for a deliberate, reviewed change.
 
 Game seeds are two comma-separated int64s (`--game-seed 98374,-98`), required
-whenever a database is created and immutable afterwards. `--world-radius`
-(default 30, range 20..120) joins them: the world is generated from all three
-and is fixed once written.
+whenever a database is created and immutable afterwards. `--width` (default
+255, range 20..511) and `--height` (default 127, range 20..255) join them: they
+are half-extents, so the default world is 511 by 255, and the world is generated
+from all four and is fixed once written.
 
 ## Conventions
 

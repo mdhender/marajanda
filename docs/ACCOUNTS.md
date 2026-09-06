@@ -8,9 +8,10 @@
 - Authentication uses email and password.
 - Password hashes use bcrypt with `bcrypt.MinCost`.
 - Account email addresses are the only personally identifiable information stored. Additional PII requires an explicit product decision.
-- Every seated account has an immutable origin hex and map rotation. The main
-  admin uses the game origin and rotation `0`; later player and admin accounts
-  use deterministic placement. See [Player origin reference](reference/player-origin.md).
+- Every seated account has an immutable origin hex. The main admin uses the game
+  origin; later player and admin accounts use deterministic placement. An origin
+  is a true map coordinate, the same one every other account means. See
+  [Player origin reference](reference/player-origin.md).
 - An admin account is seated as it is created. A player account is created
   before it is seated and takes its origin hex when it configures its faction,
   because placement depends on the faction's race. An account that cannot be

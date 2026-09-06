@@ -19,16 +19,16 @@ Marajanda uses ZombieZen SQLite for persistent and in-memory data.
 
 ## Game
 
-The database contains exactly one game record. It stores two required signed 64-bit integer seeds used to initialize the game's deterministic PRNG, and the required world radius. The seeds have no default values. The radius defaults to `30` when the database is created and must be between `20` and `120`. None of the three change when the database is reopened: the stored world was generated from all three and would no longer match if any of them did.
+The database contains exactly one game record. It stores two required signed 64-bit integer seeds used to initialize the game's deterministic PRNG, and the world's required `width` and `height`. The seeds have no default values. The dimensions are half-extents: the world is `2*width+1` columns by `2*height+1` rows. `width` defaults to `255` when the database is created and must be between `20` and `511`; `height` defaults to `127` and must be between `20` and `255`. None of the four change when the database is reopened: the stored world was generated from all four and would no longer match if any of them did.
 
 ## Accounts
 
-Every account stores an optional origin hex as axial `q` and `r` components and
-a required map rotation from `0` through `5`. The two origin columns are `NULL`
-together or not at all. Origin coordinates are unique across accounts; SQLite
-treats `NULL`s as distinct in a `UNIQUE` constraint, so any number of accounts
-without an origin coexist while the constraint still rejects two accounts on one
-hex. The origin does not belong to the account's faction.
+Every account stores an optional origin hex as axial `q` and `r` components. The
+two origin columns are `NULL` together or not at all. Origin coordinates are
+unique across accounts; SQLite treats `NULL`s as distinct in a `UNIQUE`
+constraint, so any number of accounts without an origin coexist while the
+constraint still rejects two accounts on one hex. The origin does not belong to
+the account's faction.
 
 The origin columns are nullable because placement needs a faction's race, which
 is not known when a player's account row is written:
@@ -43,19 +43,18 @@ A player account therefore has no origin between its creation and its faction
 configuration. Both are written in one transaction, so a placement that fails
 leaves neither a faction nor an origin behind.
 
-The main admin account has the game origin `(0, 0, 0)` and rotation `0`. Every
-later account, including an assistant admin, uses the deterministic placement
-and rotation rules in [Player origin reference](reference/player-origin.md).
+The main admin account has the game origin `(0, 0, 0)`. Every later account,
+including an assistant admin, uses the deterministic placement rules in
+[Player origin reference](reference/player-origin.md).
 
 ## Hexes
 
 Each map hex stores axial `q` and `r` coordinates as its composite primary key,
 a required terrain type, and a required elevation in metres.
 
-The table holds the whole world. Every hex within the world radius of the game
-origin is generated and inserted in one transaction when the database is
-created, in the same call that inserts the game record. No hexes are added or
-changed afterwards.
+The table holds the whole world. Every hex of the world is generated and
+inserted in one transaction when the database is created, in the same call that
+inserts the game record. No hexes are added or changed afterwards.
 
 Account origins reference hexes, so an account cannot be seated on a
 coordinate the world does not contain. Seating an account inserts no hex: its
@@ -91,7 +90,7 @@ The server may create and migrate `marajanda.db` when the file does not exist.
 
 ## Initial data
 
-When `:memory:` is selected, `--game-seed` is required. The server creates and migrates an in-memory database, stores both game seeds and the world radius, generates the world, and seeds:
+When `:memory:` is selected, `--game-seed` is required. The server creates and migrates an in-memory database, stores both game seeds and the world's dimensions, generates the world, and seeds:
 
 | Role | Email | Password |
 | --- | --- | --- |
@@ -102,4 +101,4 @@ The corresponding default handles are `admin` and `player`.
 
 These are intentional credentials for temporary server instances and do not produce warnings or errors.
 
-When the server creates a new persistent database, it requires `--game-seed`, migrates the database, stores both game seeds and the world radius, generates the world, and seeds the configured default admin account. Those values are normally configured in an environment-specific local dotenv file. Starting with an existing persistent database does not require seed options and does not reseed it.
+When the server creates a new persistent database, it requires `--game-seed`, migrates the database, stores both game seeds and the world's dimensions, generates the world, and seeds the configured default admin account. Those values are normally configured in an environment-specific local dotenv file. Starting with an existing persistent database does not require seed options and does not reseed it.

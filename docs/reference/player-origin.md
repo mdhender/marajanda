@@ -1,6 +1,6 @@
 # Player origin reference
 
-## Coordinate systems
+## Coordinates
 
 The game map is a rectangle that wraps east-west and is walled north and south.
 Marajanda stores map coordinates as axial `(q, r)` coordinates and may use cube
@@ -10,16 +10,16 @@ and contents.
 
 The game origin is the true cube coordinate `(0, 0, 0)`.
 
-A seated account has an origin hex at a true cube coordinate `(q, r, s)`. The
-origin hex appears to that account as the axial coordinate `(0, 0)`. An origin
-hex assigned by placement is never the game origin, is always a hex of the
-world, and is always land.
+A seated account has an origin hex at a true cube coordinate `(q, r, s)`. That
+coordinate is what the account is shown and what every other account means by
+the same hex: there is no per-account coordinate system and no transform between
+a true coordinate and a displayed one. An origin hex assigned by placement is
+never the game origin, is always a hex of the world, and is always land.
 
-An account stores an origin hex and map rotation once it is seated. The main
-admin uses the game origin and rotation `0`, so the main admin's map matches the
-true map, and holds it whatever terrain the game origin has. It also occupies a
-hex every other account must keep clear of, and counts as race `human` on
-whatever terrain `(0, 0)` holds.
+An account stores its origin hex once it is seated. The main admin uses the game
+origin, and holds it whatever terrain the game origin has. It also occupies a hex
+every other account must keep clear of, and counts as race `human` on whatever
+terrain `(0, 0)` holds.
 
 Every other account is seated by the placement rules below. When that happens
 depends on the role:
@@ -40,8 +40,8 @@ Database row identifiers are not player numbers.
 
 Hex coordinates and operations use `github.com/maloquacious/hexg`.
 
-The transform between true and player coordinates, and the maps that apply it,
-are described in [Map view reference](map-view.md).
+The maps drawn from these coordinates are described in
+[Map view reference](map-view.md).
 
 ## Placement stream
 
@@ -161,51 +161,3 @@ placed concurrently may be calculated from the same set. Origins calculated
 concurrently may be closer than the spacing limits above, including on
 neighbouring hexes. The account-origin uniqueness constraint rejects identical
 origin hexes, and the request fails rather than seating two accounts on one hex.
-
-## Player map rotation
-
-Each player map has a persisted rotation in the inclusive range `0` through
-`5`. Rotation `N` means `N × 60°` clockwise.
-
-After the origin hex is assigned, its true axial components `(q, r)` form the
-player number. The rotation stream has this key path:
-
-```text
-[prng.TagPlayer, q, r]
-```
-
-Drawing `RollRange(0, 5)` once from that stream determines the rotation. The
-result is persisted with the player map.
-
-A 60° clockwise rotation of a cube vector uses the Red Blob Games
-transformation:
-
-```text
-(q, r, s) -> (-r, -s, -q)
-```
-
-To convert a true map coordinate `H` for a player whose origin hex is `P`,
-subtract the origin hex and apply the player's clockwise rotation:
-
-```text
-playerVisible = axial(rotateClockwise(H - P, rotation))
-```
-
-To convert a player-visible coordinate back to a true coordinate, apply the
-inverse rotation before adding the origin hex:
-
-```text
-trueCoordinate = P + rotateCounterClockwise(cube(playerVisible), rotation)
-```
-
-For example, let `P = (0, +1, -1)` and `H = (0, 0, 0)`. The unrotated relative
-vector is `(0, -1, +1)`. Its visible axial coordinate by rotation is:
-
-| Rotation | Degrees clockwise | Visible `(q, r)` |
-| ---: | ---: | ---: |
-| 0 | 0° | `(0, -1)` |
-| 1 | 60° | `(+1, -1)` |
-| 2 | 120° | `(+1, 0)` |
-| 3 | 180° | `(0, +1)` |
-| 4 | 240° | `(-1, +1)` |
-| 5 | 300° | `(-1, 0)` |

@@ -31,7 +31,7 @@ Configuring a faction is what gives a player account its origin hex, because pla
 
 ## Map coordinates
 
-The map uses a flat-top hex grid. Locations are displayed as axial `(q, r)` coordinates, with `(0, 0)` as the origin.
+The map uses a pointy-top hex grid in even-r layout. Locations are displayed as true axial `(q, r)` coordinates, with `(0, 0)` as the game origin. Every account sees the same coordinate for the same hex.
 
 ## The world
 

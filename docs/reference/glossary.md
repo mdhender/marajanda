@@ -13,7 +13,8 @@ is neither land nor water, and nothing may enter it. See
 
 ## Origin hex
 
-The hex assigned to a player as the center of that player's map and coordinate
-system. A player's origin hex has a true cube coordinate on the game map but is
-displayed to that player as axial `(0, 0)`. An origin hex is never the
-[game origin](#origin).
+The hex a seated account starts on. It is a true map coordinate and is displayed
+the same way to every account: there is no per-account coordinate system, and two
+accounts naming `(12, -4)` mean one hex. An origin hex assigned by placement is
+always land and is never the [game origin](#origin), which the main admin holds.
+See [Player origin reference](player-origin.md).
