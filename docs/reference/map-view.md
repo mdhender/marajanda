@@ -82,6 +82,24 @@ The box renders empty on every request. Neither a jump that landed nor one that
 was refused is echoed back into it, and the window's own centre reports where
 the map is.
 
+### Around the centre
+
+Below the jump box the page lists the six hexes around the window's centre,
+numbered 1 to 6 in compass order, each with its coordinate and its terrain.
+
+The list is a rehearsal of the movement rules rather than a game feature. It
+walks [`internal/compass`](compass.md) on the world's cylinder, so it shows the
+order those rules will visit neighbours in and the ground each step reaches.
+
+A neighbour outside the world is listed and marked `beyond the world` rather
+than dropped: six points always produce six entries. Columns wrap, so this only
+happens off the top or bottom rows.
+
+The list sits inside the map region, so panning and jumping move it with the
+window.
+
+The player map has no window centre and lists nothing.
+
 ### The world image
 
 `GET /admin/map.png` returns the whole world drawn at a pixel radius of `4`, as

@@ -506,18 +506,32 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .map-jump .primary { padding: .6rem 1rem; }
     .map-jump small { flex-basis: 100%; color: var(--muted); font: .78rem/1.4 system-ui, sans-serif; text-align: center; }
     .map polygon { stroke: rgba(13,23,28,.55); stroke-width: 1; }
-    .map .grassland, .legend .grassland { fill: var(--grassland); background: var(--grassland); }
-    .map .forest, .legend .forest { fill: var(--forest); background: var(--forest); }
-    .map .hills, .legend .hills { fill: var(--hills); background: var(--hills); }
-    .map .marsh, .legend .marsh { fill: var(--marsh); background: var(--marsh); }
-    .map .mountains, .legend .mountains { fill: var(--mountains); background: var(--mountains); }
-    .map .ocean, .legend .ocean { fill: var(--ocean); background: var(--ocean); }
-    .map .lake, .legend .lake { fill: var(--lake); background: var(--lake); }
-    .map .ice, .legend .ice { fill: var(--ice); background: var(--ice); }
-    .map .fog, .legend .fog { fill: var(--fog); background: var(--fog); }
+    .map .grassland, .legend .grassland, .neighbours .grassland { fill: var(--grassland); background: var(--grassland); }
+    .map .forest, .legend .forest, .neighbours .forest { fill: var(--forest); background: var(--forest); }
+    .map .hills, .legend .hills, .neighbours .hills { fill: var(--hills); background: var(--hills); }
+    .map .marsh, .legend .marsh, .neighbours .marsh { fill: var(--marsh); background: var(--marsh); }
+    .map .mountains, .legend .mountains, .neighbours .mountains { fill: var(--mountains); background: var(--mountains); }
+    .map .ocean, .legend .ocean, .neighbours .ocean { fill: var(--ocean); background: var(--ocean); }
+    .map .lake, .legend .lake, .neighbours .lake { fill: var(--lake); background: var(--lake); }
+    .map .ice, .legend .ice, .neighbours .ice { fill: var(--ice); background: var(--ice); }
+    .map .fog, .legend .fog, .neighbours .fog { fill: var(--fog); background: var(--fog); }
     .legend { display: flex; flex-wrap: wrap; gap: 1.1rem; margin: 1.25rem 0 0; padding: 0; color: var(--muted); font: .72rem/1.2 system-ui, sans-serif; letter-spacing: .14em; list-style: none; text-transform: uppercase; }
     .legend li { display: flex; align-items: center; gap: .5rem; }
     .legend i { width: .95rem; height: .95rem; border: 1px solid var(--line); }
+    .neighbours { margin-top: 2.5rem; }
+    .neighbours h2 { margin: 0; font: 400 1.15rem/1.3 Georgia, 'Times New Roman', serif; letter-spacing: .02em; }
+    .neighbours > p { max-width: 44rem; margin: .35rem 0 1rem; color: var(--muted); font: .82rem/1.5 system-ui, sans-serif; }
+    /* One column, numbered. The order is the contract these six are here to
+       show, so they are read down the page rather than found in a grid. */
+    .neighbours ol { display: grid; max-width: 34rem; gap: 1px; margin: 0; padding: 0; counter-reset: point; list-style: none; background: var(--line); border: 1px solid var(--line); }
+    .neighbours li { display: flex; align-items: baseline; gap: .7rem; padding: .6rem .9rem; background: rgba(13,23,28,.88); font: .82rem/1.4 system-ui, sans-serif; }
+    .neighbours li::before { counter-increment: point; content: counter(point); min-width: 1ch; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .neighbours b { min-width: 2.5ch; color: var(--gold); font-weight: 700; letter-spacing: .08em; }
+    .neighbours .point-name { min-width: 7rem; color: var(--ink); white-space: nowrap; }
+    .neighbours .point-coord { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .neighbours .point-terrain { display: flex; align-items: center; gap: .4rem; margin-left: auto; color: var(--muted); }
+    .neighbours .point-terrain i { width: .8rem; height: .8rem; border: 1px solid var(--line); border-radius: 2px; }
+    .neighbours .beyond { margin-left: auto; color: var(--ember); white-space: nowrap; }
     .map-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 2rem; }
     footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 2rem 0 3rem; color: #898674; border-top: 1px solid var(--line); font-size: .85rem; }
     .project-meta { display: flex; align-items: center; gap: .65rem; }
@@ -685,6 +699,16 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		  <button class="primary" type="submit">Go</button>
 		  <small id="map-jump-help">A coordinate pair, such as 12,-4. Anything that is not a hex of the world returns to the origin.</small>
 		</form>
+		{{end}}
+		{{if .Map.Neighbors}}
+		<section class="neighbours" aria-label="The hexes around {{.Map.Center}}">
+		  <h2>Around {{.Map.Center}}</h2>
+		  <p>The six hexes a faction could step to, in the order the movement rules will visit them.</p>
+		  <ol>
+			{{range .Map.Neighbors}}<li><b>{{.Point}}</b><span class="point-name">{{.Name}}</span><span class="point-coord">{{.Coord}}</span>{{if .Beyond}}<span class="beyond">beyond the world</span>{{else}}<span class="point-terrain"><i class="{{.Terrain}}"></i>{{.Terrain}}</span>{{end}}</li>
+			{{end}}
+		  </ol>
+		</section>
 		{{end}}
 		</div>{{end}}
 `))

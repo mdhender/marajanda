@@ -16,7 +16,7 @@ that covers the area you touch, and do not silently reinterpret it:
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — stack, package boundaries, flag/env table, server lifecycle.
 - [docs/DATASTORE.md](docs/DATASTORE.md) — SQLite identity, open modes, migrations, seed data.
 - [docs/ACCOUNTS.md](docs/ACCOUNTS.md) — identity, sessions, invitations, registration.
-- [docs/reference/](docs/reference/) — `player-origin.md`, `terrain.md`, `glossary.md`.
+- [docs/reference/](docs/reference/) — `player-origin.md`, `terrain.md`, `compass.md`, `map-view.md`, `glossary.md`.
 
 Ask the user before deciding game rules or server behavior these documents do
 not specify.
@@ -108,6 +108,12 @@ Dependency direction is one-way: `cmd/marajanda` → `internal/server` →
   water the flood fill from the rim never reaches, and a rain shadow needs an
   upwind neighbour — so terrain is generated once and stored, never recomputed
   per hex.
+- **`internal/compass`** — the six compass points (NE, E, SE, SW, W, NW, in
+  that order), their names, parsing, and cylinder-aware stepping. hexg numbers
+  six directions and stops; which number faces north-east is ours to answer, and
+  this is where we answer it. The hexg direction numbers do not leave the
+  package. The world is pointy-top, so there is no north or south neighbour and
+  `Parse` says so by name. See [docs/reference/compass.md](docs/reference/compass.md).
 - **`internal/prng`** — the determinism foundation. Read `internal/prng/doc.go`
   before touching anything downstream of it.
 

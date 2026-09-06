@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/maloquacious/hexg"
+	"github.com/mdhender/marajanda/internal/compass"
 	"github.com/mdhender/marajanda/internal/game"
 	"github.com/mdhender/marajanda/internal/worldmap"
 )
@@ -79,6 +80,22 @@ type mapPan struct {
 	North, South, East, West, Origin string
 }
 
+// mapNeighbor is one of the six hexes around the window's centre, as the page
+// lists them.
+//
+// This is where the compass is exercised: the list is built by walking
+// [compass.Points] in order, so the page shows the order the movement rules
+// will require and the ground it actually reaches. See #27.
+type mapNeighbor struct {
+	Point   string
+	Name    string
+	Coord   string
+	Terrain string
+	// Beyond marks a neighbour that is not a hex of the world. Columns wrap, so
+	// this only ever happens off the top or bottom: rows are walls.
+	Beyond bool
+}
+
 // mapView is a complete map, ready for the page template to draw as SVG.
 //
 // Width and Height are the drawn size in pixels. The map is rendered at its
@@ -92,6 +109,9 @@ type mapView struct {
 	Pan     *mapPan
 	Center  string
 	Image   string
+	// Neighbors is the six hexes around Center, in compass order. Empty on a
+	// map that has no centre to be around, which is every player map.
+	Neighbors []mapNeighbor
 }
 
 func (app *application) adminMap(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +135,7 @@ func (app *application) adminMap(w http.ResponseWriter, r *http.Request) {
 	view.Pan = adminPan(world, center)
 	view.Center = coordLabel(center)
 	view.Image = "/admin/map.png"
+	view.Neighbors = mapNeighbors(world, center)
 
 	app.renderMap(w, r, pageData{
 		Title:   "Admin map",
@@ -182,6 +203,36 @@ func (app *application) playerMap(w http.ResponseWriter, r *http.Request) {
 			defaultMapHexSize,
 		),
 	})
+}
+
+// mapNeighbors lists the six hexes around a centre, in compass order.
+//
+// It is the admin map's rehearsal of the movement rules: the order is
+// [compass.Points]'s order, and the coordinates come from [compass.Neighbor],
+// which normalizes, so a centre on the meridian lists an eastern neighbour one
+// hex east rather than most of a world west.
+//
+// A neighbour off the top or bottom of the world is listed and marked rather
+// than dropped. The compass returns six hexes from every hex; whether a hex is
+// somewhere a faction may go is a separate question, and collapsing the two
+// here would hide which of the six was missing.
+func mapNeighbors(world game.World, center hexg.Hex) []mapNeighbor {
+	around := make([]mapNeighbor, 0, 6)
+	for _, point := range compass.Points() {
+		coord := compass.Neighbor(world.Cylinder(), center, point)
+		listed := mapNeighbor{
+			Point: point.String(),
+			Name:  point.Name(),
+			Coord: coordLabel(coord),
+		}
+		if hex, ok := world.At(coord); ok {
+			listed.Terrain = string(hex.Terrain)
+		} else {
+			listed.Beyond = true
+		}
+		around = append(around, listed)
+	}
+	return around
 }
 
 // renderMap answers a map request with the whole page, or with the map region

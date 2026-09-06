@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/maloquacious/hexg"
+	"github.com/mdhender/marajanda/internal/compass"
 	"github.com/mdhender/marajanda/internal/datastore"
 	"github.com/mdhender/marajanda/internal/game"
 	"github.com/mdhender/marajanda/internal/prng"
@@ -561,4 +562,98 @@ func TestPanLinksStillClampWhileJumpsDoNot(t *testing.T) {
 // formatPair writes a coordinate the way the jump box takes it.
 func formatPair(hex hexg.Hex) string {
 	return fmt.Sprintf("%d,%d", hex.Q(), hex.R())
+}
+
+// The admin map lists the six hexes around its centre. It is where the compass
+// is exercised in a running server: the order is the order the movement rules
+// will require, and the coordinates come from the same walk a movement order
+// will take. See #27.
+func TestAdminMapListsTheNeighboursInCompassOrder(t *testing.T) {
+	world := testMapWorld()
+	center := hexg.NewHex(3, -4)
+	response := signedInMap(t,
+		datastore.Account{Email: "admin@example.com", Handle: "keeper", Role: "admin"},
+		&testStore{game: testMapGame(), world: world},
+		fmt.Sprintf("/admin/map?q=%d&r=%d", center.Q(), center.R()))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+
+	// Every point, in order, with the hex the compass says it reaches. The
+	// expected coordinates are built by the compass, but the order they must
+	// appear in is written out, so a reordering of compass.Points fails here.
+	var previous int
+	for index, point := range []compass.Point{compass.NE, compass.E, compass.SE, compass.SW, compass.W, compass.NW} {
+		coord := compass.Neighbor(world.Cylinder(), center, point)
+		entry := fmt.Sprintf("<b>%s</b><span class=\"point-name\">%s</span><span class=\"point-coord\">%s</span>",
+			point, point.Name(), coordLabel(coord))
+		at := strings.Index(body, entry)
+		if at < 0 {
+			t.Fatalf("the page does not list %s of %v as %v", point.Name(), center, coord)
+		}
+		if at < previous {
+			t.Fatalf("%s is listed before the point that should precede it", point.Name())
+		}
+		previous = at
+		if index == 0 && !strings.Contains(body, fmt.Sprintf("Around %s", coordLabel(center))) {
+			t.Fatalf("the list is not headed with the centre %v", center)
+		}
+	}
+}
+
+// A neighbour across the meridian is one hex away, not most of a world away.
+// The page is where a wrong answer would be visible, so the page is tested.
+func TestAdminMapWrapsTheEasternNeighbourAtTheMeridian(t *testing.T) {
+	world := testMapWorld()
+	east := hexg.NewHex(world.Cylinder().HalfWidth(), 0)
+	response := signedInMap(t,
+		datastore.Account{Email: "admin@example.com", Handle: "keeper", Role: "admin"},
+		&testStore{game: testMapGame(), world: world},
+		fmt.Sprintf("/admin/map?q=%d&r=%d", east.Q(), east.R()))
+
+	body := response.Body.String()
+	west := hexg.NewHex(-world.Cylinder().HalfWidth(), 0)
+	want := fmt.Sprintf("<b>E</b><span class=\"point-name\">east</span><span class=\"point-coord\">%s</span>", coordLabel(west))
+	if !strings.Contains(body, want) {
+		t.Fatalf("east of the meridian %v is not listed as %v", east, west)
+	}
+}
+
+// Columns wrap and rows do not, so the only neighbour that can fall outside the
+// world is one off a pole. It is listed and marked rather than dropped: six
+// points always produce six entries.
+func TestAdminMapMarksNeighboursBeyondThePole(t *testing.T) {
+	world := testMapWorld()
+	pole := hexg.NewHex(0, -world.Height())
+	response := signedInMap(t,
+		datastore.Account{Email: "admin@example.com", Handle: "keeper", Role: "admin"},
+		&testStore{game: testMapGame(), world: world},
+		fmt.Sprintf("/admin/map?q=%d&r=%d", pole.Q(), pole.R()))
+
+	body := response.Body.String()
+	if got, want := strings.Count(body, `<span class="point-coord">`), 6; got != want {
+		t.Fatalf("the page lists %d neighbours of the pole %v, want %d", got, pole, want)
+	}
+	// North-east and north-west of the top row are off the world.
+	if got, want := strings.Count(body, `<span class="beyond">`), 2; got != want {
+		t.Fatalf("the page marks %d neighbours beyond the world, want %d", got, want)
+	}
+}
+
+// The player map has no centre to be around, so it lists nothing.
+func TestPlayerMapListsNoNeighbours(t *testing.T) {
+	account := datastore.Account{Email: "player@example.com", Handle: "scout", Role: "player", Origin: playerOrigin}
+	response := signedInMap(t, account, &testStore{
+		game:    testMapGame(),
+		world:   testMapWorld(),
+		faction: datastore.Faction{Name: "The Hearth", Race: game.RaceHuman},
+		found:   true,
+		visible: []hexg.Hex{playerOrigin},
+	}, "/player/map")
+
+	if strings.Contains(response.Body.String(), `class="neighbours"`) {
+		t.Fatal("the player map lists neighbours, which would name hexes the account cannot see")
+	}
 }
