@@ -51,14 +51,15 @@ below. The same seeds produce a different world if any of them changes.
 
 ## Result
 
-130305 hexes, 58.0% land, neighbouring hexes agree 93.9% of the time.
+130305 hexes, 57.5% land, neighbouring hexes agree 93.5% of the time.
 
 | terrain | hexes | share |
 | --- | ---: | ---: |
-| forest | 13869 | 10.6% |
-| grassland | 32101 | 24.6% |
-| hills | 18731 | 14.4% |
+| forest | 13763 | 10.6% |
+| grassland | 31877 | 24.5% |
+| hills | 18600 | 14.3% |
+| ice | 1022 | 0.8% |
 | lake | 3563 | 2.7% |
-| marsh | 1806 | 1.4% |
-| mountains | 9070 | 7.0% |
-| ocean | 51165 | 39.3% |
+| marsh | 1799 | 1.4% |
+| mountains | 8918 | 6.8% |
+| ocean | 50763 | 39.0% |

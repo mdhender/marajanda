@@ -80,7 +80,7 @@ var schema = sqlitemigration.Schema{
 		CREATE TABLE hexes (
 			q         INTEGER NOT NULL,
 			r         INTEGER NOT NULL,
-			terrain   TEXT NOT NULL CHECK (terrain IN ('grassland', 'forest', 'hills', 'marsh', 'mountains', 'ocean', 'lake')),
+			terrain   TEXT NOT NULL CHECK (terrain IN ('grassland', 'forest', 'hills', 'marsh', 'mountains', 'ocean', 'lake', 'ice')),
 			elevation INTEGER NOT NULL,
 			PRIMARY KEY (q, r)
 		) STRICT;

@@ -519,6 +519,36 @@ func TestInitializedHexConstraints(t *testing.T) {
 	}
 }
 
+// The terrain CHECK and game.Terrains() are one contract written twice. A
+// terrain the game can generate but the schema will not store is a world that
+// cannot be saved, and it would only be found by generating one.
+func TestInitializedHexTerrainCheckAcceptsEveryTerrain(t *testing.T) {
+	store, err := OpenMemory(t.Context(), testGame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	conn, release, err := store.take(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	for index, terrain := range game.Terrains() {
+		t.Run(string(terrain), func(t *testing.T) {
+			// Well outside the generated world, so nothing collides with a
+			// real hex of it.
+			stmt := fmt.Sprintf(
+				`INSERT INTO hexes (q, r, terrain, elevation) VALUES (1000, %d, '%s', 10);`,
+				1000+index, terrain)
+			if err := sqlitex.ExecuteTransient(conn, stmt, nil); err != nil {
+				t.Fatalf("INSERT %q: %v", terrain, err)
+			}
+		})
+	}
+}
+
 func TestCreateAccountConcurrentRaces(t *testing.T) {
 	store, err := OpenSharedMemory(t.Context(), t.Name(), testGame)
 	if err != nil {

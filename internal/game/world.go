@@ -252,10 +252,24 @@ func (w World) Contains(coord hexg.Hex) bool {
 }
 
 // IsLand reports whether a coordinate is a land hex of the world. A coordinate
-// outside the world is not land.
+// outside the world is not land, and neither is one under a polar ice sheet.
 func (w World) IsLand(coord hexg.Hex) bool {
 	hex, ok := w.At(coord)
-	return ok && !hex.Terrain.IsWater()
+	return ok && hex.Terrain.IsLand()
+}
+
+// IsWater reports whether a coordinate is a water hex of the world. Ice is not
+// water, so the poles are neither.
+func (w World) IsWater(coord hexg.Hex) bool {
+	hex, ok := w.At(coord)
+	return ok && hex.Terrain.IsWater()
+}
+
+// IsPassable reports whether a coordinate may be entered. Everything outside
+// the world is closed, and so are the two polar rows.
+func (w World) IsPassable(coord hexg.Hex) bool {
+	hex, ok := w.At(coord)
+	return ok && hex.Terrain.Passable()
 }
 
 // Hexes returns every hex in the world's canonical order.
@@ -314,7 +328,30 @@ func GenerateWorld(seeds prng.Seeds, width, height int) (World, error) {
 			world.hexes[index] = Hex{Coord: coord, Terrain: terrain, Elevation: elevation}
 		}
 	}
+	f.freezePoles(world.hexes)
 	return world, nil
+}
+
+// freezePoles lays the polar ice sheets over the finished world.
+//
+// It runs last, over terrain the generator has already decided, and it is the
+// only pass that treats a row as special. Everything before it sees an
+// unbroken field: sea level is still a percentile of all 2*height+1 rows, land
+// and moisture are still ranked against the whole world, and the ocean fill
+// still counts water that reaches a polar row as sea rather than as a lake,
+// because the sea does not stop where the ice starts - it continues beneath
+// it. Generating the world whole and covering it afterwards is what keeps the
+// other rows exactly the world they would have been without any ice at all.
+//
+// Elevation is left as it was found. An ice hex reports the height of the
+// ground under the sheet, which is a real thing to know about a world even
+// though nothing can go and stand on it.
+func (f frame) freezePoles(hexes []Hex) {
+	for _, r := range [...]int{-f.height, f.height} {
+		for q := -f.width; q <= f.width; q++ {
+			hexes[f.index(hexg.NewHex(q, r))].Terrain = TerrainIce
+		}
+	}
 }
 
 // rawElevation evaluates the warped elevation field.

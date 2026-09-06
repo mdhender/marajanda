@@ -149,6 +149,13 @@ func surveyStride(world game.World) int {
 // per-hex noise. The whole reason to draw this map is to see whether the
 // generator produced geography, so the one thing it must not do is destroy the
 // evidence.
+//
+// Ice is the exception to the majority vote. The polar sheets are one row
+// deep, so at any stride above one they are outvoted by the rows beneath them
+// and the world loses the wall at its edge - the survey would show continents
+// running off the top of the map exactly as they did before the ice existed. A
+// block holding any ice is drawn as ice: a boundary is not a texture, and a
+// survey that erases it is reporting a different world.
 func surveyTiles(world game.World, tiles []game.Tile, stride int) []game.Tile {
 	if stride <= 1 {
 		return tiles
@@ -158,6 +165,7 @@ func surveyTiles(world game.World, tiles []game.Tile, stride int) []game.Tile {
 		representative game.Tile
 		counts         map[game.Terrain]int
 		best           int
+		frozen         bool
 	}
 	blocks := make(map[[2]int]*block, len(tiles)/(stride*stride)+1)
 	order := make([][2]int, 0, len(blocks))
@@ -171,6 +179,14 @@ func surveyTiles(world game.World, tiles []game.Tile, stride int) []game.Tile {
 			current = &block{counts: make(map[game.Terrain]int, 4)}
 			blocks[key] = current
 			order = append(order, key)
+		}
+		if current.frozen {
+			continue
+		}
+		if tile.Visible && tile.Terrain == game.TerrainIce {
+			current.frozen = true
+			current.representative = tile
+			continue
 		}
 		current.counts[tile.Terrain]++
 		// Ties break on the terrain already holding the block, and blocks are

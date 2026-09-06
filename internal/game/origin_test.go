@@ -36,8 +36,9 @@ func TestAssignOriginDeterministic(t *testing.T) {
 	}
 }
 
-// A player origin has to be somewhere a faction can stand. Placing one at sea
-// is the failure this constraint exists to prevent.
+// A player origin has to be somewhere a faction can stand. Placing one at sea,
+// or under a polar ice sheet nothing can enter, is the failure this constraint
+// exists to prevent.
 func TestAssignOriginIsOnLandInsideTheWorld(t *testing.T) {
 	seeds := testSeeds()
 	world := testWorld(t)
@@ -51,7 +52,7 @@ func TestAssignOriginIsOnLandInsideTheWorld(t *testing.T) {
 			t.Fatalf("AssignOrigin(%q) = %v, which is outside the world", email, origin)
 		}
 		hex, _ := world.At(origin)
-		if hex.Terrain.IsWater() {
+		if !hex.Terrain.IsLand() {
 			t.Fatalf("AssignOrigin(%q) = %v, which is %q", email, origin, hex.Terrain)
 		}
 	}

@@ -226,6 +226,13 @@ func TestGenerateWorldProducesEveryTerrain(t *testing.T) {
 func TestGenerateWorldElevationMatchesTerrain(t *testing.T) {
 	for _, hex := range testWorld(t).Hexes() {
 		switch {
+		// Ice reports the height of the ground under the sheet, which can be
+		// anything from an abyssal trench to a mountain top. All that is
+		// required of it is that it stays a height of this world.
+		case hex.Terrain == TerrainIce:
+			if hex.Elevation < -abyssDepth || hex.Elevation > mountainsCeiling {
+				t.Fatalf("ice at %v is %d m, outside the world's range", hex.Coord, hex.Elevation)
+			}
 		case hex.Terrain.IsWater():
 			if hex.Elevation >= 0 {
 				t.Fatalf("%q at %v is %d m, want below sea level", hex.Terrain, hex.Coord, hex.Elevation)
@@ -237,6 +244,51 @@ func TestGenerateWorldElevationMatchesTerrain(t *testing.T) {
 		case hex.Elevation > mountainsCeiling:
 			t.Fatalf("%q at %v is %d m, above the highest ground", hex.Terrain, hex.Coord, hex.Elevation)
 		}
+	}
+}
+
+// The polar rows are sheets of ice, whatever the generator put there. This is
+// the wall at the edge of the world, so it has to be the whole row and only
+// those rows: a gap in it is a way out of the world.
+func TestGenerateWorldFreezesThePoles(t *testing.T) {
+	world := testWorld(t)
+	for _, hex := range world.Hexes() {
+		polar := hex.Coord.R() == -testWorldHeight || hex.Coord.R() == testWorldHeight
+		if ice := hex.Terrain == TerrainIce; ice != polar {
+			t.Fatalf("%v is %q, polar=%v", hex.Coord, hex.Terrain, polar)
+		}
+		if !polar {
+			continue
+		}
+		if world.IsLand(hex.Coord) || world.IsWater(hex.Coord) {
+			t.Fatalf("ice at %v reports as land or water", hex.Coord)
+		}
+		if world.IsPassable(hex.Coord) {
+			t.Fatalf("ice at %v is passable", hex.Coord)
+		}
+	}
+}
+
+// The ice keeps the ground it was laid over rather than a made-up height, so a
+// polar row reads as the terrain it covers: sea floor in some columns, high
+// ground in others. A convention of one fixed number would show up here as
+// every ice hex agreeing.
+func TestGenerateWorldIceKeepsTheGroundBeneathIt(t *testing.T) {
+	world := testWorld(t)
+	above, below := 0, 0
+	for _, hex := range world.Hexes() {
+		if hex.Terrain != TerrainIce {
+			continue
+		}
+		if hex.Elevation < 0 {
+			below++
+		} else {
+			above++
+		}
+	}
+	if above == 0 || below == 0 {
+		t.Fatalf("polar ice is %d hexes above sea level and %d below: it is not reporting the ground under it",
+			above, below)
 	}
 }
 
@@ -381,6 +433,7 @@ func TestWorldIsLand(t *testing.T) {
 	world, err := NewWorld(1, 1, []Hex{
 		{Coord: hexg.NewHex(0, 0), Terrain: TerrainGrassland},
 		{Coord: hexg.NewHex(1, 0), Terrain: TerrainOcean, Elevation: -60},
+		{Coord: hexg.NewHex(-1, 1), Terrain: TerrainIce, Elevation: 220},
 	})
 	if err != nil {
 		t.Fatalf("NewWorld: %v", err)
@@ -392,6 +445,7 @@ func TestWorldIsLand(t *testing.T) {
 	}{
 		{name: "land", coord: hexg.NewHex(0, 0), want: true},
 		{name: "water", coord: hexg.NewHex(1, 0), want: false},
+		{name: "ice", coord: hexg.NewHex(-1, 1), want: false},
 		// Rows are the only way out of a world; columns wrap back in.
 		{name: "beyond a pole", coord: hexg.NewHex(0, 9), want: false},
 	} {

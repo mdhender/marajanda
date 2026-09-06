@@ -32,6 +32,7 @@ var Palette = map[game.Terrain]color.RGBA{
 	game.TerrainMountains: {0x8a, 0x83, 0x78, 0xff},
 	game.TerrainOcean:     {0x1d, 0x4a, 0x63, 0xff},
 	game.TerrainLake:      {0x2f, 0x7d, 0x95, 0xff},
+	game.TerrainIce:       {0xdc, 0xe6, 0xeb, 0xff},
 }
 
 // background is what shows through beyond the poles, where there is no world.
@@ -147,7 +148,7 @@ func Census(world game.World) (counts map[game.Terrain]int, land, coherence floa
 	dry := 0
 	for _, hex := range world.Hexes() {
 		counts[hex.Terrain]++
-		if !hex.Terrain.IsWater() {
+		if hex.Terrain.IsLand() {
 			dry++
 		}
 	}

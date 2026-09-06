@@ -222,6 +222,50 @@ func formatCoord(hex hexg.Hex) string {
 // straight from their axial position leans the map sideways by half a row per
 // row. rectangular is the cut that undoes that, and this is the assertion that
 // it actually tiles: every row holds every column exactly once.
+// A survey may lose a lake. It may not lose the edge of the world: the polar
+// ice is one row deep, so a plain majority vote over a stride-by-stride block
+// would drop it and draw a world whose continents run off the top of the map.
+func TestSurveyKeepsThePolarIce(t *testing.T) {
+	world := testMapWorld()
+	const stride = 2
+
+	tiles := game.AdminView(world)
+	frozen := make(map[[2]int]bool)
+	for _, tile := range tiles {
+		if tile.Terrain == game.TerrainIce {
+			frozen[surveyBlock(world, tile.Coord, stride)] = true
+		}
+	}
+	if len(frozen) == 0 {
+		t.Fatal("test world has no ice")
+	}
+
+	kept := surveyTiles(world, tiles, stride)
+	drawn := 0
+	for _, tile := range kept {
+		block := surveyBlock(world, tile.Coord, stride)
+		if frozen[block] {
+			if tile.Terrain != game.TerrainIce {
+				t.Fatalf("block %v holds ice but is drawn as %q", block, tile.Terrain)
+			}
+			drawn++
+			continue
+		}
+		if tile.Terrain == game.TerrainIce {
+			t.Fatalf("block %v is drawn as ice but holds none", block)
+		}
+	}
+	if drawn != len(frozen) {
+		t.Fatalf("survey drew %d ice blocks, want %d", drawn, len(frozen))
+	}
+}
+
+// surveyBlock names the block a coordinate falls in, the way surveyTiles does.
+func surveyBlock(world game.World, coord hexg.Hex, stride int) [2]int {
+	offset := worldmap.Cut(world.Width(), 0, coord).CubeToROffset(mapOffsetEven)
+	return [2]int{(offset.Col + world.Width()) / stride, (offset.Row + world.Height()) / stride}
+}
+
 func TestRectangularCutTilesTheWorld(t *testing.T) {
 	world := testMapWorld()
 

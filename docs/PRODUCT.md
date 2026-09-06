@@ -31,4 +31,4 @@ The map uses a flat-top hex grid. Locations are displayed as axial `(q, r)` coor
 
 ## The world
 
-A game has one world, bounded and generated once from the game seeds when the game is created. It holds land, ocean, and lakes, and every hex has an elevation. A player faction starts on land. See [Terrain reference](reference/terrain.md).
+A game has one world, bounded and generated once from the game seeds when the game is created. It holds land, ocean, and lakes, and every hex has an elevation. The world wraps east-west and is walled north and south by impassable sheets of polar ice. A player faction starts on land. See [Terrain reference](reference/terrain.md).
