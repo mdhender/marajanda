@@ -65,6 +65,14 @@ in place, which keeps the page's scroll position and the focused field.
 The admin map is the first interaction to use this. See
 [Map view reference](reference/map-view.md#the-map-region).
 
+The orders page is the second, and it writes rather than reads. Its controls
+post to the routes that address them, and the response is the whole re-rendered
+orders region. A scripted write is answered `200` whether or not it was refused,
+because HTMX does not swap the response of a failed request; the region carries
+the message. Without script the same form submits to one route through one Save
+button inside `<noscript>`. See
+[Orders reference](reference/orders.md#saving).
+
 ## Code boundaries
 
 Command functions assemble dependencies and invoke application behavior. They remain thin and do not implement server or game-engine behavior.

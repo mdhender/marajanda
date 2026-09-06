@@ -66,20 +66,30 @@ const (
 	// MaximumWorldRadius bounds generation and the admin map, both of which
 	// grow with the square of the radius.
 	MaximumWorldRadius = 120
+
+	// MaxOrderSteps is how many steps one order may carry.
+	//
+	// It is a storage sanity limit and not a game rule: it bounds a row count
+	// that a hand-built request could otherwise run away with. What a leader
+	// can actually walk in a turn is the movement allowance, which turn
+	// processing decides. See #28.
+	MaxOrderSteps = 32
 )
 
 // The end-of-time sentinel is written into the schema from game.EndOfTimeTurn
 // rather than typed out again beside it. It bounds the current turn and it is
 // what the partial indexes below match on, so a schema naming one value while
 // the code writes another would index no open period and close none either.
+// MaxOrderSteps goes in the same way and for the same reason: the column check
+// and the write that has to satisfy it read one value.
 var schema = sqlitemigration.Schema{
 	AppID:      ApplicationID,
-	Migrations: []string{fmt.Sprintf(baselineMigration, game.EndOfTimeTurn)},
+	Migrations: []string{fmt.Sprintf(baselineMigration, game.EndOfTimeTurn, MaxOrderSteps)},
 }
 
 // baselineMigration is the entire schema. During beta it is a single squashed
 // baseline: amend it and delete existing databases rather than appending a
-// migration. Its only substitution is the end-of-time turn.
+// migration. Its substitutions are the end-of-time turn and the step limit.
 const baselineMigration = `CREATE TABLE game (
 	id           INTEGER PRIMARY KEY CHECK (id = 1),
 	seed1        INTEGER NOT NULL,
@@ -184,6 +194,52 @@ CREATE TABLE units (
 	effective_from    INTEGER NOT NULL CHECK (effective_from >= 0),
 	effective_through INTEGER NOT NULL CHECK (effective_through > effective_from),
 	PRIMARY KEY (entity_id, kind, effective_from)
+) STRICT;
+
+-- An order is issued to an entity, not to a faction. The faction is
+-- reached through the entity, and a faction with two leaders has to
+-- say which one is moving.
+--
+-- Which order kinds an entity accepts is a function of its kind and
+-- lives in internal/game, not here: this column only says which
+-- kinds exist at all.
+--
+-- Only the current turn's rows are writable. Advancing the turn is
+-- what freezes the turn before it, and nothing ever deletes an
+-- order: the stored orders and the seeds are the replay. Deleting
+-- an account still erases its history through the cascade, which is
+-- a known wart - nothing deletes accounts today.
+CREATE TABLE orders (
+	turn      INTEGER NOT NULL CHECK (turn >= 1),
+	entity_id INTEGER NOT NULL REFERENCES entities (id) ON DELETE CASCADE,
+	seq       INTEGER NOT NULL CHECK (seq >= 1),
+	kind      TEXT NOT NULL CHECK (kind IN ('move')),
+	PRIMARY KEY (turn, entity_id, seq)
+) STRICT;
+
+-- A stanza's directions are a list, so "move nw ne e" is three rows
+-- and a blank box is the absence of a row rather than a NULL in a
+-- column that would also have to mean "not applicable to this order
+-- kind". The second order kind brings its own detail table rather
+-- than widening a fixed-slot row.
+--
+-- Steps are contiguous 1..N; every write compacts them, so one order
+-- has exactly one stored form, which is what replay depends on.
+--
+-- The bound on step is a storage sanity limit, not a game rule. The
+-- movement allowance is decided by turn processing.
+--
+-- Directions are stored as the lowercase abbreviation, which is what
+-- compass.Parse accepts and what strings.ToLower of a point produces,
+-- matching how terrain and race are already stored.
+CREATE TABLE order_steps (
+	turn      INTEGER NOT NULL,
+	entity_id INTEGER NOT NULL,
+	seq       INTEGER NOT NULL,
+	step      INTEGER NOT NULL CHECK (step BETWEEN 1 AND %[2]d),
+	direction TEXT NOT NULL CHECK (direction IN ('ne', 'e', 'se', 'sw', 'w', 'nw')),
+	PRIMARY KEY (turn, entity_id, seq, step),
+	FOREIGN KEY (turn, entity_id, seq) REFERENCES orders (turn, entity_id, seq) ON DELETE CASCADE
 ) STRICT;
 
 -- For one entity the periods of a fact table are contiguous and never

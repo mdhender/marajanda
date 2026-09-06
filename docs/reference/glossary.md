@@ -58,6 +58,14 @@ A faction is founded with one, `LEADER-1`.
 An [entity](#entity)'s changeable label.
 It defaults to the entity's [code](#code) and is changed through an order rather than a form.
 
+## Order
+
+One instruction issued to one [entity](#entity) for one [turn](#turn), also called a stanza.
+`move` is the only order kind, and its directions are a list of [compass points](#compass-point), one step per hex.
+An entity's [kind](#kind) decides which order kinds it accepts: a leader accepts `move`, a hamlet accepts nothing.
+Only the current turn's orders are writable; advancing the turn freezes the turn before it.
+See [Orders reference](orders.md).
+
 ## Origin
 
 The game map's true cube coordinate `(0, 0, 0)`.
@@ -88,7 +96,8 @@ It is an entity rather than a [unit](#unit) because it has a location, a mutable
 
 The game's clock.
 An integer that starts at 1 and only ever increases, held once per database.
-An order issued during a turn takes effect on the turn after it is processed.
+An [order](#order) issued during a turn takes effect on the turn after it is processed.
+The admin advances the turn, which closes the orders built for it.
 
 ## Unit
 

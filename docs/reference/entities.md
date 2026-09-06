@@ -31,8 +31,9 @@ order: `LEADER-1` and `HAMLET-1`. Founding happens in the same transaction that
 seats the account and writes the faction; see
 [Datastore](../DATASTORE.md#factions).
 
-Which order kinds each entity kind accepts is not defined yet. A hamlet accepts
-none.
+Which order kinds an entity kind accepts is a game rule: a leader accepts
+`move`, and a hamlet accepts nothing. See
+[Orders reference](orders.md#order-kinds).
 
 ## Identity, code, name, kind
 
@@ -60,7 +61,8 @@ the code. See `internal/prng/doc.go`.
 ## Turns
 
 A turn is an integer. It starts at 1, only ever increases, and there is one
-current turn per database, held in `game.current_turn`.
+current turn per database, held in `game.current_turn`. The admin dashboard's
+turn control advances it; see [Orders reference](orders.md#routes).
 
 | Constant | Value | Meaning |
 | --- | --- | --- |
@@ -136,6 +138,7 @@ WHERE entity_id = ?1
 | Method | Returns |
 | --- | --- |
 | `CurrentTurn(ctx)` | The turn the game is on. |
+| `AdvanceTurn(ctx)` | Moves the clock on by one and returns the new turn. |
 | `EntitiesAsOf(ctx, email, turn)` | A faction's entities as they stood on `turn`, in creation order. |
 
 `EntitiesAsOf` rejects a number that is not a turn the game can be on. Its joins

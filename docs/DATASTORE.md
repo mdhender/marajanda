@@ -21,7 +21,7 @@ Marajanda uses ZombieZen SQLite for persistent and in-memory data.
 
 The database contains exactly one game record. It stores two required signed 64-bit integer seeds used to initialize the game's deterministic PRNG, the world's required `width` and `height`, and the current turn. The seeds have no default values. The dimensions are half-extents: the world is `2*width+1` columns by `2*height+1` rows. `width` defaults to `255` when the database is created and must be between `20` and `511`; `height` defaults to `127` and must be between `20` and `255`. None of the four change when the database is reopened: the stored world was generated from all four and would no longer match if any of them did.
 
-`current_turn` is the game's clock and the one column of the record that moves. It defaults to `1` when the database is created and is constrained to `1 <= current_turn < 99999999`: a turn starts at 1, only ever increases, and never reaches the end-of-time turn that an unended period runs to. Nothing advances it yet.
+`current_turn` is the game's clock and the one column of the record that moves. It defaults to `1` when the database is created and is constrained to `1 <= current_turn < 99999999`: a turn starts at 1, only ever increases, and never reaches the end-of-time turn that an unended period runs to. `AdvanceTurn` is the only thing that moves it, and it moves it by one.
 
 ## Accounts
 
@@ -119,6 +119,32 @@ Turn processing closes an open row at `turn + 1` and opens its replacement runni
 Every fact table cascades from `entities`, which cascades from `factions`, which cascades from `accounts`.
 
 See [Entities reference](reference/entities.md) for the vocabulary, the code rules, and how state is read as of a turn.
+
+## Orders
+
+An order is one instruction issued to one entity for one turn. `orders` holds the instruction and `order_steps` holds a move's directions:
+
+| Table | Column | Notes |
+| --- | --- | --- |
+| `orders` | `turn` | The turn the order was issued for. At least 1. |
+| `orders` | `entity_id` | The entity the order is issued to. `ON DELETE CASCADE`. |
+| `orders` | `seq` | The order's position in that entity's list for the turn. Contiguous from 1. |
+| `orders` | `kind` | Constrained to `move`. |
+| `order_steps` | `turn`, `entity_id`, `seq` | The order the step belongs to. `ON DELETE CASCADE`. |
+| `order_steps` | `step` | The step's position in the order. Contiguous from 1, and constrained to `1 .. 32`. |
+| `order_steps` | `direction` | Constrained to `ne`, `e`, `se`, `sw`, `w`, `nw`. |
+
+The primary keys are `(turn, entity_id, seq)` and `(turn, entity_id, seq, step)`.
+
+An order is issued to an entity rather than to a faction: the faction is reached through the entity. A move's directions are a list, so `move nw ne e` is three rows and a blank box is the absence of a row rather than a NULL in a column that would also have to mean "not applicable to this order kind". Sequences and steps are compacted on every write, so one order has exactly one stored form.
+
+The bound on `step` is a storage sanity limit rather than a game rule; the movement allowance belongs to turn processing. It is written into the schema from `datastore.MaxOrderSteps`, so the column check and the code that satisfies it read one value, exactly as the end-of-time turn does.
+
+Only the current turn's rows are writable. Every insert, update and delete is refused when the turn is not `game.current_turn`, whatever turn the caller asks for, so advancing the turn is what freezes the turn before it. Nothing deletes an order from a turn the game has moved past. Which order kinds an entity accepts is a game rule in `internal/game` rather than a constraint here; the datastore reads the entity's kind as of the turn and refuses an order that kind does not accept.
+
+Deleting an account erases its orders through the cascade from `entities`. Nothing deletes accounts.
+
+See [Orders reference](reference/orders.md) for the order kinds, the numbering rules, and the pages that write these rows.
 
 ## Open modes
 

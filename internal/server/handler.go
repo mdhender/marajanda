@@ -15,6 +15,7 @@ import (
 
 	"github.com/maloquacious/hexg"
 	"github.com/mdhender/marajanda"
+	"github.com/mdhender/marajanda/internal/compass"
 	"github.com/mdhender/marajanda/internal/datastore"
 	"github.com/mdhender/marajanda/internal/game"
 )
@@ -30,6 +31,12 @@ type applicationStore interface {
 	CurrentTurn(context.Context) (int, error)
 	Faction(context.Context, string) (datastore.Faction, bool, error)
 	EntitiesAsOf(context.Context, string, int) ([]datastore.Entity, error)
+	OrdersAsOf(context.Context, string, int) (map[int64][]datastore.Order, error)
+	AddOrder(context.Context, string, int, int64, game.OrderKind) (int, error)
+	SetOrderStep(context.Context, string, int, int64, int, int, compass.Point) error
+	SetOrderSteps(context.Context, string, int, []datastore.OrderSteps) error
+	RemoveOrder(context.Context, string, int, int64, int) error
+	AdvanceTurn(context.Context) (int, error)
 	SaveFaction(context.Context, string, string, game.Race) (datastore.Account, error)
 	VisibleHexes(context.Context, string) ([]hexg.Hex, error)
 }
@@ -54,10 +61,13 @@ type pageData struct {
 	// list of entities is only true of the turn it was read on.
 	Turn     int
 	Entities []datastore.Entity
-	Name     string
-	Race     game.Race
-	Races    []game.Race
-	Map      mapView
+	// Orders is the orders page. It is read as of Turn as well, and only the
+	// current turn's is writable.
+	Orders ordersView
+	Name   string
+	Race   game.Race
+	Races  []game.Race
+	Map    mapView
 	// Script is where the page loads HTMX from. It is filled in by render
 	// rather than by every handler, the way Version is.
 	Script string
@@ -84,12 +94,17 @@ func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCrea
 	mux.HandleFunc("POST /sign-in", app.signIn)
 	mux.HandleFunc("POST /sign-out", app.signOut)
 	mux.HandleFunc("GET /admin/dashboard", app.dashboard("admin"))
+	mux.HandleFunc("POST /admin/turn", app.advanceTurn)
 	mux.HandleFunc("GET /admin/map", app.adminMap)
 	mux.HandleFunc("GET /admin/map.png", app.adminMapImage)
 	mux.HandleFunc("GET /player/dashboard", app.dashboard("player"))
 	mux.HandleFunc("GET /player/map", app.playerMap)
 	mux.HandleFunc("GET /player/faction", app.factionForm)
 	mux.HandleFunc("POST /player/faction", app.configureFaction)
+	mux.HandleFunc("GET /player/orders", app.orders)
+	mux.HandleFunc("POST /player/orders", app.saveOrders)
+	mux.HandleFunc("POST /player/orders/{entity}/{seq}/{step}", app.setOrderStep)
+	mux.HandleFunc("DELETE /player/orders/{entity}/{seq}", app.removeOrder)
 	registerAgentRoutes(mux, app, environment)
 
 	return new(http.CrossOriginProtection).Handler(mux)
@@ -199,7 +214,15 @@ func (app *application) dashboard(role string) http.HandlerFunc {
 				http.Error(w, "Marajanda could not load the game.", http.StatusInternalServerError)
 				return
 			}
+			// The admin's control moves the clock, so the dashboard has to
+			// name the turn it is moving.
+			turn, err := app.store.CurrentTurn(r.Context())
+			if err != nil {
+				http.Error(w, "Marajanda could not load the game.", http.StatusInternalServerError)
+				return
+			}
 			data.Game = game
+			data.Turn = turn
 		} else {
 			if app.store == nil {
 				http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
@@ -515,6 +538,32 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 	.force .entity-name { min-width: 8rem; color: var(--ink); }
 	.force .entity-kind { color: var(--muted); text-transform: capitalize; }
 	.force .entity-coord { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+	.turn-control { display: flex; align-items: baseline; gap: 1rem; margin: 0; }
+	.turn-control .primary { padding: .6rem 1.1rem; }
+	.orders-page { max-width: 60rem; }
+	.faction-picker { max-width: 22rem; margin-top: 2.5rem; }
+	.orders-form { display: block; margin-top: 1.5rem; }
+	.entity-orders { margin-top: 2rem; padding: 1.25rem 1.5rem; background: rgba(13,23,28,.88); border: 1px solid var(--line); }
+	.entity-orders h2 { margin: 0; font: 400 1.15rem/1.3 Georgia, 'Times New Roman', serif; }
+	.entity-orders h2 b { color: var(--gold); font-weight: 700; letter-spacing: .08em; }
+	.entity-orders .entity-where { margin: .2rem 0 0; color: var(--muted); font: .82rem/1.4 system-ui, sans-serif; text-transform: capitalize; }
+	.entity-orders .no-orders { margin: 1rem 0 0; color: var(--muted); font: .82rem/1.4 system-ui, sans-serif; }
+	.stanzas { display: grid; gap: .75rem; margin: 1.25rem 0 0; padding: 0; list-style: none; }
+	.stanza { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+	.stanza .stanza-kind { min-width: 5rem; color: var(--gold); font: 700 .78rem/1.2 system-ui, sans-serif; letter-spacing: .1em; text-transform: uppercase; }
+	.stanza select { width: auto; min-width: 8.5rem; padding: .45rem .6rem; font-size: .85rem; }
+	.stanza .stanza-error { flex-basis: 100%; margin: 0; }
+	.add-order { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; margin: 1.25rem 0 0; }
+	.add-order label { display: flex; align-items: center; gap: .5rem; }
+	.add-order select { width: auto; min-width: 8rem; padding: .45rem .6rem; font-size: .85rem; }
+	.saved { margin: 1.25rem 0 0; color: var(--muted); font: .78rem/1.2 system-ui, sans-serif; letter-spacing: .1em; text-transform: uppercase; }
+	.save-orders { margin: 2rem 0 0; }
+	/* The whole region dims while a change is in flight, the way the map does.
+	   It is the only indicator the page has, because it is the only thing a
+	   save replaces. */
+	#orders { transition: opacity .12s ease-in; }
+	#orders.htmx-request { opacity: .45; }
+	.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     .map-page { max-width: none; }
     /* The map scrolls inside its frame rather than being scaled down to fit it.
        Scrolling is the browser's own gesture, so a phone pans it with one
@@ -577,7 +626,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     <header>
       <a class="brand" href="/">Marajanda</a>
       {{if eq .View "landing"}}<a class="sign-link" href="/sign-in">Sign in</a>{{end}}
-      {{if or (eq .View "admin") (eq .View "player") (eq .View "faction") (eq .View "admin-map") (eq .View "player-map")}}<form class="sign-out-form" action="/sign-out" method="post"><button class="sign-link" type="submit">Sign out</button></form>{{end}}
+      {{if or (eq .View "admin") (eq .View "player") (eq .View "faction") (eq .View "admin-map") (eq .View "player-map") (eq .View "orders")}}<form class="sign-out-form" action="/sign-out" method="post"><button class="sign-link" type="submit">Sign out</button></form>{{end}}
     </header>
     <main>
       {{if eq .View "landing"}}
@@ -643,6 +692,19 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		</ul>
 		<p class="map-actions"><a class="sign-link" href="{{if eq .View "admin-map"}}/admin/dashboard{{else}}/player/dashboard{{end}}">Back to dashboard</a>{{if .Map.Pan}}<a class="sign-link" href="{{.Map.Pan.Origin}}" hx-get="{{.Map.Pan.Origin}}" hx-target="#map-region" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#map-region">Back to the origin</a>{{end}}{{if .Map.Image}}<a class="sign-link" href="{{.Map.Image}}">Download the whole world</a>{{end}}</p>
 	  </section>
+	  {{else if eq .View "orders"}}
+	  <section class="dashboard orders-page">
+		<p class="eyebrow">Faction command</p>
+		<h1>Orders for turn {{.Turn}}</h1>
+		<p class="lede">Nothing here is typed. Build this turn's orders out of the boxes below, and they are saved as you make them.</p>
+		{{/* A player commands one faction, so the picker holds one entry and it
+		     is selected. It is here so the page has a stable shape for the day
+		     something commands more than one. */}}
+		<label class="faction-picker">Faction<select name="faction" aria-describedby="orders-faction-help"><option value="{{.Account.Email}}" selected>{{.Faction.Name}}</option></select></label>
+		<small id="orders-faction-help">You command one faction, so there is one to choose.</small>
+		{{template "orders-list" .}}
+		<p class="map-actions"><a class="sign-link" href="/player/dashboard">Back to dashboard</a></p>
+	  </section>
 	  {{else}}
       <section class="dashboard">
         <p class="eyebrow">{{if eq .View "admin"}}Steward of Marajanda{{else}}Faction command{{end}}</p>
@@ -657,6 +719,15 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 			<div><dt>Seed 2</dt><dd>{{.Game.Seed2}}</dd></div>
 		  </dl>
 		  <p class="map-actions"><a class="sign-link" href="/admin/map">View the map</a></p>
+		  {{/* Advancing the turn is all this does. It moves the clock, which is
+		       what freezes the orders of the turn left behind; processing them
+		       is separate work. */}}
+		  <h2>The turn</h2>
+		  <p>Advancing the turn closes the orders factions have built for it. Nothing is processed yet.</p>
+		  <form class="turn-control" action="/admin/turn" method="post">
+			<strong>Turn {{.Turn}}</strong>
+			<button class="primary" type="submit">Advance the turn</button>
+		  </form>
 		  {{else}}
 		  <div class="faction-summary">
 			<div>
@@ -688,7 +759,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 			<p>Your faction controls nothing yet.</p>
 			{{end}}
 		  </section>
-		  <p class="map-actions"><a class="sign-link" href="/player/map">View your map</a></p>
+		  <p class="map-actions"><a class="sign-link" href="/player/map">View your map</a><a class="sign-link" href="/player/orders">Give orders</a></p>
 		  {{end}}
         </div>
       </section>
@@ -759,5 +830,71 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		  </ol>
 		</section>
 		{{end}}
+		</div>{{end}}
+
+{{/* The orders region is everything a write changes: every entity, its
+     stanzas, its boxes, and whatever the last write had to say. A write
+     answers with the whole of it rather than with the control that was
+     touched, so numbering, compaction and validation are decided by the
+     server and there is no client-side state to drift.
+
+     One form wraps the lot, and every control inside it is one a browser can
+     work without HTMX: the boxes and the buttons submit to POST /player/orders
+     with the script-free Save button, which is why each box carries its whole
+     address - entity, stanza and step - in its name. With HTMX loaded, a box
+     posts itself to the URL that names the same box and the page never
+     submits at all. */}}
+{{define "orders-list"}}		<div id="orders" hx-target="#orders" hx-swap="outerHTML" hx-indicator="#orders">
+		{{if .Orders.Message}}<p class="message" role="alert">{{.Orders.Message}}</p>{{end}}
+		{{if .Orders.Saved}}<p class="saved" role="status">Saved at {{.Orders.Saved}}</p>{{end}}
+		<form class="orders-form" action="/player/orders" method="post">
+		{{/* Enter in any field submits a form through its first submit button,
+		     and every other button here removes or adds a stanza. Without this
+		     one, Enter in a step box would delete the first order on the page.
+		     It saves, which is what Enter means everywhere else on this form,
+		     and it is out of the tab order because the visible controls are
+		     what a keyboard should reach. */}}
+		<button class="visually-hidden" type="submit" tabindex="-1">Save orders</button>
+		{{$directions := .Orders.Directions}}
+		{{range .Orders.Entities}}
+		  <section class="entity-orders" aria-label="Orders for {{.Entity.Code}}">
+			<h2><b>{{.Entity.Code}}</b>{{if ne .Entity.Name .Entity.Code}} {{.Entity.Name}}{{end}}</h2>
+			<p class="entity-where">{{.Entity.Kind}} · ({{.Entity.Location.Q}}, {{.Entity.Location.R}})</p>
+			{{if .Stanzas}}
+			<ol class="stanzas">
+			  {{range .Stanzas}}<li class="stanza">
+				<span class="stanza-kind">{{.Label}}</span>
+				{{/* The boxes are the steps this order holds plus one blank on
+				     the end. Choosing a direction in that one appends a step
+				     and the answer comes back with a fresh blank; clearing a
+				     filled one deletes that step and shifts the rest left. */}}
+				{{range .Boxes}}<label class="step"><span class="visually-hidden">{{.Label}}</span>
+				<select name="{{.Name}}" hx-post="{{.Post}}" hx-trigger="change">
+				  <option value=""{{if not .Current}} selected{{end}}>—</option>
+				  {{$chosen := .Current}}{{range $directions}}<option value="{{.Value}}"{{if eq .Value $chosen}} selected{{end}}>{{.Label}}</option>{{end}}
+				</select></label>
+				{{end}}
+				<button class="sign-link" type="submit" name="remove" value="{{.RemoveValue}}" hx-delete="{{.RemoveURL}}">Remove</button>
+				{{if .Error}}<p class="message stanza-error" role="alert">{{.Error}}</p>{{end}}
+			  </li>
+			  {{end}}
+			</ol>
+			{{end}}
+			{{if .Kinds}}
+			<p class="add-order">
+			  <label>Add order<select name="{{.KindField}}">{{range .Kinds}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select></label>
+			  <button class="sign-link" type="submit" name="add" value="{{.AddValue}}" hx-post="/player/orders">Add</button>
+			</p>
+			{{else}}
+			<p class="no-orders">No orders available yet.</p>
+			{{end}}
+		  </section>
+		{{end}}
+		{{/* Without script nothing saves itself, so the page carries one Save
+		     button that submits every box at once. With script there is no
+		     button and no pending state to have one for. CSP forbids inline
+		     script, so noscript is the only script-free detector available. */}}
+		<noscript><p class="save-orders"><button class="primary" type="submit">Save orders</button></p></noscript>
+		</form>
 		</div>{{end}}
 `))
