@@ -47,6 +47,13 @@ const (
 
 func signedInMap(t *testing.T, account datastore.Account, store applicationStore, target string) *httptest.ResponseRecorder {
 	t.Helper()
+	return signedInMapHeaders(t, account, store, target, nil)
+}
+
+// signedInMapHeaders is signedInMap with request headers, which is how a test
+// asks the way HTMX asks.
+func signedInMapHeaders(t *testing.T, account datastore.Account, store applicationStore, target string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
 	handler := newHandler(func(context.Context, string, string) (datastore.Account, bool, error) {
 		return account, true, nil
 	}, store)
@@ -55,7 +62,14 @@ func signedInMap(t *testing.T, account datastore.Account, store applicationStore
 	if len(cookies) != 1 {
 		t.Fatalf("sign-in cookies = %d, want 1", len(cookies))
 	}
-	return requestWithCookie(handler, http.MethodGet, target, cookies[0], "")
+	request := httptest.NewRequest(http.MethodGet, target, nil)
+	request.AddCookie(cookies[0])
+	for name, value := range headers {
+		request.Header.Set(name, value)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
 }
 
 func TestAdminMapDrawsAWindowOntoTheWorld(t *testing.T) {

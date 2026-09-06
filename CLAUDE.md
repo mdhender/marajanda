@@ -77,10 +77,17 @@ Dependency direction is one-way: `cmd/marajanda` → `internal/server` →
   `--timeout`. `handler.go` holds the whole web layer: routes on
   `http.ServeMux`, in-memory sessions keyed by a `Secure`/`HttpOnly`/`SameSite=Lax`
   cookie, and **the entire UI as one `html/template` in a Go string literal**
-  (`pageTemplate`) switched by `pageData.View`. There is no template directory,
-  no static assets, and no embed — that is why `.air.toml` watches only `.go`.
+  (`pageTemplate`) switched by `pageData.View`. There is no template directory.
   The mux is wrapped in `http.CrossOriginProtection`, and `render` sets the CSP
-  and related headers.
+  and related headers. A named block of the same template can be rendered alone
+  as a fragment: `renderFragment` does that, and `wantsFragment` decides when.
+- **`assets.go`** — HTMX 2.0.10, vendored under `internal/server/assets/` and
+  embedded, served by `GET /assets/{name}` from a fixed list of files. The CSP
+  is `script-src 'self'`, so a CDN is not an option; see
+  `internal/server/assets/README.md` for provenance and upgrade steps. `.air.toml`
+  watches `.go` and `.js`. Panning and jumping on the admin map are the first
+  HTMX interactions: the links and the form keep their `href` and `action`, so
+  they still work with the script blocked.
 - **Build tags** — `agents_development.go` (`!production`) registers
   `GET /__agents/log-me-in/{email}`; `agents_production.go` (`production`) is a
   no-op. The route is also suppressed when `ENV=production` in a non-production

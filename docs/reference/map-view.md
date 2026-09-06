@@ -4,7 +4,7 @@
 
 | Route | Role | Response |
 | --- | --- | --- |
-| `GET /admin/map` | `admin` | A page holding a window onto the world |
+| `GET /admin/map` | `admin` | A page holding a window onto the world, or the map region alone |
 | `GET /admin/map.png` | `admin` | The whole world as a PNG attachment |
 | `GET /player/map` | `player` | A page holding the account's own map |
 
@@ -53,14 +53,16 @@ Four links move the window by half of itself: `20` columns east or west, `13`
 rows north or south. Consecutive windows therefore overlap by half. A fifth link
 returns the window to the game origin.
 
-Each is an ordinary link to `/admin/map` with a new `q` and `r`. Panning is a
-new window, which is a new page.
+Each is an ordinary link to `/admin/map` with a new `q` and `r`. A browser
+running HTMX requests the same URL and replaces the map region in place; a
+browser without it follows the link to a new page. Both show the same window.
+See [Page delivery](../ARCHITECTURE.md#page-delivery).
 
 ### Jumping
 
 A text box beside the pan links takes a coordinate as `q,r` and centres the
-window on that hex. It submits `at` as an ordinary `GET` to `/admin/map`: a jump
-is a new window, which is a new page, and needs no script.
+window on that hex. It submits `at` as an ordinary `GET` to `/admin/map`, and,
+like the pan links, is swapped in place when HTMX is running.
 
 Whitespace around either number and around the comma is accepted. A column
 outside the canonical range wraps back into it, so a column past the meridian
@@ -127,9 +129,20 @@ Map terrain and elevation are read from the `hexes` table, which holds the world
 generated when the database was created. Drawing a map writes no rows. See
 [Terrain reference](terrain.md).
 
+## The map region
+
+Every map page holds the map inside an element with the id `map-region`. It
+contains the map frame, and on the admin map the pan links and the jump box. The
+heading, the legend and the page chrome are outside it.
+
+The region is what a pan or a jump replaces, and it is what `/admin/map` and
+`/player/map` return on their own to a request carrying `HX-Request: true`. Both
+responses come from the same template, so the region is identical whether it
+arrived as part of a page or on its own.
+
 ## Rendering
 
-Each map is one inline SVG element in the page.
+Each map is one inline SVG element inside the map region.
 
 - The grid is pointy-top, even-r, matching the layout the world is generated in.
 - One `polygon` element is drawn per hex. Its class is the terrain value, or

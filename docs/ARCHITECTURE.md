@@ -3,9 +3,67 @@
 ## Application stack
 
 - Go implements the application.
-- HTMX provides server-rendered web interactions.
-- Alpine.js may provide client-side behavior that HTMX cannot reasonably supply; it is not required by default.
+- HTMX provides server-rendered web interactions. Version `2.0.10`, vendored under `internal/server/assets/` and embedded in the binary.
+- Alpine.js may provide client-side behavior that HTMX cannot reasonably supply; it is not required by default and is not present in the codebase.
 - ZombieZen SQLite provides persistence and schema migrations.
+
+## Page delivery
+
+The web layer is one `html/template` in a Go string literal in
+`internal/server/handler.go`. There is no template directory. The page a handler
+renders is chosen by `pageData.View`; a named block of the same template can be
+rendered on its own as a fragment.
+
+### Assets
+
+Third-party scripts are vendored under `internal/server/assets/` and embedded
+with `go:embed`. There is no build step and nothing is fetched at run time.
+
+| Route | Response |
+| --- | --- |
+| `GET /assets/{name}` | The named vendored file, or `404` |
+
+The route serves a fixed list of files rather than a directory, so documentation
+and licence files that sit beside them are not reachable through it. Each
+response carries `Cache-Control: public, max-age=31536000, immutable` and
+`X-Content-Type-Options: nosniff`. The version is part of the file name, so an
+upgrade is a new URL rather than a cache to be invalidated. The route requires
+no session: a page loads its script before anyone signs in.
+
+`.air.toml` rebuilds on `.go` and `.js` changes, because a vendored script is
+embedded and only reaches a running server through a rebuild.
+
+### Content Security Policy
+
+Every rendered page and fragment carries:
+
+```
+default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+```
+
+`script-src 'self'` is why HTMX is vendored: a CDN script is blocked outright.
+HTMX needs nothing beyond it. It requests over `XMLHttpRequest` to this origin,
+which `default-src 'self'` allows, and the project uses none of the attributes
+(`hx-on`, `js:` expressions, event filters) that would require `unsafe-eval`.
+
+### Fragments
+
+A handler may answer one URL with either a whole page or a named block of it.
+
+- A fragment is returned when the request carries `HX-Request: true` and does
+  not carry `HX-History-Restore-Request: true`. A history restore replaces the
+  whole body, so it is answered with the whole page.
+- A response that varies this way carries `Vary: HX-Request`.
+- A fragment carries the same `Content-Type` and the same security headers as a
+  page.
+
+Controls that HTMX drives keep the `href` or `action` they would have had
+without it. A browser that does not run the script follows the link or submits
+the form and gets the page; a browser that does gets the fragment and swaps it
+in place, which keeps the page's scroll position and the focused field.
+
+The admin map is the first interaction to use this. See
+[Map view reference](reference/map-view.md#the-map-region).
 
 ## Code boundaries
 

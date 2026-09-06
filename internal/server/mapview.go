@@ -68,9 +68,13 @@ type mapTile struct {
 	Label   string
 }
 
-// mapPan holds the links that move an admin's window over the world. Each is
-// an ordinary href: panning is a new window, which is a new page, and needs no
-// script to ask for one.
+// mapPan holds the links that move an admin's window over the world.
+//
+// Each is an ordinary href and stays one. HTMX asks for the same URL and swaps
+// the map region in place, so a browser running it keeps its scroll position
+// across a pan and a browser without it follows the link to a new page. The
+// server does not need to know which happened until the request arrives with
+// HX-Request on it.
 type mapPan struct {
 	North, South, East, West, Origin string
 }
@@ -112,7 +116,7 @@ func (app *application) adminMap(w http.ResponseWriter, r *http.Request) {
 	view.Center = coordLabel(center)
 	view.Image = "/admin/map.png"
 
-	app.render(w, http.StatusOK, pageData{
+	app.renderMap(w, r, pageData{
 		Title:   "Admin map",
 		View:    "admin-map",
 		Account: account,
@@ -161,7 +165,7 @@ func (app *application) playerMap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Marajanda could not load your map.", http.StatusInternalServerError)
 		return
 	}
-	app.render(w, http.StatusOK, pageData{
+	app.renderMap(w, r, pageData{
 		Title:   "Your map",
 		View:    "player-map",
 		Account: account,
@@ -178,6 +182,21 @@ func (app *application) playerMap(w http.ResponseWriter, r *http.Request) {
 			defaultMapHexSize,
 		),
 	})
+}
+
+// renderMap answers a map request with the whole page, or with the map region
+// alone when HTMX asked for that.
+//
+// One URL, two shapes of answer, so the response says what it varied on. A
+// cache that did not know would eventually hand a bare region to a browser
+// that asked for a page.
+func (app *application) renderMap(w http.ResponseWriter, r *http.Request, data pageData) {
+	w.Header().Set("Vary", "HX-Request")
+	if wantsFragment(r) {
+		app.renderFragment(w, http.StatusOK, "map-region", data)
+		return
+	}
+	app.render(w, http.StatusOK, data)
 }
 
 func (app *application) world(w http.ResponseWriter, r *http.Request) (game.World, bool) {

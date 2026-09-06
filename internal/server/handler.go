@@ -52,6 +52,9 @@ type pageData struct {
 	Race    game.Race
 	Races   []game.Race
 	Map     mapView
+	// Script is where the page loads HTMX from. It is filled in by render
+	// rather than by every handler, the way Version is.
+	Script string
 }
 
 func newHandler(authenticate authenticateFunc, store applicationStore) http.Handler {
@@ -69,6 +72,7 @@ func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCrea
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("GET /assets/{name}", app.asset)
 	mux.HandleFunc("GET /", app.landing)
 	mux.HandleFunc("GET /sign-in", app.signInForm)
 	mux.HandleFunc("POST /sign-in", app.signIn)
@@ -362,13 +366,49 @@ func (app *application) renderSignInFailure(w http.ResponseWriter, status int) {
 }
 
 func (app *application) render(w http.ResponseWriter, status int, data pageData) {
-	data.Version = marajanda.Version().Short()
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
-	w.Header().Set("Referrer-Policy", "same-origin")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
+	app.prepare(&data, w)
 	w.WriteHeader(status)
 	_ = pageTemplate.Execute(w, data)
+}
+
+// renderFragment writes one named block of the page template instead of the
+// page, for a request HTMX made.
+//
+// It sets the same headers as a page, because a fragment is HTML served from
+// the same origin and nothing about it wants a weaker policy.
+func (app *application) renderFragment(w http.ResponseWriter, status int, name string, data pageData) {
+	app.prepare(&data, w)
+	w.WriteHeader(status)
+	_ = pageTemplate.ExecuteTemplate(w, name, data)
+}
+
+// prepare fills in the values every rendered page shares and sets the response
+// headers.
+//
+// script-src is named even though "default-src 'self'" already covers it: the
+// page now loads a script, and the policy should say so where a reader looks
+// for it rather than leave it to be inferred. HTMX needs nothing beyond
+// 'self' - it fetches over XHR to this origin, and the project uses none of
+// the attributes (hx-on, js: expressions, event filters) that would ask for
+// 'unsafe-eval'.
+func (app *application) prepare(data *pageData, w http.ResponseWriter) {
+	data.Version = marajanda.Version().Short()
+	data.Script = htmxPath()
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+	w.Header().Set("Referrer-Policy", "same-origin")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+}
+
+// wantsFragment reports whether HTMX asked for part of a page rather than a
+// page.
+//
+// A history restore is the exception. HTMX sends it with HX-Request set, but
+// what it does with the answer is replace the whole body from it, so it has to
+// be given the whole page.
+func wantsFragment(r *http.Request) bool {
+	return r.Header.Get("HX-Request") == "true" &&
+		r.Header.Get("HX-History-Restore-Request") != "true"
 }
 
 func isEmail(value string) bool {
@@ -397,6 +437,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Title}} · Marajanda</title>
+  <script src="{{.Script}}" defer></script>
   <style>
     :root { color-scheme: dark; --ink: #f7f1dc; --muted: #bfb89f; --gold: #e5bd68; --ember: #c66a43; --night: #0d171c; --panel: #14252a; --line: rgba(229,189,104,.24); --grassland: #7f9c5a; --forest: #3f6b46; --hills: #a98a4e; --marsh: #5b7d78; --mountains: #8a8378; --ocean: #1d4a63; --lake: #2f7d95; --ice: #dce6eb; --fog: #1b2e35; }
     * { box-sizing: border-box; }
@@ -451,6 +492,8 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
        carrying on into scrolling the page underneath. */
     .map { display: grid; justify-content: safe center; max-height: min(70vh, 40rem); margin-top: 2.5rem; padding: 1rem; overflow: auto; overscroll-behavior: contain; background: rgba(13,23,28,.6); border: 1px solid var(--line); }
     .map svg { display: block; }
+    #map-region.htmx-request .map { opacity: .45; }
+    .map { transition: opacity .12s ease-in; }
     .map-pan { display: grid; grid-template-areas: ". north ." "west here east" ". south ."; justify-content: center; gap: .5rem; margin-top: 1.25rem; }
     .map-pan .north { grid-area: north; }
     .map-pan .south { grid-area: south; }
@@ -541,37 +584,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		<h1>{{.Faction.Name}}</h1>
 		<p class="lede">The land your people have seen, and the little of it they can make out beyond. Everything past that is still rumour.</p>
 		{{end}}
-		<div class="map">
-		  {{if .Map.Tiles}}
-		  <svg width="{{.Map.Width}}" height="{{.Map.Height}}" viewBox="{{.Map.ViewBox}}" role="img" aria-label="{{if eq .View "admin-map"}}Hex map of the world around {{.Map.Center}}{{else}}Hex map of the land your people have seen{{end}}">
-			{{range .Map.Tiles}}<polygon class="{{.Terrain}}" points="{{.Points}}"><title>{{.Label}}</title></polygon>
-			{{end}}
-		  </svg>
-		  {{else}}
-		  <p class="lede">There is nothing to draw yet.</p>
-		  {{end}}
-		</div>
-		{{if .Map.Pan}}
-		<nav class="map-pan" aria-label="Move the map">
-		  <a class="sign-link north" href="{{.Map.Pan.North}}">North</a>
-		  <a class="sign-link west" href="{{.Map.Pan.West}}">West</a>
-		  <span class="here">{{.Map.Center}}</span>
-		  <a class="sign-link east" href="{{.Map.Pan.East}}">East</a>
-		  <a class="sign-link south" href="{{.Map.Pan.South}}">South</a>
-		</nav>
-		{{/* The box is deliberately empty on the way back. A jump is a new
-		     window, which is a new page, so nothing echoes the submitted
-		     coordinate into value= and the field arrives blank whether the
-		     jump landed or was a typo sent back to the origin. The page's
-		     own centre says where the window is; a value= would only argue
-		     with it. */}}
-		<form class="map-jump" action="/admin/map" method="get">
-		  <label for="map-jump-at">Jump to</label>
-		  <input id="map-jump-at" name="at" type="text" placeholder="q,r" autocomplete="off" spellcheck="false" aria-describedby="map-jump-help">
-		  <button class="primary" type="submit">Go</button>
-		  <small id="map-jump-help">A coordinate pair, such as 12,-4. Anything that is not a hex of the world returns to the origin.</small>
-		</form>
-		{{end}}
+		{{template "map-region" .}}
 		<ul class="legend">
 		  <li><i class="grassland"></i>Grassland</li>
 		  <li><i class="forest"></i>Forest</li>
@@ -583,7 +596,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		  <li><i class="ice"></i>Ice</li>
 		  {{if eq .View "player-map"}}<li><i class="fog"></i>Unexplored</li>{{end}}
 		</ul>
-		<p class="map-actions"><a class="sign-link" href="{{if eq .View "admin-map"}}/admin/dashboard{{else}}/player/dashboard{{end}}">Back to dashboard</a>{{if .Map.Pan}}<a class="sign-link" href="{{.Map.Pan.Origin}}">Back to the origin</a>{{end}}{{if .Map.Image}}<a class="sign-link" href="{{.Map.Image}}">Download the whole world</a>{{end}}</p>
+		<p class="map-actions"><a class="sign-link" href="{{if eq .View "admin-map"}}/admin/dashboard{{else}}/player/dashboard{{end}}">Back to dashboard</a>{{if .Map.Pan}}<a class="sign-link" href="{{.Map.Pan.Origin}}" hx-get="{{.Map.Pan.Origin}}" hx-target="#map-region" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#map-region">Back to the origin</a>{{end}}{{if .Map.Image}}<a class="sign-link" href="{{.Map.Image}}">Download the whole world</a>{{end}}</p>
 	  </section>
 	  {{else}}
       <section class="dashboard">
@@ -629,4 +642,49 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     </footer>
   </div>
 </body>
-</html>`))
+</html>
+
+{{/* The map region is the part of a map page a pan or a jump changes: the
+     frame, the pan links and the jump box. Everything around it - the heading,
+     the legend, the sign-out form - is the same window to window, so HTMX asks
+     for this block alone and swaps it in place. The page keeps its scroll
+     position, which a page load does not, and the browser is not handed a
+     thousand polygons of chrome it already has.
+
+     The links and the form keep their href and action. Without JavaScript they
+     are the ordinary navigation #22 shipped and the map works exactly as it
+     did; HTMX only intercepts them when it has loaded. */}}
+{{define "map-region"}}		<div id="map-region" hx-target="#map-region" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#map-region">
+		<div class="map">
+		  {{if .Map.Tiles}}
+		  <svg width="{{.Map.Width}}" height="{{.Map.Height}}" viewBox="{{.Map.ViewBox}}" role="img" aria-label="{{if eq .View "admin-map"}}Hex map of the world around {{.Map.Center}}{{else}}Hex map of the land your people have seen{{end}}">
+			{{range .Map.Tiles}}<polygon class="{{.Terrain}}" points="{{.Points}}"><title>{{.Label}}</title></polygon>
+			{{end}}
+		  </svg>
+		  {{else}}
+		  <p class="lede">There is nothing to draw yet.</p>
+		  {{end}}
+		</div>
+		{{if .Map.Pan}}
+		<nav class="map-pan" aria-label="Move the map">
+		  <a class="sign-link north" href="{{.Map.Pan.North}}" hx-get="{{.Map.Pan.North}}">North</a>
+		  <a class="sign-link west" href="{{.Map.Pan.West}}" hx-get="{{.Map.Pan.West}}">West</a>
+		  <span class="here">{{.Map.Center}}</span>
+		  <a class="sign-link east" href="{{.Map.Pan.East}}" hx-get="{{.Map.Pan.East}}">East</a>
+		  <a class="sign-link south" href="{{.Map.Pan.South}}" hx-get="{{.Map.Pan.South}}">South</a>
+		</nav>
+		{{/* The box is deliberately empty on the way back. A jump is a new
+		     window, which is a new page, so nothing echoes the submitted
+		     coordinate into value= and the field arrives blank whether the
+		     jump landed or was a typo sent back to the origin. The page's
+		     own centre says where the window is; a value= would only argue
+		     with it. */}}
+		<form class="map-jump" action="/admin/map" method="get" hx-get="/admin/map">
+		  <label for="map-jump-at">Jump to</label>
+		  <input id="map-jump-at" name="at" type="text" placeholder="q,r" autocomplete="off" spellcheck="false" aria-describedby="map-jump-help">
+		  <button class="primary" type="submit">Go</button>
+		  <small id="map-jump-help">A coordinate pair, such as 12,-4. Anything that is not a hex of the world returns to the origin.</small>
+		</form>
+		{{end}}
+		</div>{{end}}
+`))

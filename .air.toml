@@ -24,7 +24,7 @@ tmp_dir = "tmp"
   # place a manual `go run ./cmd/marajanda` would.
   args_bin = []
 
-  include_ext = ["go"]
+  include_ext = ["go", "js"]
 
   # The daemon's markup lives in Go string literals, so "go" covers the whole
   # tree that matters. Everything skipped here either holds no Go at all (docs,
