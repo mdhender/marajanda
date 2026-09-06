@@ -14,7 +14,7 @@ import (
 const minimumOriginDistance = 15
 
 // originStepBudget bounds the placement walk. The walk is a random walk on a
-// bounded disc, so it finds a valid hex almost surely whenever one exists — but
+// bounded world, so it finds a valid hex almost surely whenever one exists — but
 // "almost surely" is not a promise a request handler can wait on. A world with
 // no room left, or none whose land is far enough from the origins already
 // taken, must fail loudly rather than spin.
@@ -51,11 +51,18 @@ func AssignOrigin(seeds prng.Seeds, normalizedEmail string, world World, taken [
 		prng.Key(int64(binary.BigEndian.Uint64(digest[24:32]))),
 	)
 
-	current := hexg.NewHex(0, 0)
+	center := hexg.NewHex(0, 0)
+	current := center
 	for range originStepBudget {
-		// A direction is offered only when it stays inside the world, so the
-		// walk cannot wander off a bounded map. Outward moves are offered twice,
-		// which is what pushes the walk away from the crowded centre.
+		// A direction is offered only when it stays inside the world. Only a
+		// row can now fall outside one: every column wraps back in. Outward
+		// moves are offered twice, which is what pushes the walk away from the
+		// crowded centre.
+		//
+		// "Outward" is measured by wrapped distance, which caps at half the
+		// world's width however far east the walk goes. That is enough to keep
+		// account creation working, and no more: see #19, which replaces this
+		// walk with placement designed for a cylinder rather than a disc.
 		directions := make([]int, 0, 2*len(originDirections))
 		for direction, vector := range originDirections {
 			if world.Contains(current.Add(vector)) {
@@ -64,7 +71,7 @@ func AssignOrigin(seeds prng.Seeds, normalizedEmail string, world World, taken [
 		}
 		for direction, vector := range originDirections {
 			neighbor := current.Add(vector)
-			if world.Contains(neighbor) && neighbor.Length() > current.Length() {
+			if world.Contains(neighbor) && world.Cylinder().Distance(center, neighbor) > world.Cylinder().Distance(center, current) {
 				directions = append(directions, direction)
 			}
 		}
@@ -73,7 +80,7 @@ func AssignOrigin(seeds prng.Seeds, normalizedEmail string, world World, taken [
 		}
 
 		direction := directions[roller.RollRange(0, len(directions)-1)]
-		current = current.Add(originDirections[direction])
+		current = world.Normalize(current.Add(originDirections[direction]))
 		if validOrigin(current, world, taken) {
 			return current, nil
 		}
@@ -81,20 +88,15 @@ func AssignOrigin(seeds prng.Seeds, normalizedEmail string, world World, taken [
 	return hexg.Hex{}, ErrNoOrigin
 }
 
-// PlayerRotation returns the deterministic map rotation for an account origin.
-func PlayerRotation(seeds prng.Seeds, origin hexg.Hex) int {
-	return seeds.Roller(prng.TagPlayer, prng.Key(origin.Q()), prng.Key(origin.R())).RollRange(0, 5)
-}
-
 func validOrigin(candidate hexg.Hex, world World, taken []hexg.Hex) bool {
-	if candidate.Length() <= minimumOriginDistance {
+	if world.Cylinder().Distance(hexg.NewHex(0, 0), candidate) <= minimumOriginDistance {
 		return false
 	}
 	if !world.IsLand(candidate) {
 		return false
 	}
 	for _, origin := range taken {
-		if candidate.Distance(origin) <= minimumOriginDistance {
+		if world.Cylinder().Distance(candidate, origin) <= minimumOriginDistance {
 			return false
 		}
 	}

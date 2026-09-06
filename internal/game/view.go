@@ -6,46 +6,23 @@ import (
 	"github.com/maloquacious/hexg"
 )
 
-// rotations is the number of distinct map rotations an account may have.
-const rotations = 6
-
 // Tile is one hex of a map view.
 //
-// Coord is expressed in the view's own frame: true map coordinates for
-// [AdminView], account-relative coordinates for [PlayerView]. Terrain and
-// Elevation are meaningful only when Visible is true; a tile that is not
-// visible carries neither, because the account is not entitled to know them.
+// Coord is the hex's true, canonical map coordinate in every view. There is no
+// longer a per-account frame: on a wrapping rectangle every player agrees which
+// way is north-east, so the coordinate a player is told is the coordinate
+// everyone else means. Placing a tile on screen is the renderer's problem, and
+// near the meridian it needs the representative closest to the view centre
+// rather than the canonical one - see cylinder.Cylinder.Nearest.
+//
+// Terrain and Elevation are meaningful only when Visible is true; a tile that
+// is not visible carries neither, because the account is not entitled to know
+// them.
 type Tile struct {
 	Coord     hexg.Hex
 	Terrain   Terrain
 	Elevation int
 	Visible   bool
-}
-
-// ToPlayer converts a true map coordinate into the coordinate that an account's
-// map displays for it. The account origin always displays as (0, 0).
-//
-// The rotation is a game rule, not a drawing choice, so this uses the cube
-// rotation on [hexg.Hex] rather than the one on hexg.Layout: the Layout methods
-// rotate what the viewer sees and swap direction for flat-top layouts, which
-// would tie a player's coordinate system to the orientation the map happens to
-// be drawn in.
-func ToPlayer(origin hexg.Hex, rotation int, location hexg.Hex) hexg.Hex {
-	hex := location.Subtract(origin)
-	for range normalizeRotation(rotation) {
-		hex = hex.RotateLeft()
-	}
-	return hex
-}
-
-// ToTrue converts a coordinate on an account's map back into a true map
-// coordinate. It inverts [ToPlayer].
-func ToTrue(origin hexg.Hex, rotation int, location hexg.Hex) hexg.Hex {
-	hex := location
-	for range normalizeRotation(rotation) {
-		hex = hex.RotateRight()
-	}
-	return origin.Add(hex)
 }
 
 // AdminView returns every hex of the world, in true map coordinates. Admins
@@ -61,23 +38,24 @@ func AdminView(world World) []Tile {
 	return tiles
 }
 
-// PlayerView returns every hex within radius of an account's origin, in the
-// coordinates that account's map displays.
+// PlayerView returns every hex within radius of an account's origin.
 //
-// visible holds the true map coordinates the account can see. Hexes outside it
-// are returned as fog: present in the view, carrying no terrain. So is anything
-// beyond the edge of the world, which a player has no way to tell apart from
-// land they have simply never seen.
-func PlayerView(world World, origin hexg.Hex, rotation, radius int, visible []hexg.Hex) []Tile {
+// visible holds the map coordinates the account can see. Hexes outside it are
+// returned as fog: present in the view, carrying no terrain. So is anything
+// beyond a pole, which a player has no way to tell apart from land they have
+// simply never seen. Nothing is ever beyond the eastern or western edge,
+// because there is not one.
+func PlayerView(world World, origin hexg.Hex, radius int, visible []hexg.Hex) []Tile {
 	seen := make(map[hexg.Hex]struct{}, len(visible))
 	for _, hex := range visible {
 		seen[hex] = struct{}{}
 	}
-	coords := disc(radius)
-	tiles := make([]Tile, 0, len(coords))
-	for _, coord := range coords {
-		tile := Tile{Coord: coord}
-		if location := ToTrue(origin, rotation, coord); isVisible(seen, location) {
+	offsets := disc(radius)
+	tiles := make([]Tile, 0, len(offsets))
+	for _, offset := range offsets {
+		location := world.Normalize(origin.Add(offset))
+		tile := Tile{Coord: location}
+		if isVisible(seen, location) {
 			if hex, ok := world.At(location); ok {
 				tile.Terrain, tile.Elevation, tile.Visible = hex.Terrain, hex.Elevation, true
 			}
@@ -92,8 +70,10 @@ func isVisible(seen map[hexg.Hex]struct{}, location hexg.Hex) bool {
 	return ok
 }
 
-// disc returns every hex within radius of (0, 0, 0), ordered by q and then r so
-// that a rendered map is byte-for-byte stable across runs.
+// disc returns every offset within radius of (0, 0, 0), ordered by q and then r
+// so that a rendered map is byte-for-byte stable across runs. These are offsets
+// from a view centre, not world coordinates: they are added to an origin and
+// normalized before anything is looked up.
 func disc(radius int) []hexg.Hex {
 	if radius < 0 {
 		return nil
@@ -105,8 +85,4 @@ func disc(radius int) []hexg.Hex {
 		}
 	}
 	return hexes
-}
-
-func normalizeRotation(rotation int) int {
-	return ((rotation % rotations) + rotations) % rotations
 }

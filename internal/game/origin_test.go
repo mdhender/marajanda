@@ -60,11 +60,14 @@ func TestAssignOriginIsOnLandInsideTheWorld(t *testing.T) {
 // A world with no land beyond the exclusion radius must report that it is full
 // rather than walk forever looking for a hex that cannot exist.
 func TestAssignOriginReportsAFullWorld(t *testing.T) {
-	world := NewWorld(2, []Hex{
+	world, err := NewWorld(2, 1, []Hex{
 		{Coord: hexg.NewHex(0, 0), Terrain: TerrainMountains},
 		{Coord: hexg.NewHex(1, 0), Terrain: TerrainOcean, Elevation: -60},
 		{Coord: hexg.NewHex(0, 1), Terrain: TerrainOcean, Elevation: -60},
 	})
+	if err != nil {
+		t.Fatalf("NewWorld: %v", err)
+	}
 	if _, err := AssignOrigin(testSeeds(), "player@example.com", world, nil); !errors.Is(err, ErrNoOrigin) {
 		t.Fatalf("AssignOrigin(full world) error = %v, want %v", err, ErrNoOrigin)
 	}
@@ -91,19 +94,6 @@ func TestOriginDirectionSlots(t *testing.T) {
 				t.Fatalf("slots at %v = %d, want %d", test.hex, slots, test.want)
 			}
 		})
-	}
-}
-
-func TestPlayerRotationGoldenResult(t *testing.T) {
-	seeds := testSeeds()
-	origin := hexg.NewHex(18, -7)
-	first := PlayerRotation(seeds, origin)
-	second := PlayerRotation(seeds, origin)
-	if first != second {
-		t.Fatalf("PlayerRotation repeated = %d then %d", first, second)
-	}
-	if first != 0 {
-		t.Fatalf("PlayerRotation = %d, want 0", first)
 	}
 }
 

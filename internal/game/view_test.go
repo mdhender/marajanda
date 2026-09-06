@@ -8,82 +8,6 @@ import (
 	"github.com/maloquacious/hexg"
 )
 
-func TestToPlayerPlacesOriginAtZero(t *testing.T) {
-	origin := hexg.NewHex(7, -16)
-	for rotation := range rotations {
-		got := ToPlayer(origin, rotation, origin)
-		if !got.Equals(hexg.NewHex(0, 0)) {
-			t.Fatalf("ToPlayer(origin, %d, origin) = %v, want (0,0)", rotation, got)
-		}
-	}
-}
-
-// TestToPlayerUsesCubeRotation pins the rotation direction to the cube rotation
-// on hexg.Hex. hexg.Layout.RotateLeft dispatches to Hex.RotateRight for the
-// flat-top layouts this game draws, so swapping one for the other would send
-// every rotated player's map the wrong way while still round-tripping cleanly.
-func TestToPlayerUsesCubeRotation(t *testing.T) {
-	origin := hexg.NewHex(0, 0)
-	east := hexg.NewHex(1, 0)
-
-	if got := ToPlayer(origin, 1, east); !got.Equals(hexg.NewHex(1, -1)) {
-		t.Fatalf("ToPlayer(rotation 1) = %v, want (1,-1); (0,1) means Layout.RotateLeft crept in", got)
-	}
-	if got := ToTrue(origin, 1, hexg.NewHex(1, -1)); !got.Equals(east) {
-		t.Fatalf("ToTrue(rotation 1) = %v, want (1,0)", got)
-	}
-}
-
-func TestToPlayerAndToTrueRoundTrip(t *testing.T) {
-	origins := []hexg.Hex{
-		hexg.NewHex(0, 0),
-		hexg.NewHex(7, -16),
-		hexg.NewHex(-23, 4),
-		hexg.NewHex(18, -7),
-	}
-	for _, origin := range origins {
-		for rotation := range rotations {
-			for _, location := range disc(3) {
-				player := ToPlayer(origin, rotation, location)
-				if got := ToTrue(origin, rotation, player); !got.Equals(location) {
-					t.Fatalf("round trip origin %v rotation %d location %v = %v", origin, rotation, location, got)
-				}
-			}
-		}
-	}
-}
-
-func TestRotationNormalizesOutOfRangeValues(t *testing.T) {
-	origin := hexg.NewHex(3, 4)
-	location := hexg.NewHex(9, -2)
-	for _, test := range []struct{ rotation, equivalent int }{
-		{rotation: 6, equivalent: 0},
-		{rotation: 7, equivalent: 1},
-		{rotation: -1, equivalent: 5},
-		{rotation: -6, equivalent: 0},
-	} {
-		want := ToPlayer(origin, test.equivalent, location)
-		if got := ToPlayer(origin, test.rotation, location); !got.Equals(want) {
-			t.Fatalf("ToPlayer(rotation %d) = %v, want %v (rotation %d)", test.rotation, got, want, test.equivalent)
-		}
-	}
-}
-
-// TestRotationPreservesDistance guards the transform against any change that
-// would move hexes relative to one another rather than rigidly rotating them.
-func TestRotationPreservesDistance(t *testing.T) {
-	origin := hexg.NewHex(-11, 5)
-	for rotation := range rotations {
-		for _, location := range disc(4) {
-			distance := location.Distance(hexg.NewHex(0, 0))
-			player := ToPlayer(origin, rotation, origin.Add(location))
-			if got := player.Distance(hexg.NewHex(0, 0)); got != distance {
-				t.Fatalf("rotation %d moved %v to distance %d, want %d", rotation, location, got, distance)
-			}
-		}
-	}
-}
-
 func TestDiscCoversRadiusExactly(t *testing.T) {
 	for radius := range 5 {
 		hexes := disc(radius)
@@ -116,9 +40,9 @@ func TestDiscOrderIsStable(t *testing.T) {
 }
 
 func TestAdminViewShowsEveryHex(t *testing.T) {
-	world := GenerateWorld(testSeeds(), 3)
+	world := mustGenerate(t, testSeeds(), 3, 2)
 	tiles := AdminView(world)
-	if want := len(disc(3)); len(tiles) != want {
+	if want := world.Len(); len(tiles) != want {
 		t.Fatalf("AdminView returned %d tiles, want %d", len(tiles), want)
 	}
 	for _, tile := range tiles {
@@ -136,11 +60,10 @@ func TestAdminViewShowsEveryHex(t *testing.T) {
 
 func TestPlayerViewRevealsOnlyVisibleHexes(t *testing.T) {
 	world := testWorld(t)
-	origin := hexg.NewHex(7, -16)
-	rotation := 2
+	origin := hexg.NewHex(7, -6)
 	neighbor := origin.Add(hexg.NewHex(1, 0))
 
-	tiles := PlayerView(world, origin, rotation, 2, []hexg.Hex{origin, neighbor})
+	tiles := PlayerView(world, origin, 2, []hexg.Hex{origin, neighbor})
 	if want := len(disc(2)); len(tiles) != want {
 		t.Fatalf("PlayerView returned %d tiles, want %d", len(tiles), want)
 	}
@@ -159,27 +82,26 @@ func TestPlayerViewRevealsOnlyVisibleHexes(t *testing.T) {
 		t.Fatalf("PlayerView revealed %d tiles, want 2", len(visible))
 	}
 
+	// Coordinates are the world's own now, not a per-account frame.
 	originHex, _ := world.At(origin)
-	center := hexg.NewHex(0, 0)
-	if got, ok := visible[center]; !ok || got != originHex.Terrain {
+	if got, ok := visible[origin]; !ok || got != originHex.Terrain {
 		t.Fatalf("PlayerView origin tile = %q ok=%v, want %q", got, ok, originHex.Terrain)
 	}
 	neighborHex, _ := world.At(neighbor)
-	neighborCoord := ToPlayer(origin, rotation, neighbor)
-	if got, ok := visible[neighborCoord]; !ok || got != neighborHex.Terrain {
-		t.Fatalf("PlayerView neighbor tile at %v = %q ok=%v", neighborCoord, got, ok)
+	if got, ok := visible[world.Normalize(neighbor)]; !ok || got != neighborHex.Terrain {
+		t.Fatalf("PlayerView neighbor tile at %v = %q ok=%v", neighbor, got, ok)
 	}
 }
 
-// A visible hex beyond the edge of a bounded world has no terrain to show. It
-// must read as fog, exactly like ground the player has never seen, rather than
-// drawing a hole in the map.
-func TestPlayerViewFogsHexesOutsideTheWorld(t *testing.T) {
-	world := GenerateWorld(testSeeds(), 4)
-	origin := hexg.NewHex(4, 0)
-	outside := hexg.NewHex(6, 0)
+// A visible hex beyond a pole has no terrain to show. It must read as fog,
+// exactly like ground the player has never seen, rather than drawing a hole in
+// the map. Only rows can be outside: there is no eastern or western edge.
+func TestPlayerViewFogsHexesBeyondAPole(t *testing.T) {
+	world := mustGenerate(t, testSeeds(), 4, 3)
+	origin := hexg.NewHex(0, 3)
+	outside := hexg.NewHex(0, 5)
 
-	for _, tile := range PlayerView(world, origin, 0, 2, []hexg.Hex{outside}) {
+	for _, tile := range PlayerView(world, origin, 2, []hexg.Hex{outside}) {
 		if tile.Visible {
 			t.Fatalf("PlayerView revealed %v from outside the world", tile.Coord)
 		}
@@ -189,12 +111,38 @@ func TestPlayerViewFogsHexesOutsideTheWorld(t *testing.T) {
 // TestPlayerViewIgnoresVisibleHexesOutsideTheDisc keeps a distant visible hex
 // from being drawn at a coordinate it does not occupy.
 func TestPlayerViewIgnoresVisibleHexesOutsideTheDisc(t *testing.T) {
-	origin := hexg.NewHex(7, -16)
-	distant := hexg.NewHex(40, 3)
+	origin := hexg.NewHex(7, -6)
+	distant := hexg.NewHex(20, 3)
 
-	for _, tile := range PlayerView(testWorld(t), origin, 0, 2, []hexg.Hex{distant}) {
+	for _, tile := range PlayerView(testWorld(t), origin, 2, []hexg.Hex{distant}) {
 		if tile.Visible {
 			t.Fatalf("PlayerView revealed %v from a hex outside the disc", tile.Coord)
 		}
+	}
+}
+
+// A player standing against the meridian sees across it. Their eastern
+// neighbour is canonically the westmost column of the world, and the view must
+// carry it as an ordinary neighbouring hex rather than dropping it.
+func TestPlayerViewSeesAcrossTheSeam(t *testing.T) {
+	world := testWorld(t)
+	origin := hexg.NewHex(testWorldWidth, 0)
+	east := world.Normalize(origin.Neighbor(0))
+
+	if east.Q() != -testWorldWidth {
+		t.Fatalf("east of the seam = %v, want q = %d", east, -testWorldWidth)
+	}
+
+	found := false
+	for _, tile := range PlayerView(world, origin, 2, []hexg.Hex{origin, east}) {
+		if tile.Coord.Equals(east) {
+			found = true
+			if !tile.Visible || tile.Terrain == "" {
+				t.Fatalf("tile across the seam at %v is visible=%v terrain=%q", east, tile.Visible, tile.Terrain)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("PlayerView from %v never returned %v across the seam", origin, east)
 	}
 }

@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/mdhender/marajanda/internal/datastore"
 	"github.com/mdhender/marajanda/internal/game"
 	"github.com/mdhender/marajanda/internal/prng"
+	"github.com/mdhender/marajanda/internal/worldmap"
 )
 
 // playerOrigin is far enough from the game origin that its coordinates cannot
@@ -26,12 +28,19 @@ var playerOrigin = hexg.NewHex(7, -16)
 // generator is deterministic, so a shared world cannot couple the tests, and
 // regenerating it per test would dominate their runtime.
 var testMapWorld = sync.OnceValue(func() game.World {
-	return game.GenerateWorld(testViewSeeds(), testMapRadius)
+	world, err := game.GenerateWorld(testViewSeeds(), testMapWidth, testMapHeight)
+	if err != nil {
+		panic(err)
+	}
+	return world
 })
 
-// testMapRadius is large enough to hold playerOrigin and a player map drawn
+// The test world's half-extents, large enough to hold playerOrigin and a player map drawn
 // around it.
-const testMapRadius = 20
+const (
+	testMapWidth  = 20
+	testMapHeight = 20
+)
 
 func signedInMap(t *testing.T, account datastore.Account, store applicationStore, target string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -80,7 +89,7 @@ func TestAdminMapDrawsTheWholeDisc(t *testing.T) {
 
 func TestPlayerMapRevealsOnlyVisibleHexes(t *testing.T) {
 	response := signedInMap(t,
-		datastore.Account{Email: "player@example.com", Handle: "wanderer", Role: "player", Origin: playerOrigin, Rotation: 3},
+		datastore.Account{Email: "player@example.com", Handle: "wanderer", Role: "player", Origin: playerOrigin},
 		&testStore{
 			game:    testMapGame(),
 			world:   testMapWorld(),
@@ -96,54 +105,25 @@ func TestPlayerMapRevealsOnlyVisibleHexes(t *testing.T) {
 	body := response.Body.String()
 
 	polygons := strings.Count(body, "<polygon")
-	if want := len(game.PlayerView(testMapWorld(), playerOrigin, 3, playerMapRadius, []hexg.Hex{playerOrigin})); polygons != want {
+	if want := len(game.PlayerView(testMapWorld(), playerOrigin, playerMapRadius, []hexg.Hex{playerOrigin})); polygons != want {
 		t.Fatalf("polygons = %d, want %d", polygons, want)
 	}
 	if fog := strings.Count(body, `<polygon class="fog"`); fog != polygons-1 {
 		t.Fatalf("fog polygons = %d, want %d", fog, polygons-1)
 	}
 
-	// The origin hex is the only terrain a player can see today, and it renders
-	// at the centre of their own map rather than at its true coordinate.
+	// The origin hex is the only terrain a player can see today. It renders at
+	// its true coordinate now: there is no per-account frame left to hide it in,
+	// and on a map everyone shares that is the point rather than a leak.
 	origin, ok := testMapWorld().At(playerOrigin)
 	if !ok {
 		t.Fatalf("test world is missing the player origin %v", playerOrigin)
 	}
-	if want := "(0, 0) " + string(origin.Terrain) + ","; !strings.Contains(body, want) {
+	if want := formatCoord(playerOrigin) + " " + string(origin.Terrain) + ","; !strings.Contains(body, want) {
 		t.Fatalf("player map missing %q", want)
 	}
 	if !strings.Contains(body, "Star Kin") || !strings.Contains(body, `href="/player/dashboard"`) {
 		t.Fatal("player map missing faction name or dashboard link")
-	}
-}
-
-// TestPlayerMapNeverPrintsTrueCoordinates is the guard that keeps players from
-// locating one another: a player who can read true coordinates off their own
-// map can triangulate every other player's origin.
-func TestPlayerMapNeverPrintsTrueCoordinates(t *testing.T) {
-	for _, rotation := range []int{0, 1, 2, 3, 4, 5} {
-		response := signedInMap(t,
-			datastore.Account{Email: "player@example.com", Handle: "wanderer", Role: "player", Origin: playerOrigin, Rotation: rotation},
-			&testStore{
-				game:    testMapGame(),
-				world:   testMapWorld(),
-				faction: datastore.Faction{Name: "Star Kin", Location: hexg.NewHex(0, 0)},
-				found:   true,
-				visible: []hexg.Hex{playerOrigin},
-			},
-			"/player/map")
-		body := response.Body.String()
-
-		for _, tile := range game.PlayerView(testMapWorld(), playerOrigin, rotation, playerMapRadius, nil) {
-			location := game.ToTrue(playerOrigin, rotation, tile.Coord)
-			if location.Equals(hexg.NewHex(0, 0)) {
-				continue // the game origin is not this player's secret to keep
-			}
-			label := formatCoord(location)
-			if strings.Contains(body, label) {
-				t.Fatalf("rotation %d leaked true coordinate %s", rotation, label)
-			}
-		}
 	}
 }
 
@@ -188,15 +168,19 @@ func TestPlayerMapRequiresConfiguredFaction(t *testing.T) {
 }
 
 func TestBuildMapViewGeometry(t *testing.T) {
-	empty := buildMapView(nil)
+	empty := buildMapView(func(coord hexg.Hex) hexg.Hex { return coord }, nil)
 	if empty.ViewBox != "" || len(empty.Tiles) != 0 {
 		t.Fatalf("buildMapView(nil) = %#v, want an empty view", empty)
 	}
 
-	small := game.GenerateWorld(testViewSeeds(), 1)
-	view := buildMapView(game.AdminView(small))
-	if len(view.Tiles) != 7 {
-		t.Fatalf("tiles = %d, want 7", len(view.Tiles))
+	small, err := game.GenerateWorld(testViewSeeds(), 1, 1)
+	if err != nil {
+		t.Fatalf("GenerateWorld: %v", err)
+	}
+	place := func(coord hexg.Hex) hexg.Hex { return worldmap.Cut(small.Width(), 0, coord) }
+	view := buildMapView(place, game.AdminView(small))
+	if want := small.Len(); len(view.Tiles) != want {
+		t.Fatalf("tiles = %d, want %d", len(view.Tiles), want)
 	}
 	if view.ViewBox == "" {
 		t.Fatal("viewBox is empty")
@@ -208,7 +192,7 @@ func TestBuildMapViewGeometry(t *testing.T) {
 	}
 	// Stable order in means stable markup out, so a rendered map does not churn
 	// between identical requests.
-	repeat := buildMapView(game.AdminView(small))
+	repeat := buildMapView(place, game.AdminView(small))
 	if repeat.ViewBox != view.ViewBox {
 		t.Fatalf("viewBox differs: %q then %q", view.ViewBox, repeat.ViewBox)
 	}
@@ -225,9 +209,57 @@ func testViewSeeds() prng.Seeds {
 }
 
 func testMapGame() datastore.Game {
-	return datastore.Game{Seed1: 98374, Seed2: -98, Radius: testMapRadius}
+	return datastore.Game{Seed1: 98374, Seed2: -98, Width: testMapWidth, Height: testMapHeight}
 }
 
 func formatCoord(hex hexg.Hex) string {
 	return fmt.Sprintf("(%d, %d)", hex.Q(), hex.R())
+}
+
+// The whole-world map must draw as an upright rectangle.
+//
+// Canonical coordinates fix q rather than the offset column, so plotting them
+// straight from their axial position leans the map sideways by half a row per
+// row. rectangular is the cut that undoes that, and this is the assertion that
+// it actually tiles: every row holds every column exactly once.
+func TestRectangularCutTilesTheWorld(t *testing.T) {
+	world := testMapWorld()
+
+	seen := make(map[[2]int]hexg.Hex, world.Len())
+	for _, hex := range world.Hexes() {
+		placed := worldmap.Cut(world.Width(), 0, hex.Coord)
+		offset := placed.CubeToROffset(mapOffsetEven)
+
+		if offset.Col < -world.Width() || offset.Col > world.Width() {
+			t.Fatalf("%v placed at column %d, outside [-%d,%d]",
+				hex.Coord, offset.Col, world.Width(), world.Width())
+		}
+		if offset.Row != hex.Coord.R() {
+			t.Fatalf("%v placed on row %d, want %d", hex.Coord, offset.Row, hex.Coord.R())
+		}
+		key := [2]int{offset.Col, offset.Row}
+		if other, clash := seen[key]; clash {
+			t.Fatalf("%v and %v both placed at column %d row %d",
+				hex.Coord, other, offset.Col, offset.Row)
+		}
+		seen[key] = hex.Coord
+	}
+	if len(seen) != world.Len() {
+		t.Fatalf("placed %d hexes into %d cells", world.Len(), len(seen))
+	}
+
+	// A parallelogram would be markedly wider than the rectangle it should be:
+	// the lean adds half a column per row on top of the world's true width.
+	view := buildMapView(func(coord hexg.Hex) hexg.Hex { return worldmap.Cut(world.Width(), 0, coord) },
+		game.AdminView(world))
+	var minX, maxX float64
+	if _, err := fmt.Sscanf(view.ViewBox, "%f %f %f %f", &minX, new(float64), &maxX, new(float64)); err != nil {
+		t.Fatalf("viewBox %q: %v", view.ViewBox, err)
+	}
+	// Pointy-top hexes are sqrt(3)*size apart across a row, plus half that for
+	// the row shove, plus padding on both sides.
+	want := (float64(world.Columns())+0.5)*math.Sqrt(3)*mapHexSize + 2*mapPadding
+	if maxX > want*1.02 {
+		t.Fatalf("map is %.0f wide, want about %.0f: the cut is leaning", maxX, want)
+	}
 }

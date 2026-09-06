@@ -35,7 +35,8 @@ func newNoiseField(seeds prng.Seeds, field prng.Key) *noiseField {
 	return &noiseField{seeds: seeds, field: field, gradients: make(map[[2]int][2]float64)}
 }
 
-// gradient returns the unit gradient owned by a lattice point.
+// gradient returns the unit gradient owned by a lattice point. x must already
+// be wrapped into the field's period; see [noiseField.at].
 func (n *noiseField) gradient(x, y int) (float64, float64) {
 	if g, ok := n.gradients[[2]int{x, y}]; ok {
 		return g[0], g[1]
@@ -53,13 +54,28 @@ func (n *noiseField) gradient(x, y int) (float64, float64) {
 	return gx, gy
 }
 
+// wrapLattice folds a lattice column into [0, period). A period of zero leaves
+// the column alone, which is the unbounded plane.
+func wrapLattice(column, period int) int {
+	if period <= 0 {
+		return column
+	}
+	return ((column % period) + period) % period
+}
+
 // at evaluates the field at a point, returning roughly -1..1.
-func (n *noiseField) at(x, y float64) float64 {
+//
+// periodX makes the field repeat every periodX lattice columns, which is what
+// lets a world wrap east-west without a seam: the gradient is looked up at the
+// wrapped column while the interpolation still uses the true one, so the field
+// is continuous across the join rather than merely similar on both sides. Pass
+// zero for an unbounded field.
+func (n *noiseField) at(x, y float64, periodX int) float64 {
 	x0, y0 := int(math.Floor(x)), int(math.Floor(y))
 	fx, fy := x-float64(x0), y-float64(y0)
 
 	dot := func(cx, cy int) float64 {
-		gx, gy := n.gradient(cx, cy)
+		gx, gy := n.gradient(wrapLattice(cx, periodX), cy)
 		return gx*(x-float64(cx)) + gy*(y-float64(cy))
 	}
 
@@ -74,12 +90,18 @@ func (n *noiseField) at(x, y float64) float64 {
 // fbm sums octaves of the field, each at twice the frequency and half the
 // amplitude of the last. Low octaves make continents, high octaves make the
 // ragged detail along their edges.
-func (n *noiseField) fbm(x, y float64, octaves int, frequency float64) float64 {
+//
+// periodX is the lattice period at the base frequency. Each octave doubles the
+// frequency, so it doubles the period with it and every octave stays periodic
+// over the same distance - which only works because the caller chose a base
+// frequency that divides the world exactly. See [periodicFrequency].
+func (n *noiseField) fbm(x, y float64, octaves int, frequency float64, periodX int) float64 {
 	sum, amplitude, total := 0.0, 1.0, 0.0
 	for range octaves {
-		sum += n.at(x*frequency, y*frequency) * amplitude
+		sum += n.at(x*frequency, y*frequency, periodX) * amplitude
 		total += amplitude
 		frequency *= 2
+		periodX *= 2
 		amplitude /= 2
 	}
 	if total == 0 {

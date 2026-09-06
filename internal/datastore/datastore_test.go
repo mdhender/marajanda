@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/maloquacious/hexg"
+	"github.com/mdhender/marajanda/internal/cylinder"
 	"github.com/mdhender/marajanda/internal/game"
 	"github.com/mdhender/marajanda/internal/prng"
 	"golang.org/x/crypto/bcrypt"
@@ -21,10 +22,21 @@ import (
 
 // testGame uses the smallest legal world so the suite generates and inserts as
 // little as possible while still exercising a world a player can be placed in.
-var testGame = Game{Seed1: 98374, Seed2: -98, Radius: MinimumWorldRadius}
+// wrappedOriginDistance measures how far an origin sits from the game origin
+// the way the world does, going the short way around rather than across the map.
+func wrappedOriginDistance(t *testing.T, origin hexg.Hex) int {
+	t.Helper()
+	cyl, err := cylinder.New(2*testGame.Width + 1)
+	if err != nil {
+		t.Fatalf("cylinder.New: %v", err)
+	}
+	return cyl.Distance(hexg.NewHex(0, 0), origin)
+}
 
-// testWorldHexes is how many hexes a world of the test radius holds.
-var testWorldHexes = int64(3*testGame.Radius*(testGame.Radius+1) + 1)
+var testGame = Game{Seed1: 98374, Seed2: -98, Width: MinimumWorldWidth, Height: MinimumWorldHeight}
+
+// testWorldHexes is how many hexes a world of the test dimensions holds.
+var testWorldHexes = int64((2*testGame.Width + 1) * (2*testGame.Height + 1))
 
 func TestOpenPersistentCreatesMigratesAndSeeds(t *testing.T) {
 	root := t.TempDir()
@@ -41,8 +53,8 @@ func TestOpenPersistentCreatesMigratesAndSeeds(t *testing.T) {
 	if account.handle != "keeper" || account.role != "admin" {
 		t.Fatalf("account = %#v, want keeper admin", account)
 	}
-	if !account.origin.Equals(hexg.NewHex(0, 0)) || account.rotation != 0 {
-		t.Fatalf("main admin origin = %v rotation = %d, want (0,0,0) rotation 0", account.origin, account.rotation)
+	if !account.origin.Equals(hexg.NewHex(0, 0)) {
+		t.Fatalf("main admin origin = %v, want (0,0,0)", account.origin)
 	}
 	// The main admin sits on the game origin whatever the generator made of it.
 	if terrain := readTerrain(t, store, account.origin); !terrain.Valid() {
@@ -162,12 +174,12 @@ func TestOpenMemorySeedsDefaults(t *testing.T) {
 		}
 	}
 	admin := readAccount(t, store, "admin@marajanda.com")
-	if !admin.origin.Equals(hexg.NewHex(0, 0)) || admin.rotation != 0 {
-		t.Fatalf("main admin origin = %v rotation = %d, want game origin and rotation 0", admin.origin, admin.rotation)
+	if !admin.origin.Equals(hexg.NewHex(0, 0)) {
+		t.Fatalf("main admin origin = %v, want the game origin", admin.origin)
 	}
 	player := readAccount(t, store, "player@marajanda.com")
-	if player.origin.Length() <= 15 || player.rotation < 0 || player.rotation > 5 {
-		t.Fatalf("player origin = %v rotation = %d, want distance > 15 and rotation 0..5", player.origin, player.rotation)
+	if wrappedOriginDistance(t, player.origin) <= 15 {
+		t.Fatalf("player origin = %v, want wrapped distance > 15 from the game origin", player.origin)
 	}
 	if terrain := readTerrain(t, store, player.origin); terrain.IsWater() {
 		t.Fatalf("player origin %v is %q, want dry land", player.origin, terrain)
@@ -240,8 +252,8 @@ func TestFindOrCreateDevelopmentAccount(t *testing.T) {
 	if !strings.HasPrefix(created.Handle, "agent-") || created.Role != "player" {
 		t.Fatalf("created account = %#v, want generated player", created)
 	}
-	if created.Origin.Length() <= 15 || created.Rotation < 0 || created.Rotation > 5 {
-		t.Fatalf("created origin = %v rotation = %d, want distance > 15 and rotation 0..5", created.Origin, created.Rotation)
+	if wrappedOriginDistance(t, created.Origin) <= 15 {
+		t.Fatalf("created origin = %v, want wrapped distance > 15 from the game origin", created.Origin)
 	}
 	again, err := store.FindOrCreateDevelopmentAccount(t.Context(), "agent@example.test")
 	if err != nil {
@@ -288,8 +300,8 @@ func TestCreateAccountAssignsDeterministicOriginToEveryRole(t *testing.T) {
 	if firstAccount.Email != "assistant@example.com" || firstAccount.Role != "admin" {
 		t.Fatalf("created account = %#v, want normalized assistant admin", firstAccount)
 	}
-	if firstAccount.Origin.Length() <= 15 || firstAccount.Rotation < 0 || firstAccount.Rotation > 5 {
-		t.Fatalf("assistant origin = %v rotation = %d, want distance > 15 and rotation 0..5", firstAccount.Origin, firstAccount.Rotation)
+	if wrappedOriginDistance(t, firstAccount.Origin) <= 15 {
+		t.Fatalf("assistant origin = %v, want wrapped distance > 15 from the game origin", firstAccount.Origin)
 	}
 	if terrain := readTerrain(t, first, firstAccount.Origin); terrain.IsWater() {
 		t.Fatalf("assistant origin %v is %q, want dry land", firstAccount.Origin, terrain)
@@ -340,7 +352,7 @@ func TestCreateAccountAvoidsAssignedOrigins(t *testing.T) {
 }
 
 // The world is the game's terrain of record, so what a store hands back must be
-// exactly what the generator produced for its seeds and radius.
+// exactly what the generator produced for its seeds and dimensions.
 func TestWorldMatchesTheGenerator(t *testing.T) {
 	store, err := OpenMemory(t.Context(), testGame)
 	if err != nil {
@@ -352,10 +364,13 @@ func TestWorldMatchesTheGenerator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := game.GenerateWorld(testPRNGSeeds(), testGame.Radius)
-	if stored.Radius() != want.Radius() || stored.Len() != want.Len() {
-		t.Fatalf("World() = radius %d, %d hexes; want %d, %d",
-			stored.Radius(), stored.Len(), want.Radius(), want.Len())
+	want, err := game.GenerateWorld(testPRNGSeeds(), testGame.Width, testGame.Height)
+	if err != nil {
+		t.Fatalf("GenerateWorld: %v", err)
+	}
+	if stored.Width() != want.Width() || stored.Height() != want.Height() || stored.Len() != want.Len() {
+		t.Fatalf("World() = width %d, %d hexes; want %d, %d",
+			stored.Width(), stored.Len(), want.Width(), want.Len())
 	}
 	for _, hex := range want.Hexes() {
 		got, ok := stored.At(hex.Coord)
@@ -365,18 +380,24 @@ func TestWorldMatchesTheGenerator(t *testing.T) {
 	}
 }
 
-// The radius is persisted with the seeds and fixes the world's size forever, so
+// The dimensions are persisted with the seeds and fix the world's size forever, so
 // a nonsensical one has to be refused when the database is created rather than
 // discovered later by a player who cannot be placed.
-func TestOpenMemoryRejectsAnUnusableWorldRadius(t *testing.T) {
-	for _, radius := range []int{1, MinimumWorldRadius - 1, MaximumWorldRadius + 1} {
-		if _, err := OpenMemory(t.Context(), Game{Seed1: 1, Seed2: 2, Radius: radius}); err == nil {
-			t.Fatalf("OpenMemory(radius %d) succeeded, want an error", radius)
+func TestOpenMemoryRejectsUnusableWorldDimensions(t *testing.T) {
+	for _, record := range []Game{
+		{Seed1: 1, Seed2: 2, Width: 1, Height: MinimumWorldHeight},
+		{Seed1: 1, Seed2: 2, Width: MinimumWorldWidth - 1, Height: MinimumWorldHeight},
+		{Seed1: 1, Seed2: 2, Width: MaximumWorldWidth + 1, Height: MinimumWorldHeight},
+		{Seed1: 1, Seed2: 2, Width: MinimumWorldWidth, Height: MinimumWorldHeight - 1},
+		{Seed1: 1, Seed2: 2, Width: MinimumWorldWidth, Height: MaximumWorldHeight + 1},
+	} {
+		if _, err := OpenMemory(t.Context(), record); err == nil {
+			t.Fatalf("OpenMemory(%dx%d) succeeded, want an error", record.Width, record.Height)
 		}
 	}
 }
 
-func TestOpenMemoryDefaultsTheWorldRadius(t *testing.T) {
+func TestOpenMemoryDefaultsTheWorldDimensions(t *testing.T) {
 	store, err := OpenMemory(t.Context(), Game{Seed1: 1, Seed2: 2})
 	if err != nil {
 		t.Fatal(err)
@@ -387,12 +408,12 @@ func TestOpenMemoryDefaultsTheWorldRadius(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Radius != DefaultWorldRadius {
-		t.Fatalf("Game().Radius = %d, want %d", record.Radius, DefaultWorldRadius)
+	if record.Width != DefaultWorldWidth || record.Height != DefaultWorldHeight {
+		t.Fatalf("Game() = %dx%d, want %dx%d", record.Width, record.Height, DefaultWorldWidth, DefaultWorldHeight)
 	}
 }
 
-func TestAccountOriginAndRotationConstraints(t *testing.T) {
+func TestAccountOriginConstraints(t *testing.T) {
 	store, err := OpenMemory(t.Context(), testGame)
 	if err != nil {
 		t.Fatal(err)
@@ -417,27 +438,21 @@ func TestAccountOriginAndRotationConstraints(t *testing.T) {
 			want: sqlite.ResultConstraintNotNull,
 		},
 		{
-			name: "rotation range",
-			stmt: `INSERT INTO accounts (email, secret_hash, handle, role, origin_q, origin_r, rotation)
-				VALUES ('bad-rotation@example.com', X'00', 'bad-rotation', 'player', 100, 100, 6);`,
-			want: sqlite.ResultConstraintCheck,
-		},
-		{
 			name: "unique origin",
-			stmt: `INSERT INTO accounts (email, secret_hash, handle, role, origin_q, origin_r, rotation)
-				VALUES ('same-origin@example.com', X'00', 'same-origin', 'player', 0, 0, 1);`,
+			stmt: `INSERT INTO accounts (email, secret_hash, handle, role, origin_q, origin_r)
+				VALUES ('same-origin@example.com', X'00', 'same-origin', 'player', 0, 0);`,
 			want: sqlite.ResultConstraintUnique,
 		},
 		{
 			name: "email conflict takes precedence over origin conflict",
-			stmt: `INSERT INTO accounts (email, secret_hash, handle, role, origin_q, origin_r, rotation)
-				VALUES ('admin@marajanda.com', X'00', 'same-email', 'admin', 0, 0, 0);`,
+			stmt: `INSERT INTO accounts (email, secret_hash, handle, role, origin_q, origin_r)
+				VALUES ('admin@marajanda.com', X'00', 'same-email', 'admin', 0, 0);`,
 			want: sqlite.ResultConstraintUnique,
 		},
 		{
 			name: "origin must be initialized",
-			stmt: `INSERT INTO accounts (email, secret_hash, handle, role, origin_q, origin_r, rotation)
-				VALUES ('uninitialized@example.com', X'00', 'uninitialized', 'player', 101, 101, 1);`,
+			stmt: `INSERT INTO accounts (email, secret_hash, handle, role, origin_q, origin_r)
+				VALUES ('uninitialized@example.com', X'00', 'uninitialized', 'player', 101, 101);`,
 			want: sqlite.ResultConstraintForeignKey,
 		},
 	} {
@@ -631,11 +646,10 @@ func TestFactionIsVisibleAcrossSharedMemoryConnections(t *testing.T) {
 }
 
 type storedAccount struct {
-	hash     []byte
-	handle   string
-	role     string
-	origin   hexg.Hex
-	rotation int
+	hash   []byte
+	handle string
+	role   string
+	origin hexg.Hex
 }
 
 func readAccount(t *testing.T, store *Store, email string) storedAccount {
@@ -647,7 +661,7 @@ func readAccount(t *testing.T, store *Store, email string) storedAccount {
 	defer release()
 	var account storedAccount
 	err = sqlitex.ExecuteTransient(conn, `
-		SELECT secret_hash, handle, role, origin_q, origin_r, rotation
+		SELECT secret_hash, handle, role, origin_q, origin_r
 		FROM accounts WHERE email = ?1;`, &sqlitex.ExecOptions{
 		Args: []any{email},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
@@ -656,7 +670,6 @@ func readAccount(t *testing.T, store *Store, email string) storedAccount {
 			account.handle = stmt.ColumnText(1)
 			account.role = stmt.ColumnText(2)
 			account.origin = hexg.NewHex(stmt.ColumnInt(3), stmt.ColumnInt(4))
-			account.rotation = stmt.ColumnInt(5)
 			return nil
 		},
 	})

@@ -53,7 +53,7 @@ func TestRunUsesConfiguredEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if game != (datastore.Game{Seed1: 98374, Seed2: -98, Radius: datastore.DefaultWorldRadius}) {
+	if game != (datastore.Game{Seed1: 98374, Seed2: -98, Width: datastore.DefaultWorldWidth, Height: datastore.DefaultWorldHeight}) {
 		t.Fatalf("Game = %#v, want configured seeds", game)
 	}
 	got, err := os.Getwd()
@@ -156,7 +156,7 @@ func TestRunHelp(t *testing.T) {
 	if err := run(t.Context(), []string{"--help"}, &stdout); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--root", "--game-seed SEED1,SEED2", "--world-radius", "--address", "--port", "8443", "--timeout"} {
+	for _, want := range []string{"--root", "--game-seed SEED1,SEED2", "--width", "--address", "--port", "8443", "--timeout"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("help = %q, want %q", stdout.String(), want)
 		}

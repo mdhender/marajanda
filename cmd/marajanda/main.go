@@ -57,7 +57,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		game = parsed
 		return nil
 	})
-	worldRadius := flags.IntLong("world-radius", datastore.DefaultWorldRadius, "how far a new world reaches from the game origin")
+	worldWidth := flags.IntLong("width", datastore.DefaultWorldWidth, "columns of a new world either side of the game origin; the world is 2*width+1 wide and wraps east-west")
+	worldHeight := flags.IntLong("height", datastore.DefaultWorldHeight, "rows of a new world above and below the game origin; the world is 2*height+1 tall and is walled north-south")
 	address := flags.StringLong("address", server.DefaultAddress, "network address to listen on")
 	port := flags.IntLong("port", server.DefaultPort, "network port to listen on")
 	timeout := flags.DurationLong("timeout", 0, "stop the server after this duration; zero disables the timeout")
@@ -74,10 +75,10 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 			if *root == "" {
 				return errors.New("--root is required")
 			}
-			// The radius is applied here rather than as the seed flag is
-			// parsed, so the two flags may be given in either order.
+			// The dimensions are applied here rather than as the seed flag is
+			// parsed, so the flags may be given in any order.
 			if game != nil {
-				game.Radius = *worldRadius
+				game.Width, game.Height = *worldWidth, *worldHeight
 			}
 			return server.Run(ctx, server.Config{
 				Root:        *root,
