@@ -99,12 +99,20 @@ func TestSignInCreatesSessionAndRoutesByRole(t *testing.T) {
 		wantDashboard []string
 	}{
 		{role: "admin", handle: "keeper", wantPath: "/admin/dashboard", otherPath: "/player/dashboard", wantDashboard: []string{"Game seeds", "Seed 1", "98374", "Seed 2", "-98", "cannot be changed"}},
-		{role: "player", handle: "wanderer", wantPath: "/player/dashboard", otherPath: "/admin/dashboard", wantDashboard: []string{"The Wayfarers", "(2, -1)"}},
+		{role: "player", handle: "wanderer", wantPath: "/player/dashboard", otherPath: "/admin/dashboard", wantDashboard: []string{"The Wayfarers", "LEADER-1", "Mudville", "(2, -1)"}},
 	} {
 		t.Run(test.role, func(t *testing.T) {
 			var store applicationStore
 			if test.role == "player" {
-				store = &testStore{faction: datastore.Faction{Name: "The Wayfarers", Race: game.RaceHuman, Location: hexg.NewHex(2, -1)}, found: true}
+				store = &testStore{
+					faction: datastore.Faction{Name: "The Wayfarers", Race: game.RaceHuman},
+					found:   true,
+					turn:    3,
+					entities: []datastore.Entity{
+						{ID: 1, Code: "LEADER-1", Name: "LEADER-1", Kind: game.EntityKindLeader, Location: hexg.NewHex(2, -1)},
+						{ID: 2, Code: "HAMLET-1", Name: "Mudville", Kind: game.EntityKindHamlet, Location: hexg.NewHex(2, -1)},
+					},
+				}
 			} else {
 				store = &testStore{game: datastore.Game{Seed1: 98374, Seed2: -98}}
 			}
@@ -198,7 +206,7 @@ func TestDashboardRequiresSession(t *testing.T) {
 }
 
 func TestPlayerConfiguresFactionBeforeDashboard(t *testing.T) {
-	factions := &testStore{}
+	factions := &testStore{seat: hexg.NewHex(2, -1)}
 	handler := newHandler(func(context.Context, string, string) (datastore.Account, bool, error) {
 		return datastore.Account{Email: "player@example.com", Handle: "wanderer", Role: "player"}, true, nil
 	}, factions)
@@ -230,7 +238,9 @@ func TestPlayerConfiguresFactionBeforeDashboard(t *testing.T) {
 	}
 
 	dashboard = requestWithCookie(handler, http.MethodGet, "/player/dashboard", cookie, "")
-	for _, want := range []string{"Star Kin", "elf", "Current location", "(0, 0)"} {
+	// The dashboard reports where the faction's entities are. The faction has
+	// no location of its own to report.
+	for _, want := range []string{"Star Kin", "elf", "Your force", "LEADER-1", "HAMLET-1", "(2, -1)"} {
 		if dashboard.Code != http.StatusOK || !strings.Contains(dashboard.Body.String(), want) {
 			t.Fatalf("dashboard = %d %q, want %q", dashboard.Code, dashboard.Body.String(), want)
 		}
@@ -238,6 +248,34 @@ func TestPlayerConfiguresFactionBeforeDashboard(t *testing.T) {
 	form = requestWithCookie(handler, http.MethodGet, "/player/faction", cookie, "")
 	if form.Code != http.StatusSeeOther || form.Header().Get("Location") != "/player/dashboard" {
 		t.Fatalf("completed configuration response = %d %q, want dashboard redirect", form.Code, form.Header().Get("Location"))
+	}
+}
+
+// A list of entities is only true of one turn, so the dashboard names the turn
+// it read and reads the entities as of that same turn rather than asking each
+// question for the latest answer.
+func TestPlayerDashboardReadsEntitiesAsOfTheTurnItShows(t *testing.T) {
+	store := &testStore{
+		faction: datastore.Faction{Name: "Star Kin", Race: game.RaceElf},
+		found:   true,
+		turn:    7,
+		entities: []datastore.Entity{
+			{ID: 1, Code: "HAMLET-1", Name: "Smirnopolis", Kind: game.EntityKindHamlet, Location: hexg.NewHex(-3, 4)},
+		},
+	}
+	handler, cookie := signedInPlayer(t, store)
+
+	dashboard := requestWithCookie(handler, http.MethodGet, "/player/dashboard", cookie, "")
+	if dashboard.Code != http.StatusOK {
+		t.Fatalf("dashboard = %d", dashboard.Code)
+	}
+	if store.asOf != 7 {
+		t.Fatalf("entities read as of turn %d, want the displayed turn 7", store.asOf)
+	}
+	for _, want := range []string{"HAMLET-1", "Smirnopolis", "hamlet", "(-3, 4)", "<strong>7</strong>"} {
+		if !strings.Contains(dashboard.Body.String(), want) {
+			t.Fatalf("dashboard body missing %q", want)
+		}
 	}
 }
 
@@ -399,12 +437,17 @@ func requestWithCookie(handler http.Handler, method, target string, cookie *http
 }
 
 type testStore struct {
-	email   string
-	faction datastore.Faction
-	found   bool
-	game    datastore.Game
-	world   game.World
-	visible []hexg.Hex
+	email    string
+	faction  datastore.Faction
+	found    bool
+	game     datastore.Game
+	world    game.World
+	visible  []hexg.Hex
+	turn     int
+	entities []datastore.Entity
+	// asOf is the turn EntitiesAsOf was last asked for, so a test can check
+	// that the dashboard reads the entities as of the turn it displays.
+	asOf int
 	// seat is the origin SaveFaction hands back, and saveErr is what it fails
 	// with instead of seating anybody.
 	seat    hexg.Hex
@@ -423,6 +466,15 @@ func (s *testStore) Faction(context.Context, string) (datastore.Faction, bool, e
 	return s.faction, s.found, nil
 }
 
+func (s *testStore) CurrentTurn(context.Context) (int, error) {
+	return s.turn, nil
+}
+
+func (s *testStore) EntitiesAsOf(_ context.Context, _ string, turn int) ([]datastore.Entity, error) {
+	s.asOf = turn
+	return s.entities, nil
+}
+
 func (s *testStore) VisibleHexes(context.Context, string) ([]hexg.Hex, error) {
 	return s.visible, nil
 }
@@ -432,7 +484,14 @@ func (s *testStore) SaveFaction(_ context.Context, email, name string, race game
 		return datastore.Account{}, s.saveErr
 	}
 	s.email = email
-	s.faction = datastore.Faction{Name: name, Race: race, Location: hexg.NewHex(0, 0)}
+	s.faction = datastore.Faction{Name: name, Race: race}
 	s.found = true
+	// Saving a faction founds it, the way the store does: a leader and a hamlet
+	// standing on the seat the save handed back.
+	s.turn = game.FirstTurn
+	s.entities = []datastore.Entity{
+		{ID: 1, Code: "LEADER-1", Name: "LEADER-1", Kind: game.EntityKindLeader, Location: s.seat},
+		{ID: 2, Code: "HAMLET-1", Name: "HAMLET-1", Kind: game.EntityKindHamlet, Location: s.seat},
+	}
 	return datastore.Account{Email: email, Role: "player", Origin: s.seat, Seated: true}, nil
 }

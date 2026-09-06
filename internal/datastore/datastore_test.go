@@ -453,6 +453,11 @@ func TestSaveFactionLeavesNoFactionWhenPlacementFails(t *testing.T) {
 	if stored := readAccount(t, store, "player@marajanda.com"); stored.seated {
 		t.Fatalf("a failed placement seated the account at %v", stored.origin)
 	}
+	// The founding entities are written in the same transaction, so a placement
+	// that failed leaves no entity standing anywhere either.
+	if count := entityCount(t, store); count != 0 {
+		t.Fatalf("entity count after a failed placement = %d, want 0", count)
+	}
 }
 
 // SaveFaction rejects a race the game does not know rather than storing it and
@@ -780,7 +785,7 @@ func TestOpenSharedMemoryUsesNamedDatabase(t *testing.T) {
 	assertPragma(t, second, "foreign_keys", 1)
 }
 
-func TestFactionStartsAtOrigin(t *testing.T) {
+func TestSaveFactionSeatsAndFoundsAFaction(t *testing.T) {
 	store, err := OpenMemory(t.Context(), testGame)
 	if err != nil {
 		t.Fatal(err)
@@ -813,8 +818,23 @@ func TestFactionStartsAtOrigin(t *testing.T) {
 	if !found || !faction.Configured() || faction.Name != "The Wayfarers" || faction.Race != game.RaceElf {
 		t.Fatalf("Faction = %#v, %t; want The Wayfarers of the elves", faction, found)
 	}
-	if faction.Location.Q() != 0 || faction.Location.R() != 0 {
-		t.Fatalf("Faction location = %v, want the axial origin", faction.Location)
+	// A faction has no location. Its entities do, and configuring the faction
+	// is what puts them on the map.
+	entities, err := store.EntitiesAsOf(t.Context(), "player@marajanda.com", game.FirstTurn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entities) != 2 {
+		t.Fatalf("founding entities = %#v, want a leader and a hamlet", entities)
+	}
+	for index, want := range []Entity{
+		{Code: "LEADER-1", Name: "LEADER-1", Kind: game.EntityKindLeader, Location: seated.Origin},
+		{Code: "HAMLET-1", Name: "HAMLET-1", Kind: game.EntityKindHamlet, Location: seated.Origin},
+	} {
+		got := entities[index]
+		if got.ID == 0 || got.Code != want.Code || got.Name != want.Name || got.Kind != want.Kind || !got.Location.Equals(want.Location) {
+			t.Fatalf("founding entity %d = %#v, want %#v on the faction origin", index, got, want)
+		}
 	}
 }
 

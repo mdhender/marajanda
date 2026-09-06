@@ -68,53 +68,130 @@ const (
 	MaximumWorldRadius = 120
 )
 
+// The end-of-time sentinel is written into the schema from game.EndOfTimeTurn
+// rather than typed out again beside it. It bounds the current turn and it is
+// what the partial indexes below match on, so a schema naming one value while
+// the code writes another would index no open period and close none either.
 var schema = sqlitemigration.Schema{
-	AppID: ApplicationID,
-	Migrations: []string{
-		`CREATE TABLE game (
-			id     INTEGER PRIMARY KEY CHECK (id = 1),
-			seed1  INTEGER NOT NULL,
-			seed2  INTEGER NOT NULL,
-			width  INTEGER NOT NULL CHECK (width > 0),
-			height INTEGER NOT NULL CHECK (height > 0)
-		) STRICT;
-
-		CREATE TABLE hexes (
-			q         INTEGER NOT NULL,
-			r         INTEGER NOT NULL,
-			terrain   TEXT NOT NULL CHECK (terrain IN ('grassland', 'forest', 'hills', 'marsh', 'mountains', 'ocean', 'lake', 'ice')),
-			elevation INTEGER NOT NULL,
-			PRIMARY KEY (q, r)
-		) STRICT;
-
-		-- origin_q and origin_r are nullable because a player account exists
-		-- before it is seated: placement needs the faction's race, which is
-		-- chosen on the faction form, not at account creation. SQLite treats
-		-- NULLs as distinct in a UNIQUE constraint, so any number of unseated
-		-- accounts coexist while the constraint still rejects two accounts on
-		-- one hex.
-		CREATE TABLE accounts (
-			email       TEXT NOT NULL CHECK (email = lower(email)),
-			secret_hash BLOB NOT NULL,
-			handle      TEXT NOT NULL UNIQUE,
-			role        TEXT NOT NULL CHECK (role IN ('admin', 'player')),
-			origin_q    INTEGER,
-			origin_r    INTEGER,
-			CHECK ((origin_q IS NULL) = (origin_r IS NULL)),
-			UNIQUE (origin_q, origin_r),
-			UNIQUE (email),
-			FOREIGN KEY (origin_q, origin_r) REFERENCES hexes (q, r) DEFERRABLE INITIALLY DEFERRED
-		) STRICT;
-
-		CREATE TABLE factions (
-			account_email TEXT PRIMARY KEY REFERENCES accounts (email) ON DELETE CASCADE,
-			name          TEXT NOT NULL,
-			race          TEXT NOT NULL DEFAULT 'human' CHECK (race IN ('human', 'elf', 'dwarf', 'orc', 'kobold', 'halfling')),
-			location_q    INTEGER NOT NULL DEFAULT 0,
-			location_r    INTEGER NOT NULL DEFAULT 0
-		) STRICT;`,
-	},
+	AppID:      ApplicationID,
+	Migrations: []string{fmt.Sprintf(baselineMigration, game.EndOfTimeTurn)},
 }
+
+// baselineMigration is the entire schema. During beta it is a single squashed
+// baseline: amend it and delete existing databases rather than appending a
+// migration. Its only substitution is the end-of-time turn.
+const baselineMigration = `CREATE TABLE game (
+	id           INTEGER PRIMARY KEY CHECK (id = 1),
+	seed1        INTEGER NOT NULL,
+	seed2        INTEGER NOT NULL,
+	width        INTEGER NOT NULL CHECK (width > 0),
+	height       INTEGER NOT NULL CHECK (height > 0),
+	-- There is one game per database, so there is one clock. A turn
+	-- starts at 1 and only ever increases; it never reaches the
+	-- end-of-time sentinel a period that has not ended runs to.
+	current_turn INTEGER NOT NULL DEFAULT 1 CHECK (current_turn >= 1 AND current_turn < %[1]d)
+) STRICT;
+
+CREATE TABLE hexes (
+	q         INTEGER NOT NULL,
+	r         INTEGER NOT NULL,
+	terrain   TEXT NOT NULL CHECK (terrain IN ('grassland', 'forest', 'hills', 'marsh', 'mountains', 'ocean', 'lake', 'ice')),
+	elevation INTEGER NOT NULL,
+	PRIMARY KEY (q, r)
+) STRICT;
+
+-- origin_q and origin_r are nullable because a player account exists
+-- before it is seated: placement needs the faction's race, which is
+-- chosen on the faction form, not at account creation. SQLite treats
+-- NULLs as distinct in a UNIQUE constraint, so any number of unseated
+-- accounts coexist while the constraint still rejects two accounts on
+-- one hex.
+--
+-- The origin is the faction's permanent founding seat, which the
+-- placement exclusion set depends on. It is not a current position:
+-- nothing stands on the map but an entity, and an entity carries its
+-- own location.
+CREATE TABLE accounts (
+	email       TEXT NOT NULL CHECK (email = lower(email)),
+	secret_hash BLOB NOT NULL,
+	handle      TEXT NOT NULL UNIQUE,
+	role        TEXT NOT NULL CHECK (role IN ('admin', 'player')),
+	origin_q    INTEGER,
+	origin_r    INTEGER,
+	CHECK ((origin_q IS NULL) = (origin_r IS NULL)),
+	UNIQUE (origin_q, origin_r),
+	UNIQUE (email),
+	FOREIGN KEY (origin_q, origin_r) REFERENCES hexes (q, r) DEFERRABLE INITIALLY DEFERRED
+) STRICT;
+
+-- A faction has no coordinates. It owns entities, and they have the
+-- locations.
+CREATE TABLE factions (
+	account_email TEXT PRIMARY KEY REFERENCES accounts (email) ON DELETE CASCADE,
+	name          TEXT NOT NULL,
+	race          TEXT NOT NULL DEFAULT 'human' CHECK (race IN ('human', 'elf', 'dwarf', 'orc', 'kobold', 'halfling'))
+) STRICT;
+
+-- An entity is anything that stands in the world. Its identity is this
+-- integer primary key: immutable, never reused, and never a PRNG
+-- instance key. Everything else about it is a fact dated in turns.
+--
+-- Ownership lives on the entity row rather than in a fact because
+-- nothing transfers an entity between factions yet. It moves into a
+-- fact the day something does.
+CREATE TABLE entities (
+	id            INTEGER PRIMARY KEY,
+	faction_email TEXT NOT NULL REFERENCES factions (account_email) ON DELETE CASCADE,
+	created_turn  INTEGER NOT NULL CHECK (created_turn >= 1)
+) STRICT;
+
+-- Code, name and kind share one fact table because they change rarely
+-- and together. Every fact table carries the same half-open period
+-- [effective_from, effective_through), read with one predicate:
+--
+--   effective_from <= :turn AND :turn < effective_through
+CREATE TABLE entity_facts (
+	entity_id         INTEGER NOT NULL REFERENCES entities (id) ON DELETE CASCADE,
+	code              TEXT NOT NULL,
+	name              TEXT NOT NULL,
+	kind              TEXT NOT NULL CHECK (kind IN ('leader', 'hamlet')),
+	effective_from    INTEGER NOT NULL CHECK (effective_from >= 0),
+	effective_through INTEGER NOT NULL CHECK (effective_through > effective_from),
+	PRIMARY KEY (entity_id, effective_from)
+) STRICT;
+
+-- Location is its own fact table from the start because it is the
+-- attribute that changes every turn a leader moves.
+CREATE TABLE entity_locations (
+	entity_id         INTEGER NOT NULL REFERENCES entities (id) ON DELETE CASCADE,
+	q                 INTEGER NOT NULL,
+	r                 INTEGER NOT NULL,
+	effective_from    INTEGER NOT NULL CHECK (effective_from >= 0),
+	effective_through INTEGER NOT NULL CHECK (effective_through > effective_from),
+	PRIMARY KEY (entity_id, effective_from),
+	FOREIGN KEY (q, r) REFERENCES hexes (q, r)
+) STRICT;
+
+-- A unit is inventory: a quantity of a kind held by an entity. It has
+-- no code, no name and no identity of its own, so merging two stacks is
+-- addition. kind carries no CHECK: the list of unit kinds is a game
+-- rule, and it arrives with the first rule that produces one rather
+-- than being guessed at now.
+CREATE TABLE units (
+	entity_id         INTEGER NOT NULL REFERENCES entities (id) ON DELETE CASCADE,
+	kind              TEXT NOT NULL,
+	quantity          INTEGER NOT NULL CHECK (quantity > 0),
+	effective_from    INTEGER NOT NULL CHECK (effective_from >= 0),
+	effective_through INTEGER NOT NULL CHECK (effective_through > effective_from),
+	PRIMARY KEY (entity_id, kind, effective_from)
+) STRICT;
+
+-- For one entity the periods of a fact table are contiguous and never
+-- overlap, and exactly one of them runs to the end of time. These are
+-- what hold the second half of that.
+CREATE UNIQUE INDEX entity_facts_open ON entity_facts (entity_id) WHERE effective_through = %[1]d;
+CREATE UNIQUE INDEX entity_locations_open ON entity_locations (entity_id) WHERE effective_through = %[1]d;
+CREATE UNIQUE INDEX units_open ON units (entity_id, kind) WHERE effective_through = %[1]d;`
 
 // SeedAccount contains the secret and public data needed to create an account.
 type SeedAccount struct {
@@ -141,6 +218,10 @@ type Account struct {
 // the radius is fixed when the database is created: the world is generated once
 // from all three, and changing any of them afterwards would describe a
 // different world than the one on disk.
+//
+// The current turn is not here. It is the one column of the game row that
+// moves, so it is read by CurrentTurn rather than carried in a value that
+// callers compare whole against the values they created the database with.
 type Game struct {
 	Seed1  int64
 	Seed2  int64
@@ -154,10 +235,12 @@ func (g Game) Seeds() prng.Seeds {
 }
 
 // Faction contains a player's faction metadata.
+//
+// A faction has no location. It owns entities, and they are what stand on the
+// map; see Entity.
 type Faction struct {
-	Name     string
-	Race     game.Race
-	Location hexg.Hex
+	Name string
+	Race game.Race
 }
 
 // Configured reports whether all required faction metadata is present.
@@ -433,12 +516,11 @@ func (s *Store) Faction(ctx context.Context, email string) (Faction, bool, error
 	var faction Faction
 	found := false
 	if err := sqlitex.ExecuteTransient(conn, `
-		SELECT name, race, location_q, location_r FROM factions WHERE account_email = ?1;`, &sqlitex.ExecOptions{
+		SELECT name, race FROM factions WHERE account_email = ?1;`, &sqlitex.ExecOptions{
 		Args: []any{normalizeEmail(email)},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			faction.Name = stmt.ColumnText(0)
 			faction.Race = game.Race(stmt.ColumnText(1))
-			faction.Location = hexg.NewHex(stmt.ColumnInt(2), stmt.ColumnInt(3))
 			found = true
 			return nil
 		},
@@ -448,8 +530,9 @@ func (s *Store) Faction(ctx context.Context, email string) (Faction, bool, error
 	return faction, found, nil
 }
 
-// SaveFaction creates or updates an account's faction metadata and seats the
-// account if it is not seated yet.
+// SaveFaction creates or updates an account's faction metadata, seats the
+// account if it is not seated yet, and founds the faction if it has not been
+// founded yet.
 //
 // It returns the account as it now stands, so a caller holding a session can
 // replace the unseated copy it started with.
@@ -502,8 +585,8 @@ func (s *Store) SaveFaction(ctx context.Context, email, name string, race game.R
 		return Account{}, fmt.Errorf("seat account: %w", err)
 	}
 	if err := sqlitex.ExecuteTransient(conn, `
-		INSERT INTO factions (account_email, name, race, location_q, location_r)
-		VALUES (?1, ?2, ?3, 0, 0)
+		INSERT INTO factions (account_email, name, race)
+		VALUES (?1, ?2, ?3)
 		ON CONFLICT (account_email) DO UPDATE SET name = excluded.name, race = excluded.race;`, &sqlitex.ExecOptions{
 		Args: []any{email, name, string(race)},
 	}); err != nil {
@@ -519,6 +602,13 @@ func (s *Store) SaveFaction(ctx context.Context, email, name string, race game.R
 	}
 	if !found {
 		return Account{}, errors.New("save faction: account vanished while saving")
+	}
+
+	// Founding the faction is part of the same transaction. A faction that is
+	// saved must have an origin under it and something standing on that origin,
+	// so a placement or an insert that fails leaves no entity behind either.
+	if err := foundFaction(conn, email, seated.Origin); err != nil {
+		return Account{}, err
 	}
 	return seated, nil
 }

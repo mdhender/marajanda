@@ -210,7 +210,7 @@ func TestPlayerMapRevealsOnlyVisibleHexes(t *testing.T) {
 		&testStore{
 			game:    testMapGame(),
 			world:   testMapWorld(),
-			faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman, Location: hexg.NewHex(0, 0)},
+			faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman},
 			found:   true,
 			visible: []hexg.Hex{playerOrigin},
 		},
@@ -264,7 +264,7 @@ func TestPlayerMapDoesNotLocateFog(t *testing.T) {
 		&testStore{
 			game:    testMapGame(),
 			world:   world,
-			faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman, Location: hexg.NewHex(0, 0)},
+			faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman},
 			found:   true,
 			visible: []hexg.Hex{origin},
 		},
@@ -473,7 +473,7 @@ func TestJumpBoxBelongsToTheAdminMap(t *testing.T) {
 		&testStore{
 			game:    testMapGame(),
 			world:   testMapWorld(),
-			faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman, Location: hexg.NewHex(0, 0)},
+			faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman},
 			found:   true,
 			visible: []hexg.Hex{playerOrigin},
 		},

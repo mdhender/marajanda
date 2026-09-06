@@ -27,7 +27,9 @@ type findOrCreateFunc func(context.Context, string) (datastore.Account, error)
 type applicationStore interface {
 	Game(context.Context) (datastore.Game, error)
 	World(context.Context) (game.World, error)
+	CurrentTurn(context.Context) (int, error)
 	Faction(context.Context, string) (datastore.Faction, bool, error)
+	EntitiesAsOf(context.Context, string, int) ([]datastore.Entity, error)
 	SaveFaction(context.Context, string, string, game.Race) (datastore.Account, error)
 	VisibleHexes(context.Context, string) ([]hexg.Hex, error)
 }
@@ -48,10 +50,14 @@ type pageData struct {
 	Account datastore.Account
 	Faction datastore.Faction
 	Game    datastore.Game
-	Name    string
-	Race    game.Race
-	Races   []game.Race
-	Map     mapView
+	// Turn is the turn Entities was read as of. The two travel together: a
+	// list of entities is only true of the turn it was read on.
+	Turn     int
+	Entities []datastore.Entity
+	Name     string
+	Race     game.Race
+	Races    []game.Race
+	Map      mapView
 	// Script is where the page loads HTMX from. It is filled in by render
 	// rather than by every handler, the way Version is.
 	Script string
@@ -208,7 +214,23 @@ func (app *application) dashboard(role string) http.HandlerFunc {
 				http.Redirect(w, r, "/player/faction", http.StatusSeeOther)
 				return
 			}
+			// The turn is read first and the entities as of it, rather than
+			// each being asked for the latest. A dashboard that named one turn
+			// and listed another turn's entities would be wrong in the way
+			// these tables exist to prevent.
+			turn, err := app.store.CurrentTurn(r.Context())
+			if err != nil {
+				http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
+				return
+			}
+			entities, err := app.store.EntitiesAsOf(r.Context(), account.Email, turn)
+			if err != nil {
+				http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
+				return
+			}
 			data.Faction = faction
+			data.Turn = turn
+			data.Entities = entities
 		}
 		title := "Player dashboard"
 		if role == "admin" {
@@ -484,6 +506,15 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 	.faction-summary .people { margin: 0 0 .75rem; color: var(--muted); text-transform: capitalize; }
 	.location { min-width: 9rem; padding-left: 2rem; border-left: 1px solid var(--line); }
 	.location strong { display: block; margin-top: .35rem; color: var(--ink); font: 400 1.65rem/1.2 Georgia, 'Times New Roman', serif; }
+	.force { margin-top: 2rem; }
+	.force h2 { margin: 0; font: 400 1.15rem/1.3 Georgia, 'Times New Roman', serif; letter-spacing: .02em; }
+	.force > p { max-width: 44rem; margin: .35rem 0 1rem; color: var(--muted); font: .82rem/1.5 system-ui, sans-serif; }
+	.force ol { display: grid; max-width: 34rem; gap: 1px; margin: 0; padding: 0; list-style: none; background: var(--line); border: 1px solid var(--line); }
+	.force li { display: flex; align-items: baseline; gap: .7rem; padding: .6rem .9rem; background: rgba(13,23,28,.88); font: .82rem/1.4 system-ui, sans-serif; }
+	.force b { min-width: 8ch; color: var(--gold); font-weight: 700; letter-spacing: .08em; }
+	.force .entity-name { min-width: 8rem; color: var(--ink); }
+	.force .entity-kind { color: var(--muted); text-transform: capitalize; }
+	.force .entity-coord { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
     .map-page { max-width: none; }
     /* The map scrolls inside its frame rather than being scaled down to fit it.
        Scrolling is the browser's own gesture, so a phone pans it with one
@@ -635,10 +666,28 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 			  <p>Your people await their first command.</p>
 			</div>
 			<div class="location">
-			  <p class="label">Current location</p>
-			  <strong>({{.Faction.Location.Q}}, {{.Faction.Location.R}})</strong>
+			  <p class="label">Turn</p>
+			  <strong>{{.Turn}}</strong>
 			</div>
 		  </div>
+		  {{/* A faction has no location of its own. Its entities do, so this is
+		       where the dashboard answers "where am I": every entity the
+		       faction controls, as it stands on the turn named above. */}}
+		  <section class="force" aria-label="What your faction controls">
+			<h2>Your force</h2>
+			{{if .Entities}}
+			<p>Everything your faction controls, and where it stands this turn.</p>
+			<ol>
+			  {{/* A name defaults to its entity's code, so it is printed only
+			       once it says something the code does not. The span stays
+			       either way to keep the columns lined up. */}}
+			  {{range .Entities}}<li><b>{{.Code}}</b><span class="entity-name">{{if ne .Name .Code}}{{.Name}}{{end}}</span><span class="entity-kind">{{.Kind}}</span><span class="entity-coord">({{.Location.Q}}, {{.Location.R}})</span></li>
+			  {{end}}
+			</ol>
+			{{else}}
+			<p>Your faction controls nothing yet.</p>
+			{{end}}
+		  </section>
 		  <p class="map-actions"><a class="sign-link" href="/player/map">View your map</a></p>
 		  {{end}}
         </div>

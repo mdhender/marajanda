@@ -16,7 +16,7 @@ that covers the area you touch, and do not silently reinterpret it:
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — stack, package boundaries, flag/env table, server lifecycle.
 - [docs/DATASTORE.md](docs/DATASTORE.md) — SQLite identity, open modes, migrations, seed data.
 - [docs/ACCOUNTS.md](docs/ACCOUNTS.md) — identity, sessions, invitations, registration.
-- [docs/reference/](docs/reference/) — `player-origin.md`, `terrain.md`, `compass.md`, `map-view.md`, `glossary.md`.
+- [docs/reference/](docs/reference/) — `player-origin.md`, `terrain.md`, `compass.md`, `map-view.md`, `entities.md`, `glossary.md`.
 
 Ask the user before deciding game rules or server behavior these documents do
 not specify.
