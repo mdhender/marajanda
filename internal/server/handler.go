@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"html/template"
 	"net/http"
 	"net/mail"
@@ -27,7 +28,7 @@ type applicationStore interface {
 	Game(context.Context) (datastore.Game, error)
 	World(context.Context) (game.World, error)
 	Faction(context.Context, string) (datastore.Faction, bool, error)
-	SaveFaction(context.Context, string, string) error
+	SaveFaction(context.Context, string, string, game.Race) (datastore.Account, error)
 	VisibleHexes(context.Context, string) ([]hexg.Hex, error)
 }
 
@@ -48,6 +49,8 @@ type pageData struct {
 	Faction datastore.Faction
 	Game    datastore.Game
 	Name    string
+	Race    game.Race
+	Races   []game.Race
 	Map     mapView
 }
 
@@ -228,7 +231,24 @@ func (app *application) factionForm(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/player/dashboard", http.StatusSeeOther)
 		return
 	}
-	app.render(w, http.StatusOK, pageData{Title: "Configure faction", View: "faction", Account: account})
+	app.render(w, http.StatusOK, factionPage(account, "", game.DefaultRace, ""))
+}
+
+// factionPage builds the faction form, echoing back whatever the player last
+// submitted so a rejected entry is not retyped from scratch.
+func factionPage(account datastore.Account, name string, race game.Race, message string) pageData {
+	if !race.Valid() {
+		race = game.DefaultRace
+	}
+	return pageData{
+		Title:   "Configure faction",
+		View:    "faction",
+		Account: account,
+		Name:    name,
+		Race:    race,
+		Races:   game.Races(),
+		Message: message,
+	}
 }
 
 func (app *application) configureFaction(w http.ResponseWriter, r *http.Request) {
@@ -246,19 +266,55 @@ func (app *application) configureFaction(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		app.render(w, http.StatusBadRequest, pageData{Title: "Configure faction", View: "faction", Account: account, Message: "Marajanda could not read that faction name."})
+		app.render(w, http.StatusBadRequest, factionPage(account, "", game.DefaultRace, "Marajanda could not read that faction."))
 		return
+	}
+	// An omitted race is the default rather than an error; a race the game does
+	// not know is a rejection, because accepting it would silently seat the
+	// player as something they did not choose.
+	race := game.Race(strings.ToLower(strings.TrimSpace(r.FormValue("race"))))
+	if race == "" {
+		race = game.DefaultRace
 	}
 	name, err := game.NormalizeFactionName(r.FormValue("name"))
 	if err != nil {
-		app.render(w, http.StatusUnprocessableEntity, pageData{Title: "Configure faction", View: "faction", Account: account, Name: r.FormValue("name"), Message: err.Error()})
+		app.render(w, http.StatusUnprocessableEntity, factionPage(account, r.FormValue("name"), race, err.Error()))
 		return
 	}
-	if err := app.store.SaveFaction(r.Context(), account.Email, name); err != nil {
+	if !race.Valid() {
+		app.render(w, http.StatusUnprocessableEntity, factionPage(account, name, game.DefaultRace, "Choose one of the peoples of Marajanda."))
+		return
+	}
+	// Saving the faction is what seats the account, so the session's copy of it
+	// is replaced with the seated one. Without that the player would carry an
+	// origin-less account into the map page for the rest of the session.
+	seated, err := app.store.SaveFaction(r.Context(), account.Email, name, race)
+	if err != nil {
+		if errors.Is(err, game.ErrNoOrigin) {
+			app.render(w, http.StatusConflict, factionPage(account, name, race,
+				"Marajanda has nowhere left to settle a faction of that people. Try another."))
+			return
+		}
 		http.Error(w, "Marajanda could not save your faction.", http.StatusInternalServerError)
 		return
 	}
+	app.replaceSessionAccount(r, seated)
 	http.Redirect(w, r, "/player/dashboard", http.StatusSeeOther)
+}
+
+// replaceSessionAccount updates the account held by the current session. A
+// session is a snapshot taken at sign-in, so anything that changes the account
+// row underneath it has to say so.
+func (app *application) replaceSessionAccount(r *http.Request, account datastore.Account) {
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return
+	}
+	app.sessionsMu.Lock()
+	defer app.sessionsMu.Unlock()
+	if _, ok := app.sessions[cookie.Value]; ok {
+		app.sessions[cookie.Value] = account
+	}
 }
 
 func (app *application) requirePlayer(w http.ResponseWriter, r *http.Request) (datastore.Account, bool) {
@@ -368,8 +424,9 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .card h1 { max-width: none; font-size: clamp(2.5rem, 7vw, 4rem); }
     form { display: grid; gap: 1.25rem; margin-top: 2.25rem; }
     label { display: grid; gap: .45rem; color: var(--muted); font: .78rem/1.2 system-ui, sans-serif; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
-    input { width: 100%; padding: .85rem 1rem; color: var(--ink); background: #0c191d; border: 1px solid #385057; border-radius: 2px; font: 1rem/1.4 system-ui, sans-serif; }
-    input:focus { outline: 2px solid var(--gold); outline-offset: 2px; }
+    input, select { width: 100%; padding: .85rem 1rem; color: var(--ink); background: #0c191d; border: 1px solid #385057; border-radius: 2px; font: 1rem/1.4 system-ui, sans-serif; }
+    input:focus, select:focus { outline: 2px solid var(--gold); outline-offset: 2px; }
+    select { text-transform: capitalize; }
     .message { margin: 1.25rem 0 0; padding: .8rem 1rem; color: #ffe7d8; background: rgba(198,106,67,.18); border-left: 3px solid var(--ember); }
     .dashboard { max-width: 52rem; }
     .dashboard h1 { max-width: 12ch; overflow-wrap: anywhere; }
@@ -383,6 +440,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 	.faction-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 2rem; }
 	.faction-summary h2 { margin-bottom: .35rem; font-size: clamp(1.75rem, 4vw, 2.5rem); }
 	.faction-summary .label { margin: 0; color: var(--gold); font: 700 .72rem/1.2 system-ui, sans-serif; letter-spacing: .16em; text-transform: uppercase; }
+	.faction-summary .people { margin: 0 0 .75rem; color: var(--muted); text-transform: capitalize; }
 	.location { min-width: 9rem; padding-left: 2rem; border-left: 1px solid var(--line); }
 	.location strong { display: block; margin-top: .35rem; color: var(--ink); font: 400 1.65rem/1.2 Georgia, 'Times New Roman', serif; }
     .map-page { max-width: none; }
@@ -462,6 +520,8 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		<form action="/player/faction" method="post">
 		  <label>Faction name<input name="name" type="text" value="{{.Name}}" aria-describedby="faction-name-help" required autofocus></label>
 		  <small id="faction-name-help">Use 3 to 32 printable characters. Spaces between words will be normalized.</small>
+		  <label>People<select name="race" aria-describedby="faction-race-help">{{$chosen := .Race}}{{range .Races}}<option value="{{.}}"{{if eq . $chosen}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+		  <small id="faction-race-help">Your people decide the country your faction is settled in.</small>
 		  <button class="primary" type="submit">Establish faction</button>
 		</form>
 	  </section>
@@ -527,6 +587,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 			<div>
 			  <p class="label">Your faction</p>
 			  <h2>{{.Faction.Name}}</h2>
+			  <p class="people">{{.Faction.Race}}</p>
 			  <p>Your people await their first command.</p>
 			</div>
 			<div class="location">

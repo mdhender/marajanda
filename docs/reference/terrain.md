@@ -76,6 +76,24 @@ Terrain and elevation are derived from the same value and always agree:
 The game origin `(0, 0, 0)` is an ordinary hex. It is part of every world and
 receives whatever terrain and elevation the generator produces for it.
 
+## Race terrain preference
+
+Each race orders every land terrain by preference, most favored first. An order
+is total: it names each of the five land terrains exactly once, so no race
+refuses a terrain outright.
+
+| Race | Terrain order, most favored first |
+| --- | --- |
+| `human` | `grassland`, `forest`, `hills`, `marsh`, `mountains` |
+| `elf` | `forest`, `hills`, `grassland`, `marsh`, `mountains` |
+| `dwarf` | `mountains`, `hills`, `forest`, `grassland`, `marsh` |
+| `orc` | `hills`, `mountains`, `marsh`, `grassland`, `forest` |
+| `kobold` | `mountains`, `hills`, `marsh`, `forest`, `grassland` |
+| `halfling` | `grassland`, `hills`, `forest`, `marsh`, `mountains` |
+
+The order decides which candidate pool an account is placed from. See
+[Player origin reference](player-origin.md#placement-procedure).
+
 ## Polar ice
 
 Row `-height` and row `+height` are `ice` across their full width. They are the

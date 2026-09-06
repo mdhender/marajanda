@@ -33,7 +33,8 @@ func (app *application) agentSignIn(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Marajanda could not create the development session.", http.StatusInternalServerError)
 		return
 	}
-	if err := app.ensureAgentFaction(r.Context(), account); err != nil {
+	account, err = app.ensureAgentFaction(r.Context(), account)
+	if err != nil {
 		http.Error(w, "Marajanda could not create the development session.", http.StatusInternalServerError)
 		return
 	}
@@ -52,22 +53,27 @@ func (app *application) agentSignIn(w http.ResponseWriter, r *http.Request) {
 // It fills the gap for an account it just created and for one created before
 // this route did so. Only players control factions, so admins are left alone,
 // and a faction that is already configured is never overwritten.
-func (app *application) ensureAgentFaction(ctx context.Context, account datastore.Account) error {
+//
+// Configuring the faction is also what seats the account, so the account it
+// returns - not the unseated one it was handed - is the one the session gets.
+// The race is always the default: a development sign-in picks nothing, and
+// drawing one would make the same agent land somewhere new each time.
+func (app *application) ensureAgentFaction(ctx context.Context, account datastore.Account) (datastore.Account, error) {
 	if app.store == nil || account.Role != "player" {
-		return nil
+		return account, nil
 	}
 	faction, found, err := app.store.Faction(ctx, account.Email)
 	if err != nil {
-		return err
+		return account, err
 	}
 	if found && faction.Configured() {
-		return nil
+		return account, nil
 	}
 	name, err := game.NormalizeFactionName(agentFactionName())
 	if err != nil {
-		return err
+		return account, err
 	}
-	return app.store.SaveFaction(ctx, account.Email, name)
+	return app.store.SaveFaction(ctx, account.Email, name, game.DefaultRace)
 }
 
 // agentFactionName builds a faction name from the passphrase generator.

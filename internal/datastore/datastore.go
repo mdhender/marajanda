@@ -34,8 +34,10 @@ const (
 	// DefaultWorldWidth and DefaultWorldHeight are the half-extents of a new
 	// world: the columns either side of the origin, and the rows above and
 	// below it. The world is 2*width+1 by 2*height+1, so the defaults give
-	// 511 by 255 - about 300 land hexes for each of 256 players, with roughly
-	// 19 hexes between neighbouring origins.
+	// 511 by 255. Its equatorial belt holds 47,689 land hexes, which seats
+	// 402 factions of one race and some 650 when the six are spread evenly -
+	// room for 256 players without pushing anyone past a second-choice
+	// terrain.
 	//
 	// Both are half-extents so that the world always has an odd extent, which
 	// is what puts the origin in its true centre and gives the wrap a window
@@ -48,9 +50,9 @@ const (
 	// triggered it timing out, not by storage: the maxima are about half a
 	// million hexes, which is some thirteen megabytes on disk.
 	// The floors are set by placement rather than by geometry: origins sit
-	// more than fifteen hexes from the game origin and from each other, so a
-	// world has to be wide and tall enough to hold several such hexes and
-	// still have land among them.
+	// more than fifteen hexes from the game origin, inside an equatorial belt
+	// two thirds of the way to each pole, so a world has to be wide and tall
+	// enough to hold several such hexes and still have land among them.
 	MinimumWorldWidth  = 20
 	MaximumWorldWidth  = 511
 	MinimumWorldHeight = 20
@@ -85,13 +87,20 @@ var schema = sqlitemigration.Schema{
 			PRIMARY KEY (q, r)
 		) STRICT;
 
+		-- origin_q and origin_r are nullable because a player account exists
+		-- before it is seated: placement needs the faction's race, which is
+		-- chosen on the faction form, not at account creation. SQLite treats
+		-- NULLs as distinct in a UNIQUE constraint, so any number of unseated
+		-- accounts coexist while the constraint still rejects two accounts on
+		-- one hex.
 		CREATE TABLE accounts (
 			email       TEXT NOT NULL CHECK (email = lower(email)),
 			secret_hash BLOB NOT NULL,
 			handle      TEXT NOT NULL UNIQUE,
 			role        TEXT NOT NULL CHECK (role IN ('admin', 'player')),
-			origin_q    INTEGER NOT NULL,
-			origin_r    INTEGER NOT NULL,
+			origin_q    INTEGER,
+			origin_r    INTEGER,
+			CHECK ((origin_q IS NULL) = (origin_r IS NULL)),
 			UNIQUE (origin_q, origin_r),
 			UNIQUE (email),
 			FOREIGN KEY (origin_q, origin_r) REFERENCES hexes (q, r) DEFERRABLE INITIALLY DEFERRED
@@ -100,6 +109,7 @@ var schema = sqlitemigration.Schema{
 		CREATE TABLE factions (
 			account_email TEXT PRIMARY KEY REFERENCES accounts (email) ON DELETE CASCADE,
 			name          TEXT NOT NULL,
+			race          TEXT NOT NULL DEFAULT 'human' CHECK (race IN ('human', 'elf', 'dwarf', 'orc', 'kobold', 'halfling')),
 			location_q    INTEGER NOT NULL DEFAULT 0,
 			location_r    INTEGER NOT NULL DEFAULT 0
 		) STRICT;`,
@@ -115,11 +125,16 @@ type SeedAccount struct {
 }
 
 // Account contains the non-secret account data needed after authentication.
+//
+// Origin is meaningful only when Seated is true. A player account is created
+// before it holds a hex: placement needs the faction's race, which is chosen on
+// the faction form. An admin account is seated as it is created.
 type Account struct {
 	Email  string
 	Handle string
 	Role   string
 	Origin hexg.Hex
+	Seated bool
 }
 
 // Game contains the persisted state shared by the entire game. Like the seeds,
@@ -141,12 +156,13 @@ func (g Game) Seeds() prng.Seeds {
 // Faction contains a player's faction metadata.
 type Faction struct {
 	Name     string
+	Race     game.Race
 	Location hexg.Hex
 }
 
 // Configured reports whether all required faction metadata is present.
 func (f Faction) Configured() bool {
-	return f.Name != ""
+	return f.Name != "" && f.Race.Valid()
 }
 
 // Store owns an open SQLite database.
@@ -297,7 +313,7 @@ func (s *Store) Authenticate(ctx context.Context, email, secret string) (Account
 			stmt.ColumnBytes(1, hash)
 			account.Handle = stmt.ColumnText(2)
 			account.Role = stmt.ColumnText(3)
-			account.Origin = hexg.NewHex(stmt.ColumnInt(4), stmt.ColumnInt(5))
+			account.Origin, account.Seated = readOrigin(stmt, 4)
 			return nil
 		},
 	}); err != nil {
@@ -417,11 +433,12 @@ func (s *Store) Faction(ctx context.Context, email string) (Faction, bool, error
 	var faction Faction
 	found := false
 	if err := sqlitex.ExecuteTransient(conn, `
-		SELECT name, location_q, location_r FROM factions WHERE account_email = ?1;`, &sqlitex.ExecOptions{
+		SELECT name, race, location_q, location_r FROM factions WHERE account_email = ?1;`, &sqlitex.ExecOptions{
 		Args: []any{normalizeEmail(email)},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			faction.Name = stmt.ColumnText(0)
-			faction.Location = hexg.NewHex(stmt.ColumnInt(1), stmt.ColumnInt(2))
+			faction.Race = game.Race(stmt.ColumnText(1))
+			faction.Location = hexg.NewHex(stmt.ColumnInt(2), stmt.ColumnInt(3))
 			found = true
 			return nil
 		},
@@ -431,23 +448,79 @@ func (s *Store) Faction(ctx context.Context, email string) (Faction, bool, error
 	return faction, found, nil
 }
 
-// SaveFaction creates or updates an account's faction metadata.
-func (s *Store) SaveFaction(ctx context.Context, email, name string) error {
+// SaveFaction creates or updates an account's faction metadata and seats the
+// account if it is not seated yet.
+//
+// It returns the account as it now stands, so a caller holding a session can
+// replace the unseated copy it started with.
+//
+// Placement and the faction row are written in one transaction. A player's
+// race is what decides where they are seated, so the two cannot be separated:
+// a placement that fails must leave no faction behind, and a faction that is
+// saved must have an origin under it.
+func (s *Store) SaveFaction(ctx context.Context, email, name string, race game.Race) (_ Account, err error) {
+	if !race.Valid() {
+		return Account{}, fmt.Errorf("save faction: invalid race %q", race)
+	}
+	email = normalizeEmail(email)
+
 	conn, release, err := s.take(ctx)
 	if err != nil {
-		return err
+		return Account{}, err
 	}
 	defer release()
 
-	if err := sqlitex.ExecuteTransient(conn, `
-		INSERT INTO factions (account_email, name, location_q, location_r)
-		VALUES (?1, ?2, 0, 0)
-		ON CONFLICT (account_email) DO UPDATE SET name = excluded.name;`, &sqlitex.ExecOptions{
-		Args: []any{normalizeEmail(email), name},
-	}); err != nil {
-		return fmt.Errorf("save faction: %w", err)
+	account, found, err := readAccountRecord(conn, email)
+	if err != nil {
+		return Account{}, err
 	}
-	return nil
+	if !found {
+		return Account{}, errors.New("save faction: unknown account")
+	}
+
+	// Placement reads the world and every seated origin, so it runs before the
+	// write transaction opens rather than holding one across a full map scan.
+	if !account.Seated {
+		origin, err := accountPlacement(conn, email, race)
+		if err != nil {
+			return Account{}, err
+		}
+		account.Origin, account.Seated = origin, true
+	}
+
+	end, err := sqlitex.ImmediateTransaction(conn)
+	if err != nil {
+		return Account{}, err
+	}
+	defer end(&err)
+
+	if err := sqlitex.ExecuteTransient(conn, `
+		UPDATE accounts SET origin_q = ?2, origin_r = ?3
+		WHERE email = ?1 AND origin_q IS NULL;`, &sqlitex.ExecOptions{
+		Args: []any{email, account.Origin.Q(), account.Origin.R()},
+	}); err != nil {
+		return Account{}, fmt.Errorf("seat account: %w", err)
+	}
+	if err := sqlitex.ExecuteTransient(conn, `
+		INSERT INTO factions (account_email, name, race, location_q, location_r)
+		VALUES (?1, ?2, ?3, 0, 0)
+		ON CONFLICT (account_email) DO UPDATE SET name = excluded.name, race = excluded.race;`, &sqlitex.ExecOptions{
+		Args: []any{email, name, string(race)},
+	}); err != nil {
+		return Account{}, fmt.Errorf("save faction: %w", err)
+	}
+
+	// Read the seat back rather than trusting the one just computed. The UPDATE
+	// only seats an account that is still unseated, so a request that lost a
+	// race to a concurrent one has to report the origin that won.
+	seated, found, err := readAccountRecord(conn, email)
+	if err != nil {
+		return Account{}, err
+	}
+	if !found {
+		return Account{}, errors.New("save faction: account vanished while saving")
+	}
+	return seated, nil
 }
 
 // VisibleHexes returns the true map coordinates an account can currently see.
@@ -469,6 +542,12 @@ func (s *Store) VisibleHexes(ctx context.Context, email string) ([]hexg.Hex, err
 	}
 	if !found {
 		return nil, errors.New("look up visible hexes: unknown account")
+	}
+	// An account with no seat has seen nothing. It cannot reach a map page -
+	// a player without a faction is sent to the faction form, and the faction
+	// form is what seats them - so this is a floor, not a rendered state.
+	if !account.Seated {
+		return nil, nil
 	}
 	return []hexg.Hex{account.Origin}, nil
 }
@@ -494,8 +573,9 @@ func (s *Store) FindOrCreateDevelopmentAccount(ctx context.Context, email string
 	}, hash, false, true)
 }
 
-// CreateAccount creates an account with a deterministic origin and map
-// rotation. The main admin is created only while initializing a datastore.
+// CreateAccount creates an account. An admin is seated deterministically as it
+// is created; a player is left unseated until it configures a faction. The main
+// admin is created only while initializing a datastore.
 func (s *Store) CreateAccount(ctx context.Context, account SeedAccount) (Account, error) {
 	if err := validateSeed(account); err != nil {
 		return Account{}, err
@@ -647,12 +727,28 @@ func (s *Store) createAccount(ctx context.Context, seed SeedAccount, hash []byte
 		}
 	}
 
-	origin := hexg.NewHex(0, 0)
-	if !mainAdmin {
-		origin, err = accountPlacement(conn, seed.Email)
+	// An admin is seated as it is created: admins configure no faction, so
+	// there is no later moment to place one. A player is created unseated and
+	// takes its hex when it chooses a race on the faction form.
+	//
+	// The main admin is the one exception. It takes the game origin outright,
+	// whatever terrain is there, and everyone else keeps clear of it.
+	origin, seated := hexg.NewHex(0, 0), true
+	switch {
+	case mainAdmin:
+		// The main admin takes the game origin as it stands.
+	case seed.Role == "admin":
+		origin, err = accountPlacement(conn, seed.Email, game.DefaultRace)
 		if err != nil {
 			return Account{}, err
 		}
+	default:
+		seated = false
+	}
+
+	var originQ, originR any
+	if seated {
+		originQ, originR = origin.Q(), origin.R()
 	}
 
 	end, err := sqlitex.ImmediateTransaction(conn)
@@ -674,7 +770,7 @@ func (s *Store) createAccount(ctx context.Context, seed SeedAccount, hash []byte
 			RETURNING 1;`
 	}
 	if err := sqlitex.ExecuteTransient(conn, query, &sqlitex.ExecOptions{
-		Args: []any{seed.Email, hash, seed.Handle, seed.Role, origin.Q(), origin.R()},
+		Args: []any{seed.Email, hash, seed.Handle, seed.Role, originQ, originR},
 		ResultFunc: func(*sqlite.Stmt) error {
 			inserted = true
 			return nil
@@ -697,7 +793,7 @@ func (s *Store) createAccount(ctx context.Context, seed SeedAccount, hash []byte
 	// an origin that is not a hex of this world.
 	return Account{
 		Email: seed.Email, Handle: seed.Handle, Role: seed.Role,
-		Origin: origin,
+		Origin: origin, Seated: seated,
 	}, nil
 }
 
@@ -706,7 +802,11 @@ func (s *Store) createAccount(ctx context.Context, seed SeedAccount, hash []byte
 // The exclusion set is the origins other accounts already hold, read from
 // accounts. It is deliberately not every row in hexes: those are the world, and
 // every hex of it exists before the first account does.
-func accountPlacement(conn *sqlite.Conn, normalizedEmail string) (hexg.Hex, error) {
+//
+// Spacing now depends on who holds an origin as well as where it is, so each
+// one is joined to its faction's race. The join is a LEFT JOIN defaulting to
+// human because an admin holds an origin and controls no faction.
+func accountPlacement(conn *sqlite.Conn, normalizedEmail string, race game.Race) (hexg.Hex, error) {
 	record, foundGame, err := readGameRecord(conn)
 	if err != nil {
 		return hexg.Hex{}, fmt.Errorf("load game for account placement: %w", err)
@@ -720,18 +820,23 @@ func accountPlacement(conn *sqlite.Conn, normalizedEmail string) (hexg.Hex, erro
 		return hexg.Hex{}, err
 	}
 
-	taken := make([]hexg.Hex, 0)
-	if err := sqlitex.ExecuteTransient(conn, `SELECT origin_q, origin_r FROM accounts;`, &sqlitex.ExecOptions{
+	taken := make([]game.Placement, 0)
+	if err := sqlitex.ExecuteTransient(conn, `
+		SELECT accounts.origin_q, accounts.origin_r, COALESCE(factions.race, 'human')
+		FROM accounts LEFT JOIN factions ON factions.account_email = accounts.email
+		WHERE accounts.origin_q IS NOT NULL;`, &sqlitex.ExecOptions{
 		ResultFunc: func(stmt *sqlite.Stmt) error {
-			taken = append(taken, hexg.NewHex(stmt.ColumnInt(0), stmt.ColumnInt(1)))
+			taken = append(taken, game.Placement{
+				Coord: hexg.NewHex(stmt.ColumnInt(0), stmt.ColumnInt(1)),
+				Race:  game.Race(stmt.ColumnText(2)),
+			})
 			return nil
 		},
 	}); err != nil {
 		return hexg.Hex{}, fmt.Errorf("load assigned origins: %w", err)
 	}
 
-	seeds := record.Seeds()
-	origin, err := game.AssignOrigin(seeds, normalizedEmail, world, taken)
+	origin, err := game.AssignOrigin(record.Seeds(), normalizedEmail, race, world, taken)
 	if err != nil {
 		return hexg.Hex{}, fmt.Errorf("place account: %w", err)
 	}
@@ -749,7 +854,7 @@ func readAccountRecord(conn *sqlite.Conn, normalizedEmail string) (Account, bool
 			account.Email = stmt.ColumnText(0)
 			account.Handle = stmt.ColumnText(1)
 			account.Role = stmt.ColumnText(2)
-			account.Origin = hexg.NewHex(stmt.ColumnInt(3), stmt.ColumnInt(4))
+			account.Origin, account.Seated = readOrigin(stmt, 3)
 			found = true
 			return nil
 		},
@@ -757,6 +862,16 @@ func readAccountRecord(conn *sqlite.Conn, normalizedEmail string) (Account, bool
 		return Account{}, false, fmt.Errorf("look up account: %w", err)
 	}
 	return account, found, nil
+}
+
+// readOrigin reads an account's origin from two adjacent result columns,
+// reporting whether the account is seated at all. The two columns are NULL
+// together or not at all, which the accounts table asserts.
+func readOrigin(stmt *sqlite.Stmt, column int) (hexg.Hex, bool) {
+	if stmt.ColumnIsNull(column) {
+		return hexg.Hex{}, false
+	}
+	return hexg.NewHex(stmt.ColumnInt(column), stmt.ColumnInt(column+1)), true
 }
 
 func prepareAndMigrate(ctx context.Context, conn *sqlite.Conn) error {

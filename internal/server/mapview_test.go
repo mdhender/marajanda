@@ -194,7 +194,7 @@ func TestPlayerMapRevealsOnlyVisibleHexes(t *testing.T) {
 		&testStore{
 			game:    testMapGame(),
 			world:   testMapWorld(),
-			faction: datastore.Faction{Name: "Star Kin", Location: hexg.NewHex(0, 0)},
+			faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman, Location: hexg.NewHex(0, 0)},
 			found:   true,
 			visible: []hexg.Hex{playerOrigin},
 		},
@@ -248,7 +248,7 @@ func TestPlayerMapDoesNotLocateFog(t *testing.T) {
 		&testStore{
 			game:    testMapGame(),
 			world:   world,
-			faction: datastore.Faction{Name: "Star Kin", Location: hexg.NewHex(0, 0)},
+			faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman, Location: hexg.NewHex(0, 0)},
 			found:   true,
 			visible: []hexg.Hex{origin},
 		},
@@ -287,7 +287,7 @@ func TestMapsRequireSessionAndRole(t *testing.T) {
 			} else {
 				response = signedInMap(t,
 					datastore.Account{Email: test.role + "@example.com", Handle: "someone", Role: test.role},
-					&testStore{game: testMapGame(), world: testMapWorld(), found: true, faction: datastore.Faction{Name: "Star Kin"}},
+					&testStore{game: testMapGame(), world: testMapWorld(), found: true, faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman}},
 					test.target)
 			}
 			if response.Code != http.StatusSeeOther || response.Header().Get("Location") != test.want {

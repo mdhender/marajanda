@@ -21,7 +21,7 @@ func TestAgentSignInCreatesNormalSession(t *testing.T) {
 	handler := newConfiguredHandler(nil, func(_ context.Context, email string) (datastore.Account, error) {
 		gotEmail = email
 		return datastore.Account{Email: email, Handle: "reviewer", Role: "player"}, nil
-	}, &testStore{faction: datastore.Faction{Name: "Reviewers"}, found: true}, "development")
+	}, &testStore{faction: datastore.Faction{Name: "Reviewers", Race: game.RaceHuman}, found: true}, "development")
 	response := serveRequest(handler, http.MethodGet, "/__agents/log-me-in/Reviewer@Example.Test?returnTo=%2Fplayer%2Fdashboard")
 
 	if gotEmail != "reviewer@example.test" {
@@ -126,7 +126,7 @@ func TestAgentSignInGeneratesFactionWhenMissing(t *testing.T) {
 }
 
 func TestAgentSignInKeepsAnExistingFaction(t *testing.T) {
-	store := &testStore{faction: datastore.Faction{Name: "Star Kin"}, found: true}
+	store := &testStore{faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman}, found: true}
 	handler := newConfiguredHandler(nil, func(_ context.Context, email string) (datastore.Account, error) {
 		return datastore.Account{Email: email, Handle: "agent", Role: "player"}, nil
 	}, store, "development")

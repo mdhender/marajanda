@@ -393,8 +393,8 @@ func TestGenerateWorldTerrainIsCoherent(t *testing.T) {
 
 	pairs, matching := 0, 0
 	for _, hex := range world.Hexes() {
-		for _, direction := range originDirections {
-			neighbor, ok := world.At(hex.Coord.Add(direction))
+		for direction := range 6 {
+			neighbor, ok := world.At(hex.Coord.Neighbor(direction))
 			if !ok {
 				continue
 			}

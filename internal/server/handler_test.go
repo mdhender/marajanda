@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -103,7 +104,7 @@ func TestSignInCreatesSessionAndRoutesByRole(t *testing.T) {
 		t.Run(test.role, func(t *testing.T) {
 			var store applicationStore
 			if test.role == "player" {
-				store = &testStore{faction: datastore.Faction{Name: "The Wayfarers", Location: hexg.NewHex(2, -1)}, found: true}
+				store = &testStore{faction: datastore.Faction{Name: "The Wayfarers", Race: game.RaceHuman, Location: hexg.NewHex(2, -1)}, found: true}
 			} else {
 				store = &testStore{game: datastore.Game{Seed1: 98374, Seed2: -98}}
 			}
@@ -219,16 +220,17 @@ func TestPlayerConfiguresFactionBeforeDashboard(t *testing.T) {
 		t.Fatalf("invalid response = %d %q, want validation error", invalid.Code, invalid.Body.String())
 	}
 
-	configured := requestWithCookie(handler, http.MethodPost, "/player/faction", cookie, url.Values{"name": {"  Star   Kin  "}}.Encode())
+	configured := requestWithCookie(handler, http.MethodPost, "/player/faction", cookie,
+		url.Values{"name": {"  Star   Kin  "}, "race": {"elf"}}.Encode())
 	if configured.Code != http.StatusSeeOther || configured.Header().Get("Location") != "/player/dashboard" {
 		t.Fatalf("configuration response = %d %q, want %d %q", configured.Code, configured.Header().Get("Location"), http.StatusSeeOther, "/player/dashboard")
 	}
-	if factions.email != "player@example.com" || factions.faction.Name != "Star Kin" {
-		t.Fatalf("saved faction = %q %#v, want normalized Star Kin faction", factions.email, factions.faction)
+	if factions.email != "player@example.com" || factions.faction.Name != "Star Kin" || factions.faction.Race != game.RaceElf {
+		t.Fatalf("saved faction = %q %#v, want normalized Star Kin elves", factions.email, factions.faction)
 	}
 
 	dashboard = requestWithCookie(handler, http.MethodGet, "/player/dashboard", cookie, "")
-	for _, want := range []string{"Star Kin", "Current location", "(0, 0)"} {
+	for _, want := range []string{"Star Kin", "elf", "Current location", "(0, 0)"} {
 		if dashboard.Code != http.StatusOK || !strings.Contains(dashboard.Body.String(), want) {
 			t.Fatalf("dashboard = %d %q, want %q", dashboard.Code, dashboard.Body.String(), want)
 		}
@@ -237,6 +239,122 @@ func TestPlayerConfiguresFactionBeforeDashboard(t *testing.T) {
 	if form.Code != http.StatusSeeOther || form.Header().Get("Location") != "/player/dashboard" {
 		t.Fatalf("completed configuration response = %d %q, want dashboard redirect", form.Code, form.Header().Get("Location"))
 	}
+}
+
+// The form offers exactly the six peoples, with human selected until the player
+// chooses otherwise.
+func TestFactionFormOffersEveryRace(t *testing.T) {
+	handler, cookie := signedInPlayer(t, &testStore{})
+
+	form := requestWithCookie(handler, http.MethodGet, "/player/faction", cookie, "")
+	if form.Code != http.StatusOK {
+		t.Fatalf("faction form = %d", form.Code)
+	}
+	body := form.Body.String()
+	for _, race := range game.Races() {
+		if !strings.Contains(body, `<option value="`+string(race)+`"`) {
+			t.Errorf("faction form does not offer %q", race)
+		}
+	}
+	if !strings.Contains(body, `<option value="human" selected>`) {
+		t.Errorf("faction form does not default to human: %q", body)
+	}
+}
+
+// An omitted race is the default. A race the game does not know is a rejection:
+// accepting it would seat the player as something they never chose.
+func TestConfigureFactionValidatesRace(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		race   string
+		status int
+		want   game.Race
+	}{
+		{name: "omitted", race: "", status: http.StatusSeeOther, want: game.RaceHuman},
+		{name: "chosen", race: "kobold", status: http.StatusSeeOther, want: game.RaceKobold},
+		{name: "normalized", race: "  DWARF ", status: http.StatusSeeOther, want: game.RaceDwarf},
+		{name: "unregistered", race: "wyrm", status: http.StatusUnprocessableEntity},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &testStore{}
+			handler, cookie := signedInPlayer(t, store)
+
+			values := url.Values{"name": {"Star Kin"}}
+			if test.race != "" {
+				values.Set("race", test.race)
+			}
+			response := requestWithCookie(handler, http.MethodPost, "/player/faction", cookie, values.Encode())
+			if response.Code != test.status {
+				t.Fatalf("response = %d, want %d", response.Code, test.status)
+			}
+			if test.want == "" {
+				if store.found {
+					t.Fatalf("an unregistered race saved %#v", store.faction)
+				}
+				return
+			}
+			if store.faction.Race != test.want {
+				t.Fatalf("saved race = %q, want %q", store.faction.Race, test.want)
+			}
+		})
+	}
+}
+
+// A world with nowhere left to settle refuses the faction rather than reporting
+// an internal failure, and says so on the form the player is still looking at.
+func TestConfigureFactionReportsAFullWorld(t *testing.T) {
+	store := &testStore{saveErr: fmt.Errorf("place account: %w", game.ErrNoOrigin)}
+	handler, cookie := signedInPlayer(t, store)
+
+	response := requestWithCookie(handler, http.MethodPost, "/player/faction", cookie,
+		url.Values{"name": {"Star Kin"}, "race": {"orc"}}.Encode())
+	if response.Code != http.StatusConflict {
+		t.Fatalf("response = %d, want %d", response.Code, http.StatusConflict)
+	}
+	if !strings.Contains(response.Body.String(), "nowhere left to settle") {
+		t.Fatalf("body = %q, want the placement failure explained", response.Body.String())
+	}
+	if store.found {
+		t.Fatalf("a failed placement saved %#v", store.faction)
+	}
+}
+
+// A session is a snapshot taken at sign-in, and configuring a faction is what
+// gives a player an origin. Without replacing the snapshot the player carries an
+// unseated account into the map for the rest of the session.
+func TestConfigureFactionSeatsTheSession(t *testing.T) {
+	store := &testStore{seat: hexg.NewHex(7, -16), world: testMapWorld(), game: testMapGame()}
+	handler, cookie := signedInPlayer(t, store)
+
+	response := requestWithCookie(handler, http.MethodPost, "/player/faction", cookie,
+		url.Values{"name": {"Star Kin"}, "race": {"human"}}.Encode())
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("response = %d, want %d", response.Code, http.StatusSeeOther)
+	}
+
+	store.visible = []hexg.Hex{store.seat}
+	mapPage := requestWithCookie(handler, http.MethodGet, "/player/map", cookie, "")
+	if mapPage.Code != http.StatusOK {
+		t.Fatalf("map = %d, want %d", mapPage.Code, http.StatusOK)
+	}
+	if !strings.Contains(mapPage.Body.String(), formatCoord(store.seat)) {
+		t.Fatalf("map does not draw the seat %v the faction form assigned", store.seat)
+	}
+}
+
+// signedInPlayer returns a handler and the cookie of a player with no faction,
+// which is where every faction-configuration path starts.
+func signedInPlayer(t *testing.T, store *testStore) (http.Handler, *http.Cookie) {
+	t.Helper()
+	handler := newHandler(func(context.Context, string, string) (datastore.Account, bool, error) {
+		return datastore.Account{Email: "player@example.com", Handle: "wanderer", Role: "player"}, true, nil
+	}, store)
+	signIn := submitSignIn(handler, "player@example.com", "good.luck")
+	cookies := signIn.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("sign-in set no session cookie")
+	}
+	return handler, cookies[0]
 }
 
 func TestCrossOriginSignInIsRejected(t *testing.T) {
@@ -287,6 +405,10 @@ type testStore struct {
 	game    datastore.Game
 	world   game.World
 	visible []hexg.Hex
+	// seat is the origin SaveFaction hands back, and saveErr is what it fails
+	// with instead of seating anybody.
+	seat    hexg.Hex
+	saveErr error
 }
 
 func (s *testStore) Game(context.Context) (datastore.Game, error) {
@@ -305,9 +427,12 @@ func (s *testStore) VisibleHexes(context.Context, string) ([]hexg.Hex, error) {
 	return s.visible, nil
 }
 
-func (s *testStore) SaveFaction(_ context.Context, email, name string) error {
+func (s *testStore) SaveFaction(_ context.Context, email, name string, race game.Race) (datastore.Account, error) {
+	if s.saveErr != nil {
+		return datastore.Account{}, s.saveErr
+	}
 	s.email = email
-	s.faction = datastore.Faction{Name: name, Location: hexg.NewHex(0, 0)}
+	s.faction = datastore.Faction{Name: name, Race: race, Location: hexg.NewHex(0, 0)}
 	s.found = true
-	return nil
+	return datastore.Account{Email: email, Role: "player", Origin: s.seat, Seated: true}, nil
 }

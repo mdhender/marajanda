@@ -23,10 +23,25 @@ The database contains exactly one game record. It stores two required signed 64-
 
 ## Accounts
 
-Every account stores a required origin hex as axial `q` and `r` components and
-a required map rotation from `0` through `5`. Origin coordinates are unique
-across accounts. The origin and rotation are assigned when the account is
-created and do not belong to its faction.
+Every account stores an optional origin hex as axial `q` and `r` components and
+a required map rotation from `0` through `5`. The two origin columns are `NULL`
+together or not at all. Origin coordinates are unique across accounts; SQLite
+treats `NULL`s as distinct in a `UNIQUE` constraint, so any number of accounts
+without an origin coexist while the constraint still rejects two accounts on one
+hex. The origin does not belong to the account's faction.
+
+The origin columns are nullable because placement needs a faction's race, which
+is not known when a player's account row is written:
+
+| Account | Origin assigned |
+| --- | --- |
+| Main admin | When the database is created, as the game origin `(0, 0, 0)` |
+| Any other admin | When the account is created |
+| Player | When the account configures its faction |
+
+A player account therefore has no origin between its creation and its faction
+configuration. Both are written in one transaction, so a placement that fails
+leaves neither a faction nor an origin behind.
 
 The main admin account has the game origin `(0, 0, 0)` and rotation `0`. Every
 later account, including an assistant admin, uses the deterministic placement
@@ -42,9 +57,9 @@ origin is generated and inserted in one transaction when the database is
 created, in the same call that inserts the game record. No hexes are added or
 changed afterwards.
 
-Account origins reference hexes, so an account cannot be created on a
-coordinate the world does not contain. Creating an account inserts only the
-account: its origin hex already exists.
+Account origins reference hexes, so an account cannot be seated on a
+coordinate the world does not contain. Seating an account inserts no hex: its
+origin hex already exists.
 
 See [Terrain reference](reference/terrain.md) for the terrain values, elevation,
 and generation rules, and [Map view reference](reference/map-view.md) for how a
@@ -52,7 +67,9 @@ map is drawn from them.
 
 ## Factions
 
-Each player faction is associated with one account. Faction records store the faction name and its current axial `q` and `r` map coordinates. New faction records start at `(0, 0)`.
+Each player faction is associated with one account. Faction records store the faction name, the faction's race, and its current axial `q` and `r` map coordinates. New faction records start at `(0, 0)`.
+
+Race is required and defaults to `human`. It is constrained to `human`, `elf`, `dwarf`, `orc`, `kobold`, and `halfling`. An account that holds an origin but controls no faction, which includes every admin, is treated as `human` by placement.
 
 ## Open modes
 
