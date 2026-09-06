@@ -4,8 +4,10 @@ package server
 
 import (
 	"fmt"
+	"image/png"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/maloquacious/hexg"
@@ -14,28 +16,44 @@ import (
 )
 
 const (
-	// playerMapRadius is how far a player map reaches from the account origin.
-	// It is smaller than the admin radius because a player can see almost
-	// nothing yet, and a wide field of fog reads as a broken page rather than
-	// as an unexplored frontier.
-	playerMapRadius = 6
-
-	// mapHexSize is the pixel radius of one hexagon. The viewBox scales the
-	// finished map to its container, so this only fixes the relative size of a
-	// hexagon against its stroke and label.
-	mapHexSize = 24.0
+	// defaultMapHexSize is the pixel radius of one hexagon on a drawn map.
+	//
+	// Every function below takes the size as an argument rather than reading a
+	// constant, because the right size is a property of a person's screen and
+	// eyes rather than of the map: see #23, which lets an account choose it.
+	// Until then this is the one value the handlers pass.
+	//
+	// Twenty-four pixels is a hexagon 42 wide and 48 tall, which is large
+	// enough to read its shape and its colour at a glance.
+	defaultMapHexSize = 24.0
 
 	// mapPadding keeps hexagon strokes off the edge of the viewBox.
 	mapPadding = 2.0
 
-	// adminMapBudget caps how many hexagons a whole-world map draws.
+	// The admin window, in hexes.
 	//
-	// The default world is 130,305 hexes, and one polygon each is a 24 MB page
-	// that no browser renders usefully - so drawing every hex is not whole-world
-	// inspection, it only looks like it. Above the budget the map becomes a
-	// survey: every stride-th hex, replotted so they still tile. Continents,
-	// coastlines and climate bands survive that; individual lakes do not.
-	adminMapBudget = 12000
+	// A map is drawn at its natural size and the browser scrolls it, so this is
+	// not how much a person sees - it is how much ground they can cover before
+	// another request is needed. A thirteen-inch laptop shows about 26 columns
+	// and 17 rows of this window at once; a phone shows perhaps 9 by 14.
+	//
+	// Bigger would scroll further and cost more markup on the device least able
+	// to afford it: every hex is a polygon with a title, and these dimensions
+	// are already a thousand of them.
+	adminWindowColumns = 40
+	adminWindowRows    = 26
+
+	// playerFogMargin is how many hexes of fog surround what a player can see.
+	// Two puts a five-by-five map around a player who can see one hex: enough
+	// to read as a place rather than a sliver, and far too little to navigate
+	// by.
+	playerFogMargin = 2
+
+	// worldImageHexSize is the pixel radius of one hexagon in the downloadable
+	// world image. Four pixels puts the whole default world into a single
+	// 3544 x 1532 PNG, which is a picture a browser will show at once and a
+	// person can actually take in.
+	worldImageHexSize = 4.0
 
 	// mapOffsetEven selects even-r offset conversion, matching the layout the
 	// world is generated in. It is the conversion Worldographer expects, which
@@ -50,10 +68,26 @@ type mapTile struct {
 	Label   string
 }
 
+// mapPan holds the links that move an admin's window over the world. Each is
+// an ordinary href: panning is a new window, which is a new page, and needs no
+// script to ask for one.
+type mapPan struct {
+	North, South, East, West, Origin string
+}
+
 // mapView is a complete map, ready for the page template to draw as SVG.
+//
+// Width and Height are the drawn size in pixels. The map is rendered at its
+// natural size and scrolled rather than scaled to its container: scaling is
+// what shrank a 42-pixel hexagon to six and made the grid unreadable.
 type mapView struct {
 	ViewBox string
+	Width   int
+	Height  int
 	Tiles   []mapTile
+	Pan     *mapPan
+	Center  string
+	Image   string
 }
 
 func (app *application) adminMap(w http.ResponseWriter, r *http.Request) {
@@ -61,24 +95,47 @@ func (app *application) adminMap(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// The admin map draws the whole world rather than a window onto it. The
-	// world is bounded, so "all of it" is a finite thing to ask for, and an
-	// admin looking at a generated world wants to see what was generated.
 	world, ok := app.world(w, r)
 	if !ok {
 		return
 	}
-	stride := surveyStride(world)
+
+	// The admin map is a window onto the world rather than the whole of it. The
+	// whole of it is the PNG, which draws every hex without collapsing any.
+	center := mapCenter(r, world)
+	view := buildMapView(
+		windowPlace(world, center),
+		game.WindowView(world, center, adminWindowColumns, adminWindowRows),
+		defaultMapHexSize,
+	)
+	view.Pan = adminPan(world, center)
+	view.Center = coordLabel(center)
+	view.Image = "/admin/map.png"
+
 	app.render(w, http.StatusOK, pageData{
 		Title:   "Admin map",
 		View:    "admin-map",
 		Account: account,
-		Map: buildMapView(
-			// The admin map is the whole world, so it wants the rectangular cut.
-			surveyPlace(world, stride),
-			surveyTiles(world, game.AdminView(world), stride),
-		),
+		Map:     view,
 	})
+}
+
+// adminMapImage serves the whole world as one PNG.
+//
+// This is the answer to "show me all of it", and it is why the page above does
+// not have to be. Every hex is drawn at its own colour with no survey and
+// nothing collapsed, which an SVG of 130,305 polygons could never be.
+func (app *application) adminMapImage(w http.ResponseWriter, r *http.Request) {
+	if _, ok := app.requireRole(w, r, "admin"); !ok {
+		return
+	}
+	world, ok := app.world(w, r)
+	if !ok {
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Disposition", `attachment; filename="marajanda-world.png"`)
+	_ = png.Encode(w, worldmap.Render(world, worldImageHexSize, 0))
 }
 
 func (app *application) playerMap(w http.ResponseWriter, r *http.Request) {
@@ -109,13 +166,16 @@ func (app *application) playerMap(w http.ResponseWriter, r *http.Request) {
 		View:    "player-map",
 		Account: account,
 		Faction: faction,
+		// No window controls and no window in the query: a player's map is
+		// wherever their people are, and there is nothing for them to pan to.
 		Map: buildMapView(
-			// A player's viewport is placed relative to the player. Near the
+			// A player's map is placed relative to the player. Near the
 			// meridian their eastern neighbour is canonically the westmost
 			// column of the world, and drawing it there would fling it most of
 			// a world away instead of one hex east.
 			func(coord hexg.Hex) hexg.Hex { return world.Cylinder().Nearest(account.Origin, coord) },
-			game.PlayerView(world, account.Origin, playerMapRadius, visible),
+			game.PlayerView(world, account.Origin, playerFogMargin, visible),
+			defaultMapHexSize,
 		),
 	})
 }
@@ -129,107 +189,65 @@ func (app *application) world(w http.ResponseWriter, r *http.Request) (game.Worl
 	return world, true
 }
 
-// surveyStride is how many hexes a whole-world map collapses into one, chosen
-// so the drawn count stays inside adminMapBudget. It is 1 for any world small
-// enough to draw in full.
-func surveyStride(world game.World) int {
-	stride := 1
-	for (world.Columns()/stride)*(world.Rows()/stride) > adminMapBudget {
-		stride++
-	}
-	return stride
+// mapCenter reads the window centre from the query, defaulting to the game
+// origin. A column outside the world wraps back into it; a row outside it is
+// clamped, because rows are the one thing a cylinder does not wrap.
+func mapCenter(r *http.Request, world game.World) hexg.Hex {
+	q := queryInt(r, "q")
+	row := min(world.Height(), max(-world.Height(), queryInt(r, "r")))
+	return world.Normalize(hexg.NewHex(q, row))
 }
 
-// surveyTiles collapses each stride-by-stride block of the world into the
-// terrain that covers most of it.
-//
-// Taking every stride-th hex instead would be simpler and wrong: terrain
-// features run five to ten hexes across, so point-sampling at a comparable
-// stride aliases them into speckle and a coherent world comes out looking like
-// per-hex noise. The whole reason to draw this map is to see whether the
-// generator produced geography, so the one thing it must not do is destroy the
-// evidence.
-//
-// Ice is the exception to the majority vote. The polar sheets are one row
-// deep, so at any stride above one they are outvoted by the rows beneath them
-// and the world loses the wall at its edge - the survey would show continents
-// running off the top of the map exactly as they did before the ice existed. A
-// block holding any ice is drawn as ice: a boundary is not a texture, and a
-// survey that erases it is reporting a different world.
-func surveyTiles(world game.World, tiles []game.Tile, stride int) []game.Tile {
-	if stride <= 1 {
-		return tiles
+func queryInt(r *http.Request, name string) int {
+	value, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get(name)))
+	if err != nil {
+		return 0
 	}
-
-	type block struct {
-		representative game.Tile
-		counts         map[game.Terrain]int
-		best           int
-		frozen         bool
-	}
-	blocks := make(map[[2]int]*block, len(tiles)/(stride*stride)+1)
-	order := make([][2]int, 0, len(blocks))
-
-	for _, tile := range tiles {
-		offset := worldmap.Cut(world.Width(), 0, tile.Coord).CubeToROffset(mapOffsetEven)
-		key := [2]int{(offset.Col + world.Width()) / stride, (offset.Row + world.Height()) / stride}
-
-		current, seen := blocks[key]
-		if !seen {
-			current = &block{counts: make(map[game.Terrain]int, 4)}
-			blocks[key] = current
-			order = append(order, key)
-		}
-		if current.frozen {
-			continue
-		}
-		if tile.Visible && tile.Terrain == game.TerrainIce {
-			current.frozen = true
-			current.representative = tile
-			continue
-		}
-		current.counts[tile.Terrain]++
-		// Ties break on the terrain already holding the block, and blocks are
-		// filled in the world's own order, so the survey is stable.
-		if count := current.counts[tile.Terrain]; count > current.best {
-			current.best = count
-			current.representative = tile
-		}
-	}
-
-	kept := make([]game.Tile, 0, len(order))
-	for _, key := range order {
-		kept = append(kept, blocks[key].representative)
-	}
-	return kept
+	return value
 }
 
-// surveyPlace positions a surveyed tile so the survivors still tile the plane
-// rather than scattering across it with gaps where their neighbours were.
+// windowPlace draws a window around its own centre.
 //
-// The shift by the half-extents makes the division floor rather than truncate
-// toward zero, which would otherwise double up the row and column either side
-// of the origin.
-func surveyPlace(world game.World, stride int) func(hexg.Hex) hexg.Hex {
+// worldmap.Cut picks the copy of a hex whose offset column is nearest the
+// centre column, which is what keeps a window continuous across the meridian:
+// the hex one column east of the last column of the world is drawn one column
+// east, not five hundred columns west.
+func windowPlace(world game.World, center hexg.Hex) func(hexg.Hex) hexg.Hex {
+	column := center.CubeToROffset(mapOffsetEven).Col
 	return func(coord hexg.Hex) hexg.Hex {
-		offset := worldmap.Cut(world.Width(), 0, coord).CubeToROffset(mapOffsetEven)
-		if stride <= 1 {
-			return hexg.NewOffsetCoord(offset.Col, offset.Row).ROffsetToCube(mapOffsetEven)
-		}
-		col := (offset.Col + world.Width()) / stride
-		row := (offset.Row + world.Height()) / stride
-		return hexg.NewOffsetCoord(col, row).ROffsetToCube(mapOffsetEven)
+		return worldmap.Cut(world.Width(), column, coord)
 	}
 }
 
-// buildMapView turns game tiles into pointy-top SVG geometry.
+// adminPan builds the links that move the window.
+//
+// A step is half a window, so consecutive windows overlap by half and nothing a
+// person was looking at leaves the page in one move.
+func adminPan(world game.World, center hexg.Hex) *mapPan {
+	offset := center.CubeToROffset(mapOffsetEven)
+	step := func(columns, rows int) string {
+		row := min(world.Height(), max(-world.Height(), offset.Row+rows))
+		moved := world.Normalize(hexg.NewOffsetCoord(offset.Col+columns, row).ROffsetToCube(mapOffsetEven))
+		return fmt.Sprintf("/admin/map?q=%d&r=%d", moved.Q(), moved.R())
+	}
+	return &mapPan{
+		North:  step(0, -adminWindowRows/2),
+		South:  step(0, adminWindowRows/2),
+		West:   step(-adminWindowColumns/2, 0),
+		East:   step(adminWindowColumns/2, 0),
+		Origin: "/admin/map",
+	}
+}
+
+// buildMapView turns game tiles into pointy-top SVG geometry at hexSize.
 //
 // place decides where a tile is drawn. Tiles carry canonical world
 // coordinates, and a cylinder gives every hex infinitely many positions on the
-// plane, so the caller has to say which one this map wants: the whole world
-// wants a rectangular cut, a player's window wants the copy nearest the player.
-func buildMapView(place func(hexg.Hex) hexg.Hex, tiles []game.Tile) mapView {
-	layout := hexg.NewLayout(hexg.EvenR, hexg.Point{X: mapHexSize, Y: mapHexSize}, hexg.Point{})
+// plane, so the caller has to say which one this map wants: an admin's window
+// wants the copy nearest its centre, a player's map the copy nearest the
+// player.
+func buildMapView(place func(hexg.Hex) hexg.Hex, tiles []game.Tile, hexSize float64) mapView {
+	layout := hexg.NewLayout(hexg.EvenR, hexg.Point{X: hexSize, Y: hexSize}, hexg.Point{})
 
 	view := mapView{Tiles: make([]mapTile, 0, len(tiles))}
 	minX, minY := math.Inf(1), math.Inf(1)
@@ -241,7 +259,9 @@ func buildMapView(place func(hexg.Hex) hexg.Hex, tiles []game.Tile) mapView {
 			if index > 0 {
 				points.WriteByte(' ')
 			}
-			fmt.Fprintf(&points, "%.2f,%.2f", corner.X, corner.Y)
+			// One decimal place: enough that adjacent hexagons still meet
+			// exactly, and a good deal less markup than two.
+			fmt.Fprintf(&points, "%.1f,%.1f", corner.X, corner.Y)
 			minX, minY = min(minX, corner.X), min(minY, corner.Y)
 			maxX, maxY = max(maxX, corner.X), max(maxY, corner.Y)
 		}
@@ -255,9 +275,11 @@ func buildMapView(place func(hexg.Hex) hexg.Hex, tiles []game.Tile) mapView {
 	if len(view.Tiles) == 0 {
 		return view
 	}
-	view.ViewBox = fmt.Sprintf("%.2f %.2f %.2f %.2f",
+	view.ViewBox = fmt.Sprintf("%.1f %.1f %.1f %.1f",
 		minX-mapPadding, minY-mapPadding,
 		maxX-minX+2*mapPadding, maxY-minY+2*mapPadding)
+	view.Width = int(math.Ceil(maxX - minX + 2*mapPadding))
+	view.Height = int(math.Ceil(maxY - minY + 2*mapPadding))
 	return view
 }
 
@@ -270,13 +292,21 @@ func terrainClass(tile game.Tile) string {
 	return string(tile.Terrain)
 }
 
-// tileLabel is the hover text for one hexagon. Coordinates are in the view's
-// own frame, which for a player is their own rotated map.
+// tileLabel is the hover text for one hexagon.
+//
+// An unexplored hex is labelled but not located. Its coordinate is not the
+// account's to know: a fog margin that printed coordinates would be a ruler
+// laid over the world, and reading two of them tells a player exactly where
+// they stand.
 func tileLabel(tile game.Tile) string {
 	if !tile.Visible {
-		return fmt.Sprintf("(%d, %d) unexplored", tile.Coord.Q(), tile.Coord.R())
+		return "Unexplored"
 	}
-	return fmt.Sprintf("(%d, %d) %s, %s", tile.Coord.Q(), tile.Coord.R(), tile.Terrain, elevationLabel(tile.Elevation))
+	return fmt.Sprintf("%s %s, %s", coordLabel(tile.Coord), tile.Terrain, elevationLabel(tile.Elevation))
+}
+
+func coordLabel(coord hexg.Hex) string {
+	return fmt.Sprintf("(%d, %d)", coord.Q(), coord.R())
 }
 
 // elevationLabel reads a hex's elevation the way a map legend would, so that

@@ -6,6 +6,11 @@ import (
 	"github.com/maloquacious/hexg"
 )
 
+// offsetEven selects even-r offset conversion, matching the layout the world is
+// generated in. A view is a rectangle of rows and columns, and the offset
+// column is what makes a rectangle of a cylinder's axial coordinates.
+const offsetEven = true
+
 // Tile is one hex of a map view.
 //
 // Coord is the hex's true, canonical map coordinate in every view. There is no
@@ -25,64 +30,98 @@ type Tile struct {
 	Visible   bool
 }
 
-// AdminView returns every hex of the world, in true map coordinates. Admins
-// see all of it.
-func AdminView(world World) []Tile {
-	hexes := world.Hexes()
-	tiles := make([]Tile, 0, len(hexes))
-	for _, hex := range hexes {
-		tiles = append(tiles, Tile{
-			Coord: hex.Coord, Terrain: hex.Terrain, Elevation: hex.Elevation, Visible: true,
-		})
-	}
-	return tiles
-}
-
-// PlayerView returns every hex within radius of an account's origin.
+// WindowView returns every hex of a rectangular window of the world, in true
+// map coordinates. Admins see all of it.
 //
-// visible holds the map coordinates the account can see. Hexes outside it are
-// returned as fog: present in the view, carrying no terrain. So is anything
-// beyond a pole, which a player has no way to tell apart from land they have
-// simply never seen. Nothing is ever beyond the eastern or western edge,
-// because there is not one.
-func PlayerView(world World, origin hexg.Hex, radius int, visible []hexg.Hex) []Tile {
-	seen := make(map[hexg.Hex]struct{}, len(visible))
-	for _, hex := range visible {
-		seen[hex] = struct{}{}
-	}
-	offsets := disc(radius)
-	tiles := make([]Tile, 0, len(offsets))
-	for _, offset := range offsets {
-		location := world.Normalize(origin.Add(offset))
-		tile := Tile{Coord: location}
-		if isVisible(seen, location) {
-			if hex, ok := world.At(location); ok {
-				tile.Terrain, tile.Elevation, tile.Visible = hex.Terrain, hex.Elevation, true
-			}
-		}
-		tiles = append(tiles, tile)
-	}
-	return tiles
-}
-
-func isVisible(seen map[hexg.Hex]struct{}, location hexg.Hex) bool {
-	_, ok := seen[location]
-	return ok
-}
-
-// disc returns every offset within radius of (0, 0, 0), ordered by q and then r
-// so that a rendered map is byte-for-byte stable across runs. These are offsets
-// from a view centre, not world coordinates: they are added to an origin and
-// normalized before anything is looked up.
-func disc(radius int) []hexg.Hex {
-	if radius < 0 {
+// A window rather than the whole world, because the whole world is 130,305
+// hexes and no page draws that: an admin map is a place to stand, and the
+// downloadable image is how the world is seen at once.
+//
+// Columns wrap, so a window may straddle the meridian and still be continuous.
+// Rows are clamped to the world instead, because a row beyond a pole is not a
+// hex of anything and an admin gains nothing from a margin of nothing.
+func WindowView(world World, center hexg.Hex, columns, rows int) []Tile {
+	if columns < 1 || rows < 1 {
 		return nil
 	}
-	hexes := make([]hexg.Hex, 0, 3*radius*(radius+1)+1)
-	for q := -radius; q <= radius; q++ {
-		for r := max(-radius, -q-radius); r <= min(radius, -q+radius); r++ {
-			hexes = append(hexes, hexg.NewHex(q, r))
+	columns = min(columns, world.Columns())
+
+	offset := center.CubeToROffset(offsetEven)
+	minCol := offset.Col - (columns-1)/2
+	minRow := max(-world.Height(), offset.Row-(rows-1)/2)
+	maxRow := min(world.Height(), minRow+rows-1)
+
+	tiles := make([]Tile, 0, columns*(maxRow-minRow+1))
+	for row := minRow; row <= maxRow; row++ {
+		for col := minCol; col < minCol+columns; col++ {
+			coord := world.Normalize(hexg.NewOffsetCoord(col, row).ROffsetToCube(offsetEven))
+			hex, ok := world.At(coord)
+			if !ok {
+				continue
+			}
+			tiles = append(tiles, Tile{
+				Coord: coord, Terrain: hex.Terrain, Elevation: hex.Elevation, Visible: true,
+			})
 		}
 	}
-	return hexes
+	return tiles
+}
+
+// PlayerView returns the hexes a player's map draws: everything the account can
+// see, inside a fixed margin of fog.
+//
+// The window is derived from what the account can see rather than from the
+// world, which is the whole point. A player who can see one hex is sent that
+// hex and its close neighbours, not a thousand obscured ones - there is nothing
+// in an unexplored hex worth the bytes, and a map wide enough to pan is a map
+// that answers questions the player has not earned, starting with how far they
+// are from the ice.
+//
+// The margin is the same on every side and does not shrink at a pole. A hex
+// beyond a pole is drawn as fog, which a player cannot tell apart from land
+// they have simply never seen, so the shape of their map never says where in
+// the world they are.
+func PlayerView(world World, origin hexg.Hex, margin int, visible []hexg.Hex) []Tile {
+	if margin < 0 {
+		margin = 0
+	}
+
+	// Everything is measured in the copy of the world nearest the origin. A
+	// player near the meridian can see hexes whose canonical column is most of
+	// a world away, and a bounding box over those would span the world.
+	seen := make(map[hexg.Hex]struct{}, len(visible))
+	local := make([]hexg.Hex, 0, len(visible))
+	for _, hex := range visible {
+		seen[world.Normalize(hex)] = struct{}{}
+		local = append(local, world.Cylinder().Nearest(origin, hex))
+	}
+	if len(local) == 0 {
+		local = append(local, origin)
+	}
+
+	first := local[0].CubeToROffset(offsetEven)
+	minCol, maxCol := first.Col, first.Col
+	minRow, maxRow := first.Row, first.Row
+	for _, hex := range local[1:] {
+		offset := hex.CubeToROffset(offsetEven)
+		minCol, maxCol = min(minCol, offset.Col), max(maxCol, offset.Col)
+		minRow, maxRow = min(minRow, offset.Row), max(maxRow, offset.Row)
+	}
+	minCol, maxCol = minCol-margin, maxCol+margin
+	minRow, maxRow = minRow-margin, maxRow+margin
+
+	tiles := make([]Tile, 0, (maxCol-minCol+1)*(maxRow-minRow+1))
+	for row := minRow; row <= maxRow; row++ {
+		for col := minCol; col <= maxCol; col++ {
+			coord := world.Normalize(hexg.NewOffsetCoord(col, row).ROffsetToCube(offsetEven))
+			tile := Tile{Coord: coord}
+			if _, ok := seen[coord]; ok {
+				if hex, inWorld := world.At(coord); inWorld {
+					tile.Terrain, tile.Elevation, tile.Visible = hex.Terrain, hex.Elevation, true
+				}
+			}
+			tiles = append(tiles, tile)
+		}
+	}
+	return tiles
 }

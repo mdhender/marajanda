@@ -3,8 +3,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image/png"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -55,7 +57,7 @@ func signedInMap(t *testing.T, account datastore.Account, store applicationStore
 	return requestWithCookie(handler, http.MethodGet, target, cookies[0], "")
 }
 
-func TestAdminMapDrawsTheWholeDisc(t *testing.T) {
+func TestAdminMapDrawsAWindowOntoTheWorld(t *testing.T) {
 	response := signedInMap(t,
 		datastore.Account{Email: "admin@example.com", Handle: "keeper", Role: "admin"},
 		&testStore{game: testMapGame(), world: testMapWorld()},
@@ -66,17 +68,27 @@ func TestAdminMapDrawsTheWholeDisc(t *testing.T) {
 	}
 	body := response.Body.String()
 
-	// The admin map draws the whole world, not a window onto it.
-	if want := testMapWorld().Len(); strings.Count(body, "<polygon") != want {
-		t.Fatalf("polygons = %d, want %d", strings.Count(body, "<polygon"), want)
+	// A window, not the world. The world is the PNG.
+	want := len(game.WindowView(testMapWorld(), hexg.NewHex(0, 0), adminWindowColumns, adminWindowRows))
+	if got := strings.Count(body, "<polygon"); got != want {
+		t.Fatalf("polygons = %d, want %d", got, want)
 	}
+	if want >= testMapWorld().Len() {
+		t.Fatalf("the test world has %d hexes, which a window of %d does not window", testMapWorld().Len(), want)
+	}
+
 	origin, ok := testMapWorld().At(hexg.NewHex(0, 0))
 	if !ok {
 		t.Fatal("test world is missing the game origin")
 	}
 	for _, want := range []string{
-		`<svg viewBox="`, `role="img"`, `<polygon class="mountains"`,
-		fmt.Sprintf("(0, 0) %s,", origin.Terrain), `href="/admin/dashboard"`,
+		// Drawn at its natural size rather than scaled to the container: that
+		// scaling is what made a hexagon six pixels wide.
+		`<svg width="`, `height="`, `viewBox="`, `role="img"`,
+		`<polygon class="mountains"`,
+		fmt.Sprintf("(0, 0) %s,", origin.Terrain),
+		`href="/admin/dashboard"`, `href="/admin/map.png"`,
+		`class="map-pan"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("admin map missing %q", want)
@@ -84,6 +96,95 @@ func TestAdminMapDrawsTheWholeDisc(t *testing.T) {
 	}
 	if strings.Contains(body, `<polygon class="fog"`) {
 		t.Fatal("admin map contains fog; admins see every hex")
+	}
+}
+
+// Panning is four ordinary links, and each has to land on a window that is
+// half a window away from this one.
+func TestAdminMapPansByHalfAWindow(t *testing.T) {
+	world := testMapWorld()
+	store := &testStore{game: testMapGame(), world: world}
+	account := datastore.Account{Email: "admin@example.com", Handle: "keeper", Role: "admin"}
+
+	body := signedInMap(t, account, store, "/admin/map").Body.String()
+	for _, want := range []string{
+		fmt.Sprintf(`href="/admin/map?q=%d&amp;r=0"`, adminWindowColumns/2),
+		fmt.Sprintf(`href="/admin/map?q=%d&amp;r=0"`, -adminWindowColumns/2),
+		fmt.Sprintf(`r=%d"`, adminWindowRows/2),
+		fmt.Sprintf(`r=%d"`, -adminWindowRows/2),
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("admin map missing pan link %q", want)
+		}
+	}
+
+	// Following one moves the window: its centre, and the hexes it draws.
+	moved := signedInMap(t, account, store,
+		fmt.Sprintf("/admin/map?q=%d&r=0", adminWindowColumns/2)).Body.String()
+	if !strings.Contains(moved, fmt.Sprintf("(%d, 0)", adminWindowColumns/2)) {
+		t.Fatalf("panned map is not centred on (%d, 0)", adminWindowColumns/2)
+	}
+	if moved == body {
+		t.Fatal("panning east drew the same window")
+	}
+}
+
+// Rows do not wrap, so a request for a row beyond a pole is clamped rather than
+// answered with an empty map or a page of nothing.
+func TestAdminMapClampsAWindowBeyondAPole(t *testing.T) {
+	world := testMapWorld()
+	response := signedInMap(t,
+		datastore.Account{Email: "admin@example.com", Handle: "keeper", Role: "admin"},
+		&testStore{game: testMapGame(), world: world},
+		fmt.Sprintf("/admin/map?q=0&r=%d", 10*world.Height()))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, fmt.Sprintf("(0, %d)", world.Height())) {
+		t.Fatalf("a window past the south pole is not clamped to row %d", world.Height())
+	}
+	if strings.Count(body, "<polygon") == 0 {
+		t.Fatal("a window past the south pole drew nothing")
+	}
+}
+
+// The whole world is a PNG. It is the thing the page deliberately is not.
+func TestAdminMapImageServesTheWholeWorld(t *testing.T) {
+	response := signedInMap(t,
+		datastore.Account{Email: "admin@example.com", Handle: "keeper", Role: "admin"},
+		&testStore{game: testMapGame(), world: testMapWorld()},
+		"/admin/map.png")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if got := response.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("Content-Type = %q, want image/png", got)
+	}
+	if got := response.Header().Get("Content-Disposition"); !strings.Contains(got, "marajanda-world.png") {
+		t.Fatalf("Content-Disposition = %q, want a filename", got)
+	}
+	image, err := png.Decode(bytes.NewReader(response.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("png.Decode: %v", err)
+	}
+	// Every hex of the world, at worldImageHexSize, with none collapsed.
+	if width := image.Bounds().Dx(); width < testMapWorld().Columns() {
+		t.Fatalf("image is %d pixels wide for %d columns", width, testMapWorld().Columns())
+	}
+}
+
+// A player has no business fetching the world.
+func TestAdminMapImageRefusesAPlayer(t *testing.T) {
+	response := signedInMap(t,
+		datastore.Account{Email: "player@example.com", Handle: "wanderer", Role: "player", Origin: playerOrigin},
+		&testStore{game: testMapGame(), world: testMapWorld()},
+		"/admin/map.png")
+
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusSeeOther)
 	}
 }
 
@@ -105,7 +206,7 @@ func TestPlayerMapRevealsOnlyVisibleHexes(t *testing.T) {
 	body := response.Body.String()
 
 	polygons := strings.Count(body, "<polygon")
-	if want := len(game.PlayerView(testMapWorld(), playerOrigin, playerMapRadius, []hexg.Hex{playerOrigin})); polygons != want {
+	if want := len(game.PlayerView(testMapWorld(), playerOrigin, playerFogMargin, []hexg.Hex{playerOrigin})); polygons != want {
 		t.Fatalf("polygons = %d, want %d", polygons, want)
 	}
 	if fog := strings.Count(body, `<polygon class="fog"`); fog != polygons-1 {
@@ -124,6 +225,46 @@ func TestPlayerMapRevealsOnlyVisibleHexes(t *testing.T) {
 	}
 	if !strings.Contains(body, "Star Kin") || !strings.Contains(body, `href="/player/dashboard"`) {
 		t.Fatal("player map missing faction name or dashboard link")
+	}
+
+	// A player's map is the whole of their map. There is nothing to pan to, no
+	// control offering to, and no world image to fetch.
+	for _, unwanted := range []string{`class="map-pan"`, `href="/admin/map.png"`, "/admin/map?"} {
+		if strings.Contains(body, unwanted) {
+			t.Fatalf("player map offers %q", unwanted)
+		}
+	}
+}
+
+// Fog is labelled but not located. A margin that printed coordinates would be a
+// ruler laid over the world, and two readings of it place the player exactly.
+func TestPlayerMapDoesNotLocateFog(t *testing.T) {
+	world := testMapWorld()
+	// Hard against the north ice, which is the thing a player must not be able
+	// to measure their distance from.
+	origin := hexg.NewHex(0, -world.Height()+1)
+	response := signedInMap(t,
+		datastore.Account{Email: "player@example.com", Handle: "wanderer", Role: "player", Origin: origin},
+		&testStore{
+			game:    testMapGame(),
+			world:   world,
+			faction: datastore.Faction{Name: "Star Kin", Location: hexg.NewHex(0, 0)},
+			found:   true,
+			visible: []hexg.Hex{origin},
+		},
+		"/player/map")
+
+	body := response.Body.String()
+	fog := strings.Count(body, `<polygon class="fog"`)
+	if fog == 0 {
+		t.Fatal("player map drew no fog")
+	}
+	if got := strings.Count(body, "<title>Unexplored</title>"); got != fog {
+		t.Fatalf("%d fog hexes carry %d bare labels, want them all bare", fog, got)
+	}
+	// The row beyond the pole is drawn, and reads exactly like unexplored land.
+	if want := len(game.PlayerView(world, origin, playerFogMargin, []hexg.Hex{origin})); strings.Count(body, "<polygon") != want {
+		t.Fatalf("polygons = %d, want %d: the map shrank against the ice", strings.Count(body, "<polygon"), want)
 	}
 }
 
@@ -168,8 +309,8 @@ func TestPlayerMapRequiresConfiguredFaction(t *testing.T) {
 }
 
 func TestBuildMapViewGeometry(t *testing.T) {
-	empty := buildMapView(func(coord hexg.Hex) hexg.Hex { return coord }, nil)
-	if empty.ViewBox != "" || len(empty.Tiles) != 0 {
+	empty := buildMapView(func(coord hexg.Hex) hexg.Hex { return coord }, nil, defaultMapHexSize)
+	if empty.ViewBox != "" || len(empty.Tiles) != 0 || empty.Width != 0 || empty.Height != 0 {
 		t.Fatalf("buildMapView(nil) = %#v, want an empty view", empty)
 	}
 
@@ -178,7 +319,8 @@ func TestBuildMapViewGeometry(t *testing.T) {
 		t.Fatalf("GenerateWorld: %v", err)
 	}
 	place := func(coord hexg.Hex) hexg.Hex { return worldmap.Cut(small.Width(), 0, coord) }
-	view := buildMapView(place, game.AdminView(small))
+	tiles := game.WindowView(small, hexg.NewHex(0, 0), small.Columns(), small.Rows())
+	view := buildMapView(place, tiles, defaultMapHexSize)
 	if want := small.Len(); len(view.Tiles) != want {
 		t.Fatalf("tiles = %d, want %d", len(view.Tiles), want)
 	}
@@ -190,9 +332,26 @@ func TestBuildMapViewGeometry(t *testing.T) {
 			t.Fatalf("tile %q has %d corners, want 6", tile.Points, corners)
 		}
 	}
+
+	// The drawn size is the map's own, in pixels, so the browser scrolls it
+	// rather than scaling it. Three columns of pointy-top hexes at radius 24
+	// are 3*sqrt(3)*24 wide plus the half-column shove; three rows are
+	// 2*24 + 2*(1.5*24) tall.
+	wantWidth := int(math.Ceil(3.5*math.Sqrt(3)*defaultMapHexSize + 2*mapPadding))
+	wantHeight := int(math.Ceil(2*defaultMapHexSize + 2*1.5*defaultMapHexSize + 2*mapPadding))
+	if view.Width != wantWidth || view.Height != wantHeight {
+		t.Fatalf("drawn size = %d x %d, want %d x %d", view.Width, view.Height, wantWidth, wantHeight)
+	}
+
+	// The size is a parameter, not a constant: halving it halves the map.
+	half := buildMapView(place, tiles, defaultMapHexSize/2)
+	if half.Width*2 < view.Width-4 || half.Width*2 > view.Width+4 {
+		t.Fatalf("halving the hex size gave a map %d wide against %d", half.Width, view.Width)
+	}
+
 	// Stable order in means stable markup out, so a rendered map does not churn
 	// between identical requests.
-	repeat := buildMapView(place, game.AdminView(small))
+	repeat := buildMapView(place, tiles, defaultMapHexSize)
 	if repeat.ViewBox != view.ViewBox {
 		t.Fatalf("viewBox differs: %q then %q", view.ViewBox, repeat.ViewBox)
 	}
@@ -216,56 +375,12 @@ func formatCoord(hex hexg.Hex) string {
 	return fmt.Sprintf("(%d, %d)", hex.Q(), hex.R())
 }
 
-// The whole-world map must draw as an upright rectangle.
+// The cut must place the world as an upright rectangle.
 //
 // Canonical coordinates fix q rather than the offset column, so plotting them
 // straight from their axial position leans the map sideways by half a row per
-// row. rectangular is the cut that undoes that, and this is the assertion that
-// it actually tiles: every row holds every column exactly once.
-// A survey may lose a lake. It may not lose the edge of the world: the polar
-// ice is one row deep, so a plain majority vote over a stride-by-stride block
-// would drop it and draw a world whose continents run off the top of the map.
-func TestSurveyKeepsThePolarIce(t *testing.T) {
-	world := testMapWorld()
-	const stride = 2
-
-	tiles := game.AdminView(world)
-	frozen := make(map[[2]int]bool)
-	for _, tile := range tiles {
-		if tile.Terrain == game.TerrainIce {
-			frozen[surveyBlock(world, tile.Coord, stride)] = true
-		}
-	}
-	if len(frozen) == 0 {
-		t.Fatal("test world has no ice")
-	}
-
-	kept := surveyTiles(world, tiles, stride)
-	drawn := 0
-	for _, tile := range kept {
-		block := surveyBlock(world, tile.Coord, stride)
-		if frozen[block] {
-			if tile.Terrain != game.TerrainIce {
-				t.Fatalf("block %v holds ice but is drawn as %q", block, tile.Terrain)
-			}
-			drawn++
-			continue
-		}
-		if tile.Terrain == game.TerrainIce {
-			t.Fatalf("block %v is drawn as ice but holds none", block)
-		}
-	}
-	if drawn != len(frozen) {
-		t.Fatalf("survey drew %d ice blocks, want %d", drawn, len(frozen))
-	}
-}
-
-// surveyBlock names the block a coordinate falls in, the way surveyTiles does.
-func surveyBlock(world game.World, coord hexg.Hex, stride int) [2]int {
-	offset := worldmap.Cut(world.Width(), 0, coord).CubeToROffset(mapOffsetEven)
-	return [2]int{(offset.Col + world.Width()) / stride, (offset.Row + world.Height()) / stride}
-}
-
+// row. worldmap.Cut is what undoes that, and this is the assertion that it
+// actually tiles: every row holds every column exactly once.
 func TestRectangularCutTilesTheWorld(t *testing.T) {
 	world := testMapWorld()
 
@@ -295,14 +410,14 @@ func TestRectangularCutTilesTheWorld(t *testing.T) {
 	// A parallelogram would be markedly wider than the rectangle it should be:
 	// the lean adds half a column per row on top of the world's true width.
 	view := buildMapView(func(coord hexg.Hex) hexg.Hex { return worldmap.Cut(world.Width(), 0, coord) },
-		game.AdminView(world))
+		game.WindowView(world, hexg.NewHex(0, 0), world.Columns(), world.Rows()), defaultMapHexSize)
 	var minX, maxX float64
 	if _, err := fmt.Sscanf(view.ViewBox, "%f %f %f %f", &minX, new(float64), &maxX, new(float64)); err != nil {
 		t.Fatalf("viewBox %q: %v", view.ViewBox, err)
 	}
 	// Pointy-top hexes are sqrt(3)*size apart across a row, plus half that for
 	// the row shove, plus padding on both sides.
-	want := (float64(world.Columns())+0.5)*math.Sqrt(3)*mapHexSize + 2*mapPadding
+	want := (float64(world.Columns())+0.5)*math.Sqrt(3)*defaultMapHexSize + 2*mapPadding
 	if maxX > want*1.02 {
 		t.Fatalf("map is %.0f wide, want about %.0f: the cut is leaning", maxX, want)
 	}

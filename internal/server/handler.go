@@ -72,6 +72,7 @@ func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCrea
 	mux.HandleFunc("POST /sign-out", app.signOut)
 	mux.HandleFunc("GET /admin/dashboard", app.dashboard("admin"))
 	mux.HandleFunc("GET /admin/map", app.adminMap)
+	mux.HandleFunc("GET /admin/map.png", app.adminMapImage)
 	mux.HandleFunc("GET /player/dashboard", app.dashboard("player"))
 	mux.HandleFunc("GET /player/map", app.playerMap)
 	mux.HandleFunc("GET /player/faction", app.factionForm)
@@ -384,8 +385,20 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 	.faction-summary .label { margin: 0; color: var(--gold); font: 700 .72rem/1.2 system-ui, sans-serif; letter-spacing: .16em; text-transform: uppercase; }
 	.location { min-width: 9rem; padding-left: 2rem; border-left: 1px solid var(--line); }
 	.location strong { display: block; margin-top: .35rem; color: var(--ink); font: 400 1.65rem/1.2 Georgia, 'Times New Roman', serif; }
-    .map { margin-top: 2.5rem; padding: 1rem; background: rgba(13,23,28,.6); border: 1px solid var(--line); }
-    .map svg { display: block; width: 100%; height: auto; }
+    .map-page { max-width: none; }
+    /* The map scrolls inside its frame rather than being scaled down to fit it.
+       Scrolling is the browser's own gesture, so a phone pans it with one
+       finger, with momentum, and nothing here has to implement any of that.
+       overscroll-behavior keeps a pan that reaches the edge of the world from
+       carrying on into scrolling the page underneath. */
+    .map { display: grid; justify-content: safe center; max-height: min(70vh, 40rem); margin-top: 2.5rem; padding: 1rem; overflow: auto; overscroll-behavior: contain; background: rgba(13,23,28,.6); border: 1px solid var(--line); }
+    .map svg { display: block; }
+    .map-pan { display: grid; grid-template-areas: ". north ." "west here east" ". south ."; justify-content: center; gap: .5rem; margin-top: 1.25rem; }
+    .map-pan .north { grid-area: north; }
+    .map-pan .south { grid-area: south; }
+    .map-pan .west { grid-area: west; }
+    .map-pan .east { grid-area: east; }
+    .map-pan .here { grid-area: here; align-self: center; color: var(--muted); font: .78rem/1.2 system-ui, sans-serif; letter-spacing: .1em; text-align: center; }
     .map polygon { stroke: rgba(13,23,28,.55); stroke-width: 1; }
     .map .grassland, .legend .grassland { fill: var(--grassland); background: var(--grassland); }
     .map .forest, .legend .forest { fill: var(--forest); background: var(--forest); }
@@ -399,7 +412,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .legend { display: flex; flex-wrap: wrap; gap: 1.1rem; margin: 1.25rem 0 0; padding: 0; color: var(--muted); font: .72rem/1.2 system-ui, sans-serif; letter-spacing: .14em; list-style: none; text-transform: uppercase; }
     .legend li { display: flex; align-items: center; gap: .5rem; }
     .legend i { width: .95rem; height: .95rem; border: 1px solid var(--line); }
-    .map-actions { margin-top: 2rem; }
+    .map-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 2rem; }
     footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 2rem 0 3rem; color: #898674; border-top: 1px solid var(--line); font-size: .85rem; }
     .project-meta { display: flex; align-items: center; gap: .65rem; }
     .github-link { display: flex; color: var(--muted); }
@@ -453,19 +466,19 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		</form>
 	  </section>
 	  {{else if or (eq .View "admin-map") (eq .View "player-map")}}
-	  <section class="dashboard">
+	  <section class="dashboard map-page">
 		{{if eq .View "admin-map"}}
 		<p class="eyebrow">The true map</p>
 		<h1>Marajanda</h1>
-		<p class="lede">The whole world in true coordinates, generated once from this game&rsquo;s seeds. Hover a hex for its terrain and elevation.</p>
+		<p class="lede">A window onto the world in true coordinates, drawn hex by hex. Scroll inside the frame to look around it, pan to move it, and download the whole world as an image. Hover a hex for its terrain and elevation.</p>
 		{{else}}
 		<p class="eyebrow">Your map</p>
 		<h1>{{.Faction.Name}}</h1>
-		<p class="lede">The land your people have seen, drawn from your origin outward. Everything beyond it is still rumour.</p>
+		<p class="lede">The land your people have seen, and the little of it they can make out beyond. Everything past that is still rumour.</p>
 		{{end}}
 		<div class="map">
 		  {{if .Map.Tiles}}
-		  <svg viewBox="{{.Map.ViewBox}}" role="img" aria-label="{{if eq .View "admin-map"}}Hex map centred on the game origin{{else}}Hex map centred on your origin{{end}}">
+		  <svg width="{{.Map.Width}}" height="{{.Map.Height}}" viewBox="{{.Map.ViewBox}}" role="img" aria-label="{{if eq .View "admin-map"}}Hex map of the world around {{.Map.Center}}{{else}}Hex map of the land your people have seen{{end}}">
 			{{range .Map.Tiles}}<polygon class="{{.Terrain}}" points="{{.Points}}"><title>{{.Label}}</title></polygon>
 			{{end}}
 		  </svg>
@@ -473,6 +486,15 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		  <p class="lede">There is nothing to draw yet.</p>
 		  {{end}}
 		</div>
+		{{if .Map.Pan}}
+		<nav class="map-pan" aria-label="Move the map">
+		  <a class="sign-link north" href="{{.Map.Pan.North}}">North</a>
+		  <a class="sign-link west" href="{{.Map.Pan.West}}">West</a>
+		  <span class="here">{{.Map.Center}}</span>
+		  <a class="sign-link east" href="{{.Map.Pan.East}}">East</a>
+		  <a class="sign-link south" href="{{.Map.Pan.South}}">South</a>
+		</nav>
+		{{end}}
 		<ul class="legend">
 		  <li><i class="grassland"></i>Grassland</li>
 		  <li><i class="forest"></i>Forest</li>
@@ -484,7 +506,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		  <li><i class="ice"></i>Ice</li>
 		  {{if eq .View "player-map"}}<li><i class="fog"></i>Unexplored</li>{{end}}
 		</ul>
-		<p class="map-actions"><a class="sign-link" href="{{if eq .View "admin-map"}}/admin/dashboard{{else}}/player/dashboard{{end}}">Back to dashboard</a></p>
+		<p class="map-actions"><a class="sign-link" href="{{if eq .View "admin-map"}}/admin/dashboard{{else}}/player/dashboard{{end}}">Back to dashboard</a>{{if .Map.Pan}}<a class="sign-link" href="{{.Map.Pan.Origin}}">Back to the origin</a>{{end}}{{if .Map.Image}}<a class="sign-link" href="{{.Map.Image}}">Download the whole world</a>{{end}}</p>
 	  </section>
 	  {{else}}
       <section class="dashboard">

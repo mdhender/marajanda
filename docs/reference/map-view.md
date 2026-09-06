@@ -2,10 +2,11 @@
 
 ## Routes
 
-| Route | Role | Page |
+| Route | Role | Response |
 | --- | --- | --- |
-| `GET /admin/map` | `admin` | The true map |
-| `GET /player/map` | `player` | The account's own map |
+| `GET /admin/map` | `admin` | A page holding a window onto the world |
+| `GET /admin/map.png` | `admin` | The whole world as a PNG attachment |
+| `GET /player/map` | `player` | A page holding the account's own map |
 
 A request without a valid session is directed to `/sign-in`. A request whose
 account holds the other role is directed to that account's dashboard. A player
@@ -14,50 +15,73 @@ whose required faction metadata is incomplete is directed to `/player/faction`.
 Each dashboard links to the map its role may view. Each map links back to that
 dashboard.
 
-## Viewport
+## Hex size
 
-The pages have no pan, zoom, or scroll, so what each map draws is the entire
-viewport.
+A hexagon is drawn with a pixel radius of `24`, giving a hexagon 42 pixels wide
+and 48 tall. The size is the same on every map and on every device.
 
-| Map | Center | Extent |
-| --- | --- | --- |
-| Admin | The game origin `(0, 0, 0)` | The whole world |
-| Player | The account origin hex | Radius 6 |
-
-A disc of radius `n` contains `3n(n + 1) + 1` hexes. The world's radius is given
-in [Terrain reference](terrain.md).
+There is no zoom. A map is drawn at its natural size and the browser scrolls it,
+so the size of a screen decides how many hexes are on it and nothing else.
 
 ## Admin map
 
-Every hex of the world is drawn with its terrain. Coordinates are true axial
+### Window
+
+The page draws a window of `40` columns by `26` rows, centred on a hex given by
+the query:
+
+| Parameter | Meaning | Default |
+| --- | --- | --- |
+| `q` | The axial `q` of the window's centre | `0` |
+| `r` | The axial `r` of the window's centre | `0` |
+
+`q` outside the canonical range wraps back into it. `r` outside the world is
+clamped to the nearest pole, and a window that would reach past a pole is drawn
+short: rows are the one thing the world does not wrap.
+
+Every hex of the window is drawn with its terrain. Coordinates are true axial
 `(q, r)` values.
+
+### Panning
+
+Four links move the window by half of itself: `20` columns east or west, `13`
+rows north or south. Consecutive windows therefore overlap by half. A fifth link
+returns the window to the game origin.
+
+Each is an ordinary link to `/admin/map` with a new `q` and `r`. Panning is a
+new window, which is a new page.
+
+### The world image
+
+`GET /admin/map.png` returns the whole world drawn at a pixel radius of `4`, as
+an attachment named `marajanda-world.png`. Every hex is drawn in its own colour;
+nothing is sampled, collapsed or summarized. The default world is one
+`3544 x 1532` image.
 
 ## Player map
 
+### Window
+
+The window is the smallest rectangle holding every hex the account can see,
+grown by a margin of `2` hexes on all four sides. An account that can see one
+hex is sent a five-by-five map.
+
+The margin is the same on every side and is never reduced. A hex beyond a pole
+is inside the window like any other and is drawn as fog, so the size and shape
+of the map are the same wherever in the world the account stands.
+
+There is no pan control, and the route takes no window parameters. The map is
+the whole of what the account may see.
+
+### Contents
+
 Hexes the account can see are drawn with their terrain. Every other hex in the
-disc is drawn as fog: the hex outline, no terrain. A hex outside the world is
+window is drawn as fog: the hex outline, no terrain. A hex outside the world is
 drawn as fog even when it is in the visible set, so the edge of the world is not
 distinguishable from unexplored ground.
 
-Coordinates are the account's own axial `(q, r)` values, in which the account
-origin hex is `(0, 0)`. The page contains no true map coordinate.
-
-## Coordinate frames
-
-An account with true origin hex `O` and rotation `k` displays a true coordinate
-`t` at the coordinate `p` on its own map:
-
-```text
-p = rotate_left^k (t - O)
-t = O + rotate_right^k (p)
-```
-
-Rotation is the cube rotation about `(0, 0, 0)`, applied after the translation.
-It is a property of the account, not of the orientation the map is drawn in.
-
-The main admin has the game origin and rotation `0`, so its own map and the true
-map are the same. See [Player origin reference](player-origin.md) for the
-placement and rotation rules.
+Coordinates are true axial `(q, r)` values, the same coordinates every other
+account means. A fog hex carries no coordinate.
 
 ## Visible hexes
 
@@ -78,13 +102,18 @@ generated when the database was created. Drawing a map writes no rows. See
 
 Each map is one inline SVG element in the page.
 
-- The grid is flat-top, per [Product reference](../PRODUCT.md).
+- The grid is pointy-top, even-r, matching the layout the world is generated in.
 - One `polygon` element is drawn per hex. Its class is the terrain value, or
   `fog` when the hex is not visible.
-- Each `polygon` carries a `title` giving the hex coordinate in that page's
-  frame, and either its terrain and elevation or `unexplored`. Elevation is
-  given as `N m` on land and `N m deep` in water.
-- The `viewBox` is computed from the drawn hexes and bounds the whole map, so
-  the map scales to its container.
+- Each `polygon` carries a `title`. A visible hex gives its coordinate, its
+  terrain and its elevation, where elevation is `N m` on land and `N m deep` in
+  water. A fog hex gives `Unexplored` and nothing else.
+- The element carries a `width` and a `height` in pixels as well as a `viewBox`,
+  so it is drawn at its natural size rather than scaled to its container. The
+  container scrolls.
 - Hexes are drawn in a fixed order, so identical requests produce identical
   markup.
+
+A map that straddles the meridian is drawn continuous across it. Each map says
+which copy of a hex it wants: an admin window takes the copy nearest its own
+centre column, and a player map the copy nearest the account origin.
