@@ -84,7 +84,7 @@ func (app *application) agentSignIn(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Marajanda could not create the development session.", http.StatusInternalServerError)
 		return
 	}
-	if err := app.startSession(w, account); err != nil {
+	if err := app.startSession(r.Context(), w, account); err != nil {
 		http.Error(w, "Marajanda could not create the development session.", http.StatusInternalServerError)
 		return
 	}

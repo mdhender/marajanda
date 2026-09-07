@@ -87,8 +87,9 @@ Dependency direction is one-way: `cmd/marajanda` → `internal/server` →
 - **`internal/server`** — `Run` opens the store (chdir'ing into the root for a
   persistent database), listens, and shuts down gracefully on context cancel or
   `--timeout`. `handler.go` holds the whole web layer: routes on
-  `http.ServeMux`, in-memory sessions keyed by a `Secure`/`HttpOnly`/`SameSite=Lax`
-  cookie, and **the entire UI as one `html/template` in a Go string literal**
+  `http.ServeMux`, datastore-backed sessions whose opaque token is held in a
+  `Secure`/`HttpOnly`/`SameSite=Lax` cookie, and **the entire UI as one
+  `html/template` in a Go string literal**
   (`pageTemplate`) switched by `pageData.View`. There is no template directory.
   The mux is wrapped in `http.CrossOriginProtection`, and `render` sets the CSP
   and related headers. A named block of the same template can be rendered alone

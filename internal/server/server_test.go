@@ -41,7 +41,7 @@ func TestRunStopsAfterTimeout(t *testing.T) {
 	start := time.Now()
 	err := Run(t.Context(), Config{
 		Root:    ":memory:",
-		Game:    new(datastore.Game{Seed1: 98374, Seed2: -98}),
+		Game:    new(datastore.Game{Seed1: 98374, Seed2: -98, Width: datastore.MinimumWorldWidth, Height: datastore.MinimumWorldHeight}),
 		Address: DefaultAddress,
 		Port:    0,
 		Timeout: 10 * time.Millisecond,

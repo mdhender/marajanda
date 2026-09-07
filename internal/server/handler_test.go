@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -167,9 +168,10 @@ func TestSignInCreatesSessionAndRoutesByRole(t *testing.T) {
 }
 
 func TestSignOutEndsSession(t *testing.T) {
+	store := &testStore{}
 	handler := newHandler(func(context.Context, string, string) (datastore.Account, bool, error) {
-		return datastore.Account{Handle: "wanderer", Role: "player"}, true, nil
-	}, nil)
+		return datastore.Account{Email: "player@example.com", Handle: "wanderer", Role: "player"}, true, nil
+	}, store)
 	signIn := submitSignIn(handler, "player@example.com", "good.luck")
 	sessionCookie := signIn.Result().Cookies()[0]
 
@@ -196,6 +198,60 @@ func TestSignOutEndsSession(t *testing.T) {
 	handler.ServeHTTP(dashboard, dashboardRequest)
 	if dashboard.Code != http.StatusSeeOther || dashboard.Header().Get("Location") != "/sign-in" {
 		t.Fatalf("dashboard response = %d %q, want %d %q", dashboard.Code, dashboard.Header().Get("Location"), http.StatusSeeOther, "/sign-in")
+	}
+}
+
+func TestSessionStorageFailureDoesNotAuthenticate(t *testing.T) {
+	store := &testStore{}
+	handler := newHandler(func(context.Context, string, string) (datastore.Account, bool, error) {
+		return datastore.Account{Email: "player@example.com", Handle: "wanderer", Role: "player"}, true, nil
+	}, store)
+	signIn := submitSignIn(handler, "player@example.com", "good.luck")
+	cookie := signIn.Result().Cookies()[0]
+
+	store.sessionErr = errors.New("session storage unavailable")
+	response := requestWithCookie(handler, http.MethodGet, "/player/dashboard", cookie, "")
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("dashboard status = %d, want %d", response.Code, http.StatusInternalServerError)
+	}
+	if response.Header().Get("Location") != "" {
+		t.Fatalf("storage failure redirected to %q instead of refusing the request", response.Header().Get("Location"))
+	}
+}
+
+func TestBrowserSessionSurvivesPersistentStoreReopen(t *testing.T) {
+	root := t.TempDir()
+	gameRecord := datastore.Game{
+		Seed1: 98374, Seed2: -98,
+		Width: datastore.MinimumWorldWidth, Height: datastore.MinimumWorldHeight,
+	}
+	store, err := datastore.Open(t.Context(), root, datastore.SeedAccount{
+		Email: "admin@example.com", Secret: "temporary", Handle: "keeper",
+	}, &gameRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := newHandler(store.Authenticate, store)
+	signIn := submitSignIn(handler, "admin@example.com", "temporary")
+	result := signIn.Result()
+	if signIn.Code != http.StatusSeeOther || len(result.Cookies()) != 1 {
+		store.Close()
+		t.Fatalf("sign-in = %d with %d cookies", signIn.Code, len(result.Cookies()))
+	}
+	cookie := result.Cookies()[0]
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = datastore.Open(t.Context(), root, datastore.SeedAccount{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	handler = newHandler(store.Authenticate, store)
+	dashboard := requestWithCookie(handler, http.MethodGet, "/admin/dashboard", cookie, "")
+	if dashboard.Code != http.StatusOK || !strings.Contains(dashboard.Body.String(), "Welcome, keeper.") {
+		t.Fatalf("dashboard after reopen = %d %q, want authenticated keeper", dashboard.Code, dashboard.Body.String())
 	}
 }
 
@@ -358,9 +414,9 @@ func TestConfigureFactionReportsAFullWorld(t *testing.T) {
 	}
 }
 
-// A session is a snapshot taken at sign-in, and configuring a faction is what
-// gives a player an origin. Without replacing the snapshot the player carries an
-// unseated account into the map for the rest of the session.
+// Configuring a faction gives a player an origin. Session resolution reads the
+// current account row, so the next request observes that seat without an
+// in-process snapshot rewrite.
 func TestConfigureFactionSeatsTheSession(t *testing.T) {
 	store := &testStore{seat: hexg.NewHex(7, -16), world: testMapWorld(), game: testMapGame()}
 	handler, cookie := signedInPlayer(t, store)
@@ -469,6 +525,39 @@ type testStore struct {
 	// insertedAt is the sequence the last insert asked for, so a test can see
 	// that "insert after order 1" asked for position 2.
 	insertedAt int
+	// sessionAccount is the account row ResolveSession reads. Tests set it when
+	// their authentication fake returns an account, and SaveFaction updates it
+	// as the real datastore updates the row.
+	sessionAccount datastore.Account
+	sessions       map[string]bool
+	sessionErr     error
+}
+
+func (s *testStore) CreateSession(_ context.Context, token []byte, account datastore.Account) error {
+	if s.sessionErr != nil {
+		return s.sessionErr
+	}
+	s.sessionAccount = account
+	if s.sessions == nil {
+		s.sessions = make(map[string]bool)
+	}
+	s.sessions[string(token)] = true
+	return nil
+}
+
+func (s *testStore) ResolveSession(_ context.Context, token []byte) (datastore.Account, bool, error) {
+	if s.sessionErr != nil {
+		return datastore.Account{}, false, s.sessionErr
+	}
+	return s.sessionAccount, s.sessions[string(token)], nil
+}
+
+func (s *testStore) DeleteSession(_ context.Context, token []byte) error {
+	if s.sessionErr != nil {
+		return s.sessionErr
+	}
+	delete(s.sessions, string(token))
+	return nil
 }
 
 func (s *testStore) OrdersAsOf(_ context.Context, _ string, turn int) (map[int64][]datastore.Order, error) {
@@ -631,5 +720,11 @@ func (s *testStore) SaveFaction(_ context.Context, email, name string, race game
 		{ID: 1, Code: "LEADER-1", Name: "LEADER-1", Kind: game.EntityKindLeader, Location: s.seat},
 		{ID: 2, Code: "HAMLET-1", Name: "HAMLET-1", Kind: game.EntityKindHamlet, Location: s.seat},
 	}
-	return datastore.Account{Email: email, Role: "player", Origin: s.seat, Seated: true}, nil
+	seated := s.sessionAccount
+	seated.Email = email
+	seated.Role = "player"
+	seated.Origin = s.seat
+	seated.Seated = true
+	s.sessionAccount = seated
+	return seated, nil
 }

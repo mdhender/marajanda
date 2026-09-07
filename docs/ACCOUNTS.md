@@ -41,8 +41,8 @@ email address alone still says nothing about which accounts exist.
 or the development route would be a way around it. An account that route
 creates is active, like any other new account.
 
-Sessions are a map in memory and are taken at sign-in, so deactivating an
-account does not end a session it already holds.
+Sessions resolve the current account row without applying the flag, so
+deactivating an account does not end a session it already holds.
 
 An account's flag is independent of its faction's. Deactivating a faction stops
 it giving orders and leaves its player able to sign in and look at their game;
@@ -53,7 +53,11 @@ during beta.
 
 The sign-in form labels the email identifier as `Account` and renders it as a text input. Inputs that are not syntactically email addresses are rejected before a database authentication lookup. All rejected credentials receive the same message.
 
-Successful authentication creates a cryptographically random in-memory session. The browser receives the session identifier in a host-only `Secure`, `HttpOnly`, `SameSite=Lax` cookie without a persistent expiration. The session ends when the browser or server restarts.
+Successful authentication creates a persisted session from a cryptographically
+random 32-byte token. Only its SHA-256 hash is stored; the browser receives the
+opaque token in a host-only `Secure`, `HttpOnly`, `SameSite=Lax` cookie without
+a persistent expiration. The session survives a server restart and ends when
+the browser discards the cookie, the user signs out, or the account is deleted.
 
 Authenticated admins are directed to `/admin/dashboard`. Authenticated players are directed to `/player/dashboard`. Requests for either dashboard without a valid session are directed to `/sign-in`. The same role and session rules apply to the map pages described in [Map view reference](reference/map-view.md).
 

@@ -54,9 +54,10 @@ func TestAgentSignInCreatesNormalSession(t *testing.T) {
 }
 
 func TestAgentSignInRejectsUnsafeReturnPaths(t *testing.T) {
+	store := &testStore{faction: datastore.Faction{Name: "Reviewers", Race: game.RaceHuman, Active: true}, found: true}
 	handler := newConfiguredHandler(nil, func(context.Context, string) (datastore.Account, error) {
-		return datastore.Account{Handle: "reviewer", Role: "player"}, nil
-	}, nil, "development", nil)
+		return datastore.Account{Email: "agent@example.test", Handle: "reviewer", Role: "player"}, nil
+	}, store, "development", nil)
 	for _, value := range []string{
 		"",
 		"dashboard",

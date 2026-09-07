@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/mail"
 	"strings"
-	"sync"
 
 	"github.com/maloquacious/hexg"
 	"github.com/mdhender/marajanda"
@@ -25,6 +24,9 @@ type authenticateFunc func(context.Context, string, string) (datastore.Account, 
 type findOrCreateFunc func(context.Context, string) (datastore.Account, error)
 
 type applicationStore interface {
+	CreateSession(context.Context, []byte, datastore.Account) error
+	ResolveSession(context.Context, []byte) (datastore.Account, bool, error)
+	DeleteSession(context.Context, []byte) error
 	Game(context.Context) (datastore.Game, error)
 	World(context.Context) (game.World, error)
 	CurrentTurn(context.Context) (int, error)
@@ -49,9 +51,7 @@ type application struct {
 	// shutdown ends the server the handler is serving. It is nil unless the
 	// caller supplied one, which is what keeps the development route that
 	// calls it out of a handler that has no server to stop.
-	shutdown   func()
-	sessionsMu sync.RWMutex
-	sessions   map[string]datastore.Account
+	shutdown func()
 }
 
 type pageData struct {
@@ -88,7 +88,6 @@ func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCrea
 		findOrCreateAccount: findOrCreate,
 		store:               store,
 		shutdown:            shutdown,
-		sessions:            make(map[string]datastore.Account),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -122,7 +121,12 @@ func (app *application) landing(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if account, ok := app.currentAccount(r); ok {
+	account, ok, err := app.currentAccount(r)
+	if err != nil {
+		http.Error(w, "Marajanda could not load the session.", http.StatusInternalServerError)
+		return
+	}
+	if ok {
 		http.Redirect(w, r, dashboardPath(account), http.StatusSeeOther)
 		return
 	}
@@ -130,7 +134,12 @@ func (app *application) landing(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *application) signInForm(w http.ResponseWriter, r *http.Request) {
-	if account, ok := app.currentAccount(r); ok {
+	account, ok, err := app.currentAccount(r)
+	if err != nil {
+		http.Error(w, "Marajanda could not load the session.", http.StatusInternalServerError)
+		return
+	}
+	if ok {
 		http.Redirect(w, r, dashboardPath(account), http.StatusSeeOther)
 		return
 	}
@@ -168,7 +177,7 @@ func (app *application) signIn(w http.ResponseWriter, r *http.Request) {
 		app.renderSignInFailure(w, http.StatusUnauthorized)
 		return
 	}
-	if err := app.startSession(w, account); err != nil {
+	if err := app.startSession(r.Context(), w, account); err != nil {
 		http.Error(w, "Marajanda could not create the session.", http.StatusInternalServerError)
 		return
 	}
@@ -177,9 +186,12 @@ func (app *application) signIn(w http.ResponseWriter, r *http.Request) {
 
 func (app *application) signOut(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(sessionCookieName); err == nil {
-		app.sessionsMu.Lock()
-		delete(app.sessions, cookie.Value)
-		app.sessionsMu.Unlock()
+		if token, err := decodeSessionToken(cookie.Value); err == nil && app.store != nil {
+			if err := app.store.DeleteSession(r.Context(), token); err != nil {
+				http.Error(w, "Marajanda could not end the session.", http.StatusInternalServerError)
+				return
+			}
+		}
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
@@ -192,17 +204,20 @@ func (app *application) signOut(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/sign-in", http.StatusSeeOther)
 }
 
-func (app *application) startSession(w http.ResponseWriter, account datastore.Account) error {
+func (app *application) startSession(ctx context.Context, w http.ResponseWriter, account datastore.Account) error {
 	token, err := newSessionToken()
 	if err != nil {
 		return err
 	}
-	app.sessionsMu.Lock()
-	app.sessions[token] = account
-	app.sessionsMu.Unlock()
+	if app.store == nil {
+		return errors.New("session store is not configured")
+	}
+	if err := app.store.CreateSession(ctx, token, account); err != nil {
+		return err
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
-		Value:    token,
+		Value:    base64.RawURLEncoding.EncodeToString(token),
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   true,
@@ -213,7 +228,11 @@ func (app *application) startSession(w http.ResponseWriter, account datastore.Ac
 
 func (app *application) dashboard(role string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		account, ok := app.currentAccount(r)
+		account, ok, err := app.currentAccount(r)
+		if err != nil {
+			http.Error(w, "Marajanda could not load the session.", http.StatusInternalServerError)
+			return
+		}
 		if !ok {
 			http.Redirect(w, r, "/sign-in", http.StatusSeeOther)
 			return
@@ -353,10 +372,9 @@ func (app *application) configureFaction(w http.ResponseWriter, r *http.Request)
 		app.render(w, http.StatusUnprocessableEntity, factionPage(account, name, game.DefaultRace, "Choose one of the peoples of Marajanda."))
 		return
 	}
-	// Saving the faction is what seats the account, so the session's copy of it
-	// is replaced with the seated one. Without that the player would carry an
-	// origin-less account into the map page for the rest of the session.
-	seated, err := app.store.SaveFaction(r.Context(), account.Email, name, race)
+	// Saving the faction seats the account. The next session resolution reads
+	// that updated account row, so there is no in-process snapshot to rewrite.
+	_, err = app.store.SaveFaction(r.Context(), account.Email, name, race)
 	if err != nil {
 		if errors.Is(err, game.ErrNoOrigin) {
 			app.render(w, http.StatusConflict, factionPage(account, name, race,
@@ -366,23 +384,7 @@ func (app *application) configureFaction(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Marajanda could not save your faction.", http.StatusInternalServerError)
 		return
 	}
-	app.replaceSessionAccount(r, seated)
 	http.Redirect(w, r, "/player/dashboard", http.StatusSeeOther)
-}
-
-// replaceSessionAccount updates the account held by the current session. A
-// session is a snapshot taken at sign-in, so anything that changes the account
-// row underneath it has to say so.
-func (app *application) replaceSessionAccount(r *http.Request, account datastore.Account) {
-	cookie, err := r.Cookie(sessionCookieName)
-	if err != nil {
-		return
-	}
-	app.sessionsMu.Lock()
-	defer app.sessionsMu.Unlock()
-	if _, ok := app.sessions[cookie.Value]; ok {
-		app.sessions[cookie.Value] = account
-	}
 }
 
 func (app *application) requirePlayer(w http.ResponseWriter, r *http.Request) (datastore.Account, bool) {
@@ -394,7 +396,11 @@ func (app *application) requirePlayer(w http.ResponseWriter, r *http.Request) (d
 // when the role does not match, so no page answers for a role it does not
 // belong to.
 func (app *application) requireRole(w http.ResponseWriter, r *http.Request, role string) (datastore.Account, bool) {
-	account, ok := app.currentAccount(r)
+	account, ok, err := app.currentAccount(r)
+	if err != nil {
+		http.Error(w, "Marajanda could not load the session.", http.StatusInternalServerError)
+		return datastore.Account{}, false
+	}
 	if !ok {
 		http.Redirect(w, r, "/sign-in", http.StatusSeeOther)
 		return datastore.Account{}, false
@@ -410,15 +416,16 @@ func (app *application) requireRole(w http.ResponseWriter, r *http.Request, role
 	return account, true
 }
 
-func (app *application) currentAccount(r *http.Request) (datastore.Account, bool) {
+func (app *application) currentAccount(r *http.Request) (datastore.Account, bool, error) {
 	cookie, err := r.Cookie(sessionCookieName)
-	if err != nil {
-		return datastore.Account{}, false
+	if err != nil || app.store == nil {
+		return datastore.Account{}, false, nil
 	}
-	app.sessionsMu.RLock()
-	account, ok := app.sessions[cookie.Value]
-	app.sessionsMu.RUnlock()
-	return account, ok
+	token, err := decodeSessionToken(cookie.Value)
+	if err != nil {
+		return datastore.Account{}, false, nil
+	}
+	return app.store.ResolveSession(r.Context(), token)
 }
 
 func (app *application) renderSignInFailure(w http.ResponseWriter, status int) {
@@ -480,12 +487,20 @@ func isEmail(value string) bool {
 	return err == nil && address.Address == value && strings.Contains(value, "@")
 }
 
-func newSessionToken() (string, error) {
-	bytes := make([]byte, 32)
+func newSessionToken() ([]byte, error) {
+	bytes := make([]byte, datastore.SessionTokenBytes)
 	if _, err := rand.Read(bytes); err != nil {
-		return "", err
+		return nil, err
 	}
-	return base64.RawURLEncoding.EncodeToString(bytes), nil
+	return bytes, nil
+}
+
+func decodeSessionToken(value string) ([]byte, error) {
+	token, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil || len(token) != datastore.SessionTokenBytes {
+		return nil, errors.New("invalid session token")
+	}
+	return token, nil
 }
 
 func dashboardPath(account datastore.Account) string {

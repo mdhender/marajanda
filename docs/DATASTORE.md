@@ -57,7 +57,19 @@ Every account carries `is_active`, an integer constrained to `0` or `1` and
 defaulting to `1`. `STRICT` tables have no boolean type, so a constrained value
 is an integer with a check. An account written without an opinion is active;
 `0` is the value that takes an account away. A deactivated account is not
-authenticated. See [Accounts reference](ACCOUNTS.md#deactivation).
+authenticated by credentials. See [Accounts reference](ACCOUNTS.md#deactivation).
+
+## Sessions
+
+Each browser session associates an account with the SHA-256 hash of an opaque,
+cryptographically random 32-byte token. The raw bearer token is held only by
+the browser cookie and is hashed before every datastore read or write. The hash
+is the session table's fixed-length key.
+
+A session row has no timeout. It remains until sign-out revokes it or deletion
+of its account removes it through `ON DELETE CASCADE`. Resolving a session reads
+the current account row and does not filter `is_active`: deactivation prevents
+new authentication but deliberately does not revoke a session already issued.
 
 ## Hexes
 

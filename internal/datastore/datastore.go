@@ -143,6 +143,14 @@ CREATE TABLE accounts (
 	FOREIGN KEY (origin_q, origin_r) REFERENCES hexes (q, r) DEFERRABLE INITIALLY DEFERRED
 ) STRICT;
 
+-- A session token is a bearer secret, so only its fixed-length SHA-256 hash
+-- belongs in the database. A session follows its account and disappears with
+-- it; deactivation deliberately does not revoke one.
+CREATE TABLE sessions (
+	token_hash    BLOB NOT NULL PRIMARY KEY CHECK (length(token_hash) = 32),
+	account_email TEXT NOT NULL REFERENCES accounts (email) ON DELETE CASCADE
+) STRICT;
+
 -- A faction has no coordinates. It owns entities, and they have the
 -- locations.
 --
@@ -515,6 +523,10 @@ func (f Faction) Configured() bool {
 type Store struct {
 	conn *sqlite.Conn
 	pool *sqlitemigration.Pool
+	// A private in-memory store owns one connection rather than a pool. SQLite
+	// connections are not safe for simultaneous use, so serialize callers in
+	// that mode. Pooled stores already serialize by leasing connections.
+	connMu sync.Mutex
 
 	// The world is immutable from the moment the database is created, so it is
 	// read once and kept. Reading it per request was invisible on a world of
@@ -997,8 +1009,12 @@ func (s *Store) awaitReady(ctx context.Context) error {
 
 func (s *Store) take(ctx context.Context) (*sqlite.Conn, func(), error) {
 	if s.conn != nil {
+		s.connMu.Lock()
 		previousInterrupt := s.conn.SetInterrupt(ctx.Done())
-		return s.conn, func() { s.conn.SetInterrupt(previousInterrupt) }, nil
+		return s.conn, func() {
+			s.conn.SetInterrupt(previousInterrupt)
+			s.connMu.Unlock()
+		}, nil
 	}
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
