@@ -1,0 +1,14 @@
+services:
+  marajanda:
+    command: MARAJANDA_PORT="$PORT" air
+    env:
+      ENV: agents
+      MARAJANDA_ROOT: ":memory:"
+      MARAJANDA_GAME_SEED: "98374,-98"
+      MARAJANDA_ADDRESS: "0.0.0.0"
+    health: /api/healthz
+    portal:
+      url: /__agents/log-me-in/agent%40example.test?returnTo=%2Fplayer%2Fdashboard
+      title: Marajanda
+      description: Opens the player dashboard with a disposable development account.
+    agent: control

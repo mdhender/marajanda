@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+go_version="$(awk '$1 == "go" { print $2; exit }' "$repo_root/go.mod")"
+
+case "$(uname -m)" in
+	x86_64)
+		go_arch=amd64
+		go_sha256=aac1b08a0fb0c4e0a7c1555beb7b59180b05dfc5a3d62e40e9de90cd42f88235
+		air_sha256=d3b39beaee67ae1ccfa3a3a870be41d87fe89405109ef31114bfb0aadb9be4b9
+		;;
+	aarch64 | arm64)
+		go_arch=arm64
+		go_sha256=bd03b743eb6eb4193ea3c3fd3956546bf0e3ca5b7076c8226334afe6b75704cd
+		air_sha256=91b367e8e7b2479e96206f07c1cd6fa103e283b467067ceeb0b740937e79707b
+		;;
+	*)
+		echo "setup: unsupported architecture: $(uname -m)" >&2
+		exit 1
+		;;
+esac
+
+go_home="$HOME/.local/share/go"
+go_root="$go_home/$go_version"
+
+if [[ ! -x "$go_root/bin/go" ]]; then
+	echo "Installing Go $go_version..."
+	archive="go${go_version}.linux-${go_arch}.tar.gz"
+	tmp_dir="$(mktemp -d)"
+	trap 'rm -rf "$tmp_dir"' EXIT
+
+	curl -fsSL "https://go.dev/dl/$archive" -o "$tmp_dir/$archive"
+	(
+		cd "$tmp_dir"
+		echo "$go_sha256  $archive" | sha256sum --check --status
+		tar -xzf "$archive"
+	)
+	mkdir -p "$go_home"
+	mv "$tmp_dir/go" "$go_root"
+	rm -rf "$tmp_dir"
+	trap - EXIT
+fi
+
+ln -sfn "$go_root" "$go_home/current"
+
+profile_marker="# marajanda orb toolchain"
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+	cat >> "$HOME/.bash_profile" <<'EOF'
+
+# marajanda orb toolchain
+export PATH="$HOME/.local/share/go/current/bin:$HOME/go/bin:$PATH"
+EOF
+fi
+
+export PATH="$go_home/current/bin:$HOME/go/bin:$PATH"
+
+air_version=1.67.4
+if ! command -v air >/dev/null 2>&1 || [[ "$(air -v 2>/dev/null)" != *"$air_version"* ]]; then
+	echo "Installing Air v$air_version..."
+	air_asset="air_${air_version}_linux_${go_arch}"
+	air_tmp="$(mktemp)"
+	trap 'rm -f "$air_tmp"' EXIT
+	curl -fsSL "https://github.com/air-verse/air/releases/download/v${air_version}/${air_asset}" -o "$air_tmp"
+	echo "$air_sha256  $air_tmp" | sha256sum --check --status
+	install -Dm755 "$air_tmp" "$HOME/go/bin/air"
+	rm -f "$air_tmp"
+	trap - EXIT
+fi
+
+echo "Downloading Go module dependencies..."
+(
+	cd "$repo_root"
+	go mod download
+)
+
+echo "Orb setup complete."

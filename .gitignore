@@ -21,5 +21,8 @@
 /out/
 tmp/
 
+# generated Amp portal state
+.amp/portals/
+
 # overmind's control socket for a running instance
 .overmind.sock
