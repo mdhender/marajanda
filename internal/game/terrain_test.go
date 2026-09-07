@@ -30,13 +30,14 @@ func TestTerrainLandWaterAndIce(t *testing.T) {
 	}
 }
 
-// Impassability lives in the terrain so that movement never has to know where
-// the poles are.
+// Passability asks both what the destination is and what is trying to enter it.
 func TestTerrainPassable(t *testing.T) {
-	for _, terrain := range Terrains() {
-		want := terrain != TerrainIce
-		if got := terrain.Passable(); got != want {
-			t.Fatalf("%q.Passable() = %v, want %v", terrain, got, want)
+	for _, kind := range []EntityKind{EntityKindLeader, EntityKindHamlet, EntityKindMarajanda} {
+		for _, terrain := range Terrains() {
+			want := terrain.IsLand() || kind == EntityKindMarajanda
+			if got := terrain.Passable(kind); got != want {
+				t.Fatalf("%q.Passable(%q) = %v, want %v", terrain, kind, got, want)
+			}
 		}
 	}
 }

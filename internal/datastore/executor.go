@@ -83,6 +83,7 @@ func processFaction(conn *sqlite.Conn, normalizedEmail string, turn int, cyl cyl
 		// left to be inferred from a missing row.
 		outcome := game.Execute(game.Plan{
 			Sight:     game.GroundTruth(world.at),
+			Kind:      entity.Kind,
 			World:     cyl,
 			Knowledge: known,
 			Start:     entity.Location,

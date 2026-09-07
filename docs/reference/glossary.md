@@ -149,7 +149,8 @@ See [Player origin reference](player-origin.md).
 ## Polar ice
 
 The `ice` terrain of the northernmost and southernmost rows of the world.
-Ice is neither land nor water, and nothing may enter it.
+Ice is neither land nor water. It stops leaders and hamlets, while Marajanda
+may enter it; no entity may step beyond the world.
 See [Terrain reference](terrain.md).
 
 ## Pre-processor

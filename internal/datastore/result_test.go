@@ -177,7 +177,7 @@ func TestProcessingRecordsAnEntityThatWasGivenNothingToDo(t *testing.T) {
 func TestProcessingRecordsWhyAStepFailed(t *testing.T) {
 	eachMemoryMode(t, func(t *testing.T, store *Store) {
 		leader, _ := foundedFaction(t, store)
-		stand, into := iceEdge(t, store)
+		stand, into := impassableEdge(t, store)
 		standAt(t, store, leader.ID, stand)
 		wall := compass.Neighbor(testCylinder(t), stand, into)
 		seq := addMove(t, store, leader.ID, into)
@@ -233,7 +233,7 @@ func TestProcessingRecordsWhatTheEntityCouldNotAfford(t *testing.T) {
 			walked, clear := leader.Location, true
 			for range 3 {
 				walked = compass.Neighbor(cyl, walked, point)
-				clear = clear && world.IsPassable(walked)
+				clear = clear && world.IsPassable(walked, game.EntityKindLeader)
 			}
 			if clear {
 				direction = point

@@ -309,7 +309,7 @@ func TestGroundTruthSeesAStepThatWillNotLand(t *testing.T) {
 	}
 
 	plan := Plan{
-		World: world, Knowledge: known, Start: origin,
+		Kind: EntityKindLeader, World: world, Knowledge: known, Start: origin,
 		Allowance: LeaderAllowance, Orders: moves(compass.NE, compass.E),
 	}
 	fogged := Price(plan)
@@ -337,12 +337,38 @@ func TestGroundTruthSeesAStepThatWillNotLand(t *testing.T) {
 	// A coordinate the world does not have blocks the way impassable ground
 	// does: the world is its own filter.
 	nowhere := Price(Plan{
-		World: world, Knowledge: known, Start: origin, Allowance: LeaderAllowance,
+		Kind: EntityKindLeader, World: world, Knowledge: known, Start: origin, Allowance: LeaderAllowance,
 		Sight:  GroundTruth(func(hexg.Hex) (Terrain, bool) { return "", false }),
 		Orders: moves(compass.E),
 	})
 	if !nowhere.Orders[0].Failed {
 		t.Fatal("a step onto a coordinate the world does not have landed")
+	}
+}
+
+// Water and ice stop ordinary entity kinds, while Marajanda is not stopped by
+// terrain. The destination is what is tested; the terrain under the entity's
+// starting position is irrelevant.
+func TestGroundTruthPassabilityDependsOnEntityKind(t *testing.T) {
+	world := testCylinder(t)
+	origin := hexg.NewHex(0, 0)
+	destination := compass.Neighbor(world, origin, compass.E)
+
+	for _, terrain := range []Terrain{TerrainOcean, TerrainLake, TerrainIce} {
+		sight := GroundTruth(func(hexg.Hex) (Terrain, bool) { return terrain, true })
+		for _, kind := range []EntityKind{EntityKindLeader, EntityKindHamlet, EntityKindMarajanda} {
+			estimate := Price(Plan{
+				Sight: sight, Kind: kind, World: world, Start: origin,
+				Allowance: LeaderAllowance, Orders: moves(compass.E),
+			})
+			wantFailed := kind != EntityKindMarajanda
+			if estimate.Orders[0].Failed != wantFailed {
+				t.Fatalf("%s entering %s failed = %v, want %v", kind, terrain, estimate.Orders[0].Failed, wantFailed)
+			}
+			if kind == EntityKindMarajanda && estimate.End != destination {
+				t.Fatalf("Marajanda entering %s ended at %v, want %v", terrain, estimate.End, destination)
+			}
+		}
 	}
 }
 
@@ -352,11 +378,19 @@ func TestTheZeroSightIsFogged(t *testing.T) {
 	if Fogged().terrain != nil {
 		t.Fatal("the fogged sight carries a world to read")
 	}
-	if (Sight{}).blocks(hexg.NewHex(0, 0)) {
+	if (Sight{}).blocks(EntityKindLeader, hexg.NewHex(0, 0)) {
 		t.Fatal("a fogged sight read the world")
 	}
-	if !GroundTruth(func(hexg.Hex) (Terrain, bool) { return TerrainIce, true }).blocks(hexg.NewHex(0, 0)) {
+	ice := GroundTruth(func(hexg.Hex) (Terrain, bool) { return TerrainIce, true })
+	if !ice.blocks(EntityKindLeader, hexg.NewHex(0, 0)) {
 		t.Fatal("a ground-truth sight walked into ice")
+	}
+	if ice.blocks(EntityKindMarajanda, hexg.NewHex(0, 0)) {
+		t.Fatal("ice stopped Marajanda")
+	}
+	outside := GroundTruth(func(hexg.Hex) (Terrain, bool) { return "", false })
+	if !outside.blocks(EntityKindMarajanda, hexg.NewHex(0, 0)) {
+		t.Fatal("Marajanda stepped beyond the world")
 	}
 }
 

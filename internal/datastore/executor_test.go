@@ -76,7 +76,7 @@ func walkableFrom(t *testing.T, store *Store, from hexg.Hex) compass.Point {
 		t.Fatal(err)
 	}
 	for _, point := range compass.Points() {
-		if world.IsPassable(compass.Neighbor(testCylinder(t), from, point)) {
+		if world.IsPassable(compass.Neighbor(testCylinder(t), from, point), game.EntityKindLeader) {
 			return point
 		}
 	}
@@ -104,9 +104,9 @@ func standAt(t *testing.T, store *Store, entityID int64, coord hexg.Hex) {
 	}
 }
 
-// iceEdge finds a passable hex with an impassable neighbour, and the direction
-// that walks into it. The polar sheets are the wall at the edge of the world.
-func iceEdge(t *testing.T, store *Store) (stand hexg.Hex, into compass.Point) {
+// impassableEdge finds a land hex with an impassable neighbour, and the
+// direction that walks into it.
+func impassableEdge(t *testing.T, store *Store) (stand hexg.Hex, into compass.Point) {
 	t.Helper()
 	world, err := store.World(t.Context())
 	if err != nil {
@@ -114,11 +114,11 @@ func iceEdge(t *testing.T, store *Store) (stand hexg.Hex, into compass.Point) {
 	}
 	cyl := testCylinder(t)
 	for _, hex := range world.Hexes() {
-		if !hex.Terrain.Passable() {
+		if !hex.Terrain.Passable(game.EntityKindLeader) {
 			continue
 		}
 		for _, point := range compass.Points() {
-			if !world.IsPassable(compass.Neighbor(cyl, hex.Coord, point)) {
+			if !world.IsPassable(compass.Neighbor(cyl, hex.Coord, point), game.EntityKindLeader) {
 				return hex.Coord, point
 			}
 		}
@@ -202,7 +202,7 @@ func TestProcessingWritesWhatTheTurnRevealed(t *testing.T) {
 func TestProcessingChargesAStepIntoImpassableGround(t *testing.T) {
 	eachMemoryMode(t, func(t *testing.T, store *Store) {
 		leader, _ := foundedFaction(t, store)
-		stand, into := iceEdge(t, store)
+		stand, into := impassableEdge(t, store)
 		standAt(t, store, leader.ID, stand)
 		wall := compass.Neighbor(testCylinder(t), stand, into)
 
@@ -293,7 +293,7 @@ func TestProcessingStopsWhereTheEntityRunsOut(t *testing.T) {
 			walked, clear := leader.Location, true
 			for range 4 {
 				walked = compass.Neighbor(cyl, walked, point)
-				clear = clear && world.IsPassable(walked)
+				clear = clear && world.IsPassable(walked, game.EntityKindLeader)
 			}
 			if clear {
 				direction = point

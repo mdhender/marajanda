@@ -41,8 +41,8 @@ what an action point is, how many there are, and what the map is made of.
 | 32 AP in a turn | A leader's allowance is **6**. `MaxOrdersPerEntity` is 32, and that is a storage bound on how many orders may be written, not an allowance. |
 | Fractional AP: 0.5, 1.5, +0.5 | Integer costs. An order costs a whole number of points. |
 | Six-mile hexes | A dimensionless map. Nothing in the generator or the datastore knows how far a hex is; see [world size](world-size.md). |
-| Plains, roads, jungle, desert, swamp | `grassland`, `forest`, `hills`, `marsh`, `mountains`, and the impassable `ice`. No roads, no rivers, no desert, no jungle. |
-| A party of characters with classes | Entities: a `leader` and a `hamlet`. No characters, no classes, no spells. |
+| Plains, roads, jungle, desert, swamp | `grassland`, `forest`, `hills`, `marsh`, `mountains`, `ocean`, `lake`, and `ice`. Water and ice stop ordinary entities. No roads, no rivers, no desert, no jungle. |
+| A party of characters with classes | Entities: a `leader`, a `hamlet`, and Marajanda. No characters, no classes, no spells. |
 | A referee rolling dice at the table | Deterministic processing. Randomness is addressed through `seeds.Roller`, never rolled. |
 | Cost varies with the terrain entered | Cost varies with **whether the faction knew the hex**: 1 AP known, 3 AP unknown, flat over terrain. |
 
@@ -84,7 +84,7 @@ carrying, and what it is travelling with.
 | Difficult: jungle, mountains, swamp | 2–3 AP | 4+ AP |
 
 Three bands rather than a cost per terrain, which is a reasonable shape for us:
-five passable terrains collapse into easy, normal and difficult without much
+five land terrains collapse into easy, normal and difficult without much
 argument, and `marsh` and `mountains` are obviously the difficult ones.
 
 The second column is a separate idea, and worth noticing on its own. **Passing
@@ -108,9 +108,9 @@ expensive into impossible.
 Adopting any of it needs something that says what an entity travels with.
 `units` — the inventory table from
 [#32](https://github.com/mdhender/marajanda/issues/32) — is where that would
-live, and nothing produces a unit yet. It also needs impassability to become a
-property of the mover as well as of the hex, which today it is not: `ice` is
-impassable to everything, and everything else is passable to everyone.
+live, and nothing produces a unit yet. Passability already depends on the mover
+as well as the hex: water and ice stop leaders and hamlets, while terrain does
+not stop Marajanda. Inventory granting another exception remains unimplemented.
 
 ### Supply: encumbrance, forage and water
 

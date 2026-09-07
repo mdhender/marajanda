@@ -265,11 +265,11 @@ func (w World) IsWater(coord hexg.Hex) bool {
 	return ok && hex.Terrain.IsWater()
 }
 
-// IsPassable reports whether a coordinate may be entered. Everything outside
-// the world is closed, and so are the two polar rows.
-func (w World) IsPassable(coord hexg.Hex) bool {
+// IsPassable reports whether an entity of kind may enter a coordinate.
+// Everything outside the world is closed, even to Marajanda.
+func (w World) IsPassable(coord hexg.Hex, kind EntityKind) bool {
 	hex, ok := w.At(coord)
-	return ok && hex.Terrain.Passable()
+	return ok && hex.Terrain.Passable(kind)
 }
 
 // Hexes returns every hex in the world's canonical order.

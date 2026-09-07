@@ -47,13 +47,14 @@ Terrain is required and is one of:
 | `lake` | Water with no outlet to the sea |
 | `ice` | A polar sheet at the northern or southern edge of the world |
 
-Every terrain is land, water, or ice:
+Every terrain is land, water, or ice. Whether it may be entered also depends on
+the entity's kind:
 
-| Terrain | Land | Water | Passable |
-| --- | --- | --- | --- |
-| `grassland`, `forest`, `hills`, `marsh`, `mountains` | yes | no | yes |
-| `ocean`, `lake` | no | yes | yes |
-| `ice` | no | no | no |
+| Terrain | Land | Water | Leader or hamlet may enter | Marajanda may enter |
+| --- | --- | --- | --- | --- |
+| `grassland`, `forest`, `hills`, `marsh`, `mountains` | yes | no | yes | yes |
+| `ocean`, `lake` | no | yes | no | yes |
+| `ice` | no | no | no | yes |
 
 `ice` is neither land nor water. It holds no account origin, and no body of
 water is connected to another through it.
@@ -99,8 +100,11 @@ The order decides which candidate pool an account is placed from. See
 Row `-height` and row `+height` are `ice` across their full width. They are the
 northern and southern edges of the world.
 
-Nothing may enter an ice hex. Impassability is a property of the terrain, not
-of the row: a hex is closed because it is ice, not because of where it lies.
+A leader or hamlet may not enter an ice hex. Marajanda may enter one, just as it
+may enter water, because terrain does not stop that kind. The world itself is
+still bounded: no entity may step to a row beyond the polar ice. Passability
+tests the destination only, so an ordinary entity already in water or ice may
+leave by stepping onto land.
 
 An ice hex reports the elevation of the ground beneath the sheet, which is
 whatever the generator produced for that hex. It is the only terrain whose

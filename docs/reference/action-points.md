@@ -43,9 +43,9 @@ turn, that is the whole of what the entity may spend, and turn processing never
 writes a total back. It is stored in `entity_allowances` and written at creation
 from `game.FoundingAllowance`; see [Datastore](../DATASTORE.md#fact-tables).
 
-An entity whose kind accepts no orders has no allowance. A hamlet accepts
-nothing, so it has none, and having none is the absence of a row rather than a
-zero in one.
+An entity whose kind accepts no orders has no allowance. A hamlet and Marajanda
+accept nothing, so they have none, and having none is the absence of a row
+rather than a zero in one.
 
 ## What a step costs
 
@@ -98,10 +98,11 @@ nothing to learn and nothing was learned. Walking into ice it had not seen costs
 the exploration price, because the exploration happened: the faction now knows
 that hex, and the entity is standing where it started.
 
-Terrain marks ocean and lake passable and no rule yet says an entity needs a
-boat. Whether water may be entered is open, and belongs to
-[#37](https://github.com/mdhender/marajanda/issues/37). See
-[Terrain reference](terrain.md).
+Ocean, lake, and ice stop a leader or hamlet. Marajanda is not stopped by
+terrain and may enter all three. A coordinate outside the world has no terrain
+to ignore and stops every kind. The check is on the destination only, so an
+ordinary entity already standing in water may leave it by stepping onto land.
+See [Terrain reference](terrain.md).
 
 ## A failed step does not move the entity
 

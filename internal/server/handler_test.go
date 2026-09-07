@@ -559,6 +559,7 @@ func (s *testStore) EstimateOrders(_ context.Context, _ string, _ int) (map[int6
 	for _, entity := range s.entities {
 		authored, _ := game.SplitTrailingRest(s.orders[entity.ID])
 		estimates[entity.ID] = game.Price(game.Plan{
+			Kind:      entity.Kind,
 			World:     world,
 			Start:     entity.Location,
 			Allowance: entity.Allowance,

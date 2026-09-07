@@ -247,9 +247,9 @@ func TestGenerateWorldElevationMatchesTerrain(t *testing.T) {
 	}
 }
 
-// The polar rows are sheets of ice, whatever the generator put there. This is
-// the wall at the edge of the world, so it has to be the whole row and only
-// those rows: a gap in it is a way out of the world.
+// The polar rows are sheets of ice, whatever the generator put there. They are
+// the whole row and only those rows. Leaders cannot enter them; Marajanda can,
+// but still cannot step beyond the bounded world.
 func TestGenerateWorldFreezesThePoles(t *testing.T) {
 	world := testWorld(t)
 	for _, hex := range world.Hexes() {
@@ -263,9 +263,15 @@ func TestGenerateWorldFreezesThePoles(t *testing.T) {
 		if world.IsLand(hex.Coord) || world.IsWater(hex.Coord) {
 			t.Fatalf("ice at %v reports as land or water", hex.Coord)
 		}
-		if world.IsPassable(hex.Coord) {
-			t.Fatalf("ice at %v is passable", hex.Coord)
+		if world.IsPassable(hex.Coord, EntityKindLeader) {
+			t.Fatalf("ice at %v is passable to a leader", hex.Coord)
 		}
+		if !world.IsPassable(hex.Coord, EntityKindMarajanda) {
+			t.Fatalf("ice at %v stops Marajanda", hex.Coord)
+		}
+	}
+	if world.IsPassable(hexg.NewHex(0, testWorldHeight+1), EntityKindMarajanda) {
+		t.Fatal("Marajanda stepped beyond the world")
 	}
 }
 

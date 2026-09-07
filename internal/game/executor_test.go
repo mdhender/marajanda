@@ -131,14 +131,14 @@ func TestExecuteChargesAStepIntoImpassableGround(t *testing.T) {
 	wall := compass.Neighbor(world, origin, compass.NE)
 	terrain := func(coord hexg.Hex) (Terrain, bool) {
 		if coord == wall {
-			return TerrainIce, true
+			return TerrainOcean, true
 		}
 		return TerrainGrassland, true
 	}
 
 	// The wall is unknown, so walking into it costs the exploration price.
 	outcome := Execute(Plan{
-		Sight: GroundTruth(terrain), World: world, Knowledge: KnowledgeSet{origin: KnowledgeExplored},
+		Sight: GroundTruth(terrain), Kind: EntityKindLeader, World: world, Knowledge: KnowledgeSet{origin: KnowledgeExplored},
 		Start: origin, Allowance: LeaderAllowance, Orders: moves(compass.NE, compass.E),
 	})
 
@@ -166,6 +166,23 @@ func TestExecuteChargesAStepIntoImpassableGround(t *testing.T) {
 	}
 	if entered := outcome.Entered(); len(entered) != 1 || entered[0] != outcome.End {
 		t.Fatalf("entered %v and ended at %v", entered, outcome.End)
+	}
+}
+
+func TestExecuteLetsMarajandaCrossWaterAndIce(t *testing.T) {
+	world := testCylinder(t)
+	origin := hexg.NewHex(0, 0)
+	destination := compass.Neighbor(world, origin, compass.E)
+
+	for _, terrain := range []Terrain{TerrainOcean, TerrainLake, TerrainIce} {
+		outcome := Execute(Plan{
+			Sight: GroundTruth(func(hexg.Hex) (Terrain, bool) { return terrain, true }),
+			Kind:  EntityKindMarajanda, World: world, Start: origin,
+			Allowance: LeaderAllowance, Orders: moves(compass.E),
+		})
+		if got := outcomes(outcome); !slices.Equal(got, []string{"carried"}) || outcome.End != destination {
+			t.Fatalf("Marajanda entering %s: outcomes %v, end %v; want carried to %v", terrain, got, outcome.End, destination)
+		}
 	}
 }
 

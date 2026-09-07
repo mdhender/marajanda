@@ -40,6 +40,10 @@ Which order kinds an entity kind accepts is a game rule: a leader accepts
 `move` and `rest`; a hamlet and Marajanda accept nothing. See
 [Orders reference](orders.md#order-kinds).
 
+Terrain stops leaders and hamlets from entering ocean, lake, or ice. Marajanda
+is not stopped by terrain, although it still cannot leave the bounded world.
+See [Terrain reference](terrain.md).
+
 How much an entity may do in a turn is its action point allowance, which is a
 fact of the entity like its location. A leader is created with `6`; an entity
 kind that accepts no orders has no allowance, so a hamlet and Marajanda have

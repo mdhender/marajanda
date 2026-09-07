@@ -101,12 +101,12 @@ func GroundTruth(terrain func(hexg.Hex) (Terrain, bool)) Sight {
 // A coordinate the world does not have blocks as impassable ground does. Rows
 // do not wrap, so a step off a pole names a row the world has no hex in, and
 // the world is the filter that says so.
-func (s Sight) blocks(destination hexg.Hex) bool {
+func (s Sight) blocks(kind EntityKind, destination hexg.Hex) bool {
 	if s.terrain == nil {
 		return false
 	}
 	terrain, found := s.terrain(destination)
-	return !found || !terrain.Passable()
+	return !found || !terrain.Passable(kind)
 }
 
 // Plan is one entity's orders and everything needed to price them.
@@ -118,6 +118,9 @@ func (s Sight) blocks(destination hexg.Hex) bool {
 type Plan struct {
 	// Sight is what this costing may see. The zero value is fogged.
 	Sight Sight
+	// Kind is the kind of entity whose orders these are. Terrain may stop one
+	// kind and not another.
+	Kind EntityKind
 	// World is the wrap. Every hex a step lands on is normalized through it,
 	// because on a world that wraps the alternative is a coordinate that is
 	// right about where it is and wrong about what it is called.
@@ -224,7 +227,7 @@ func Price(plan Plan) Estimate {
 			destination := compass.Neighbor(plan.World, at, order.Detail.Direction)
 			cost.Target = destination
 			cost.Cost = StepCost(plan.Knowledge, destination)
-			if plan.Sight.blocks(destination) {
+			if plan.Sight.blocks(plan.Kind, destination) {
 				// The step is paid for as what it was when it was ordered and
 				// the entity stays where it started. See
 				// docs/reference/action-points.md#impassable-destinations.

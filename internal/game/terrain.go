@@ -35,23 +35,23 @@ func (t Terrain) IsWater() bool {
 	return t == TerrainOcean || t == TerrainLake
 }
 
-// IsLand reports whether the terrain is ground a faction could stand on.
+// IsLand reports whether the terrain is land. Account origins must be land.
 //
 // Ice is neither land nor water. It is the third case on purpose: the polar
-// sheets are impassable, so treating them as land would offer origins a hex
-// nobody can reach, and treating them as water would let the ocean and lake
-// classification run straight through them.
+// sheets hold no origins, so treating them as land would offer players a seat
+// their founding entities cannot enter, and treating them as water would let
+// the ocean and lake classification run straight through them.
 func (t Terrain) IsLand() bool {
 	return t != TerrainIce && !t.IsWater()
 }
 
-// Passable reports whether anything may enter a hex of this terrain.
+// Passable reports whether an entity of kind may enter a hex of this terrain.
 //
-// Impassability is a property of the terrain rather than of the row index, so
-// movement never needs to know where the poles are. It only needs to know what
-// it is standing in front of.
-func (t Terrain) Passable() bool {
-	return t != TerrainIce
+// Leaders and hamlets may enter land. Marajanda is not stopped by terrain and
+// may also enter water and ice. Impassability is a property of the destination:
+// an entity already in water may leave it by stepping onto land.
+func (t Terrain) Passable(kind EntityKind) bool {
+	return t.IsLand() || kind == EntityKindMarajanda
 }
 
 // Valid reports whether the terrain is one this game knows.

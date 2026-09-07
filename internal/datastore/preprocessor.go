@@ -73,6 +73,7 @@ func (s *Store) EstimateOrders(ctx context.Context, email string, turn int) (map
 		authored, _ := game.SplitTrailingRest(orders[entity.ID])
 		estimates[entity.ID] = game.Price(game.Plan{
 			Sight:     game.Fogged(),
+			Kind:      entity.Kind,
 			World:     cyl,
 			Knowledge: known,
 			Start:     entity.Location,
@@ -122,7 +123,7 @@ func stripTrailingRest(conn *sqlite.Conn, turn int, entityID int64) error {
 //
 // It runs inside the caller's transaction.
 func syncTrailingRest(conn *sqlite.Conn, normalizedEmail string, turn int, entityID int64) error {
-	location, allowance, standing, err := readEntityStanding(conn, normalizedEmail, entityID, turn)
+	location, kind, allowance, standing, err := readEntityStanding(conn, normalizedEmail, entityID, turn)
 	if err != nil {
 		return err
 	}
@@ -147,6 +148,7 @@ func syncTrailingRest(conn *sqlite.Conn, normalizedEmail string, turn int, entit
 	}
 	residue := game.Price(game.Plan{
 		Sight:     game.Fogged(),
+		Kind:      kind,
 		World:     cyl,
 		Knowledge: known,
 		Start:     location,
@@ -176,18 +178,22 @@ func syncTrailingRest(conn *sqlite.Conn, normalizedEmail string, turn int, entit
 	}
 }
 
-// readEntityStanding reads where one of the faction's entities stood on a turn
-// and what it had to spend, reporting whether it stood in the world at all.
+// readEntityStanding reads what and where one of the faction's entities was on
+// a turn and what it had to spend, reporting whether it stood in the world.
 //
 // The joins are the ones readEntities makes, for one entity: the location is a
 // fact and so is the allowance, and an entity with no location fact covering
 // the turn was not in the world on it.
-func readEntityStanding(conn *sqlite.Conn, normalizedEmail string, entityID int64, turn int) (hexg.Hex, int, bool, error) {
+func readEntityStanding(conn *sqlite.Conn, normalizedEmail string, entityID int64, turn int) (hexg.Hex, game.EntityKind, int, bool, error) {
 	var location hexg.Hex
+	var kind game.EntityKind
 	allowance, standing := 0, false
 	if err := sqlitex.ExecuteTransient(conn, `
-		SELECT entity_locations.q, entity_locations.r, COALESCE(entity_allowances.points, 0)
+		SELECT entity_locations.q, entity_locations.r, entity_facts.kind,
+		       COALESCE(entity_allowances.points, 0)
 		FROM entities
+		JOIN entity_facts ON entity_facts.entity_id = entities.id
+			AND entity_facts.effective_from <= ?3 AND ?3 < entity_facts.effective_through
 		JOIN entity_locations ON entity_locations.entity_id = entities.id
 			AND entity_locations.effective_from <= ?3 AND ?3 < entity_locations.effective_through
 		LEFT JOIN entity_allowances ON entity_allowances.entity_id = entities.id
@@ -196,12 +202,13 @@ func readEntityStanding(conn *sqlite.Conn, normalizedEmail string, entityID int6
 		Args: []any{entityID, normalizedEmail, turn},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			location = hexg.NewHex(stmt.ColumnInt(0), stmt.ColumnInt(1))
-			allowance = stmt.ColumnInt(2)
+			kind = game.EntityKind(stmt.ColumnText(2))
+			allowance = stmt.ColumnInt(3)
 			standing = true
 			return nil
 		},
 	}); err != nil {
-		return hexg.Hex{}, 0, false, fmt.Errorf("look up entity standing: %w", err)
+		return hexg.Hex{}, "", 0, false, fmt.Errorf("look up entity standing: %w", err)
 	}
-	return location, allowance, standing, nil
+	return location, kind, allowance, standing, nil
 }
