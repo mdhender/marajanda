@@ -112,4 +112,6 @@ A persistent server changes its working directory to the configured root before 
 
 A server using a persistent database supports graceful shutdown and closes the database cleanly.
 
-The server accepts `GET /api/healthz` and returns `204 No Content`. It shuts down gracefully when its context is canceled or its configured non-zero timeout expires.
+The server accepts `GET /api/healthz` and returns `204 No Content`.
+
+Three things end a run, and all three arrive at the same graceful shutdown: the caller's context is canceled, the configured non-zero timeout expires, or a development build is asked to stop through `POST /__agents/shut-it-down`. In each case in-flight requests drain, the database closes, and `Run` returns `nil`. The route is built from the same context the other two cancel, so there is one way out of `Run` rather than three.

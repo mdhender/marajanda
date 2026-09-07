@@ -41,9 +41,9 @@ one: `go build -tags production ./cmd/marajanda`.
 
 ### Running the dev server
 
-`overmind start` runs `air -c .air.toml`, which rebuilds and restarts the daemon
-on Go changes. Configuration comes from `.env.development.local` via
-`internal/dotenv`, not from Overmind.
+`air` reads `.air.toml` from the repository root and rebuilds and restarts the
+daemon on Go changes. Configuration comes from `.env.development.local`, which
+the daemon loads itself through `internal/dotenv`; air passes no arguments.
 
 The daemon speaks plain HTTP on `127.0.0.1:18443`. A machine-wide Caddy
 (`brew services start caddy`) terminates TLS for `https://htmx-app.localhost:8443`
@@ -59,6 +59,17 @@ https://htmx-app.localhost:8443/__agents/log-me-in/agent%40example.test?returnTo
 
 That route creates the player account if needed and starts a real browser
 session; `curl` does not authenticate a browser.
+
+To stop the daemon, POST to `/__agents/shut-it-down` with an admin session. It
+shuts down gracefully and the process exits `0`, so nothing has to be killed by
+pid:
+
+```sh
+curl -sk -c /tmp/marajanda.jar "https://htmx-app.localhost:8443/__agents/log-me-in/admin@marajanda.com"
+curl -sk -b /tmp/marajanda.jar -X POST "https://htmx-app.localhost:8443/__agents/shut-it-down"
+```
+
+Both agent routes are omitted by the `production` build tag and by `ENV=production`.
 
 `MARAJANDA_ROOT` (currently `data/beta`) is git-ignored and must exist before
 the daemon starts; it creates `marajanda.db` inside.

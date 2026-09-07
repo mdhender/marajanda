@@ -46,8 +46,12 @@ type application struct {
 	authenticate        authenticateFunc
 	findOrCreateAccount findOrCreateFunc
 	store               applicationStore
-	sessionsMu          sync.RWMutex
-	sessions            map[string]datastore.Account
+	// shutdown ends the server the handler is serving. It is nil unless the
+	// caller supplied one, which is what keeps the development route that
+	// calls it out of a handler that has no server to stop.
+	shutdown   func()
+	sessionsMu sync.RWMutex
+	sessions   map[string]datastore.Account
 }
 
 type pageData struct {
@@ -75,14 +79,15 @@ type pageData struct {
 }
 
 func newHandler(authenticate authenticateFunc, store applicationStore) http.Handler {
-	return newConfiguredHandler(authenticate, nil, store, "production")
+	return newConfiguredHandler(authenticate, nil, store, "production", nil)
 }
 
-func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCreateFunc, store applicationStore, environment string) http.Handler {
+func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCreateFunc, store applicationStore, environment string, shutdown func()) http.Handler {
 	app := &application{
 		authenticate:        authenticate,
 		findOrCreateAccount: findOrCreate,
 		store:               store,
+		shutdown:            shutdown,
 		sessions:            make(map[string]datastore.Account),
 	}
 	mux := http.NewServeMux()

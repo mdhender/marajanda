@@ -77,18 +77,24 @@ func Run(ctx context.Context, cfg Config) (err error) {
 		return fmt.Errorf("listen for HTTP: %w", err)
 	}
 
-	httpServer := &http.Server{Handler: newConfiguredHandler(store.Authenticate, store.FindOrCreateDevelopmentAccount, store, cfg.Environment)}
+	// The context that decides how long the server serves, built before the
+	// handler because the handler is given a way to end it. Three things can:
+	// the caller's context, --timeout, and the development shutdown route.
+	// They all arrive here, so there is one way out of Run rather than three.
+	serveCtx := ctx
+	if cfg.Timeout > 0 {
+		var timedOut context.CancelFunc
+		serveCtx, timedOut = context.WithTimeout(serveCtx, cfg.Timeout)
+		defer timedOut()
+	}
+	serveCtx, shutdown := context.WithCancel(serveCtx)
+	defer shutdown()
+
+	httpServer := &http.Server{Handler: newConfiguredHandler(store.Authenticate, store.FindOrCreateDevelopmentAccount, store, cfg.Environment, shutdown)}
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- httpServer.Serve(listener)
 	}()
-
-	serveCtx := ctx
-	cancel := func() {}
-	if cfg.Timeout > 0 {
-		serveCtx, cancel = context.WithTimeout(ctx, cfg.Timeout)
-	}
-	defer cancel()
 
 	select {
 	case err := <-serveErr:

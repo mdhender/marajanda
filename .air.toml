@@ -74,9 +74,9 @@ tmp_dir = "tmp"
   enabled = false
 
 [screen]
-  # Overmind multiplexes several processes into one terminal with prefixed
-  # output. A child that clears the screen would take the frontend's output with
-  # it.
+  # A rebuild that cleared the screen would take the previous build's errors and
+  # the daemon's startup lines with it, which is the output an edit is being
+  # judged by.
   clear_on_rebuild = false
   keep_scroll = true
 

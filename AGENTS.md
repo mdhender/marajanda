@@ -40,7 +40,7 @@ Ask the user before deciding game rules or server behavior that these documents 
 
 ## Development browser authentication
 
-In a non-production build with `ENV` other than `production`, start the server with `overmind start` and open the following URL in the browser session used for testing:
+In a non-production build with `ENV` other than `production`, start the server with `air` — it reads `.air.toml` from the repository root — and open the following URL in the browser session used for testing:
 
 `https://htmx-app.localhost:8443/__agents/log-me-in/agent%40example.test?returnTo=%2Fplayer%2Fdashboard`
 
@@ -48,7 +48,9 @@ The host matters. The Go server speaks plain HTTP on the address and port in `.e
 
 The development route creates `agent@example.test` as a player account if needed, starts a normal browser session, and redirects to the player dashboard. Opening the URL with `curl` does not authenticate a separate browser session.
 
-Production builds use the `production` build tag and omit this route: `go build -tags production ./cmd/marajanda`.
+To stop the server, POST to `/__agents/shut-it-down` with an admin session. It performs the same graceful shutdown a cancelled context does and the process exits `0`, so the daemon does not have to be killed by pid. The seeded admin is `admin@marajanda.com`, and the sign-in route above signs in as an admin as readily as a player.
+
+Production builds use the `production` build tag and omit both routes: `go build -tags production ./cmd/marajanda`. `ENV=production` omits them in a non-production build as well.
 
 ## Beta version-control workflow
 

@@ -7,6 +7,7 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,10 +18,49 @@ import (
 )
 
 func registerAgentRoutes(mux *http.ServeMux, app *application, environment string) {
-	if strings.EqualFold(strings.TrimSpace(environment), "production") || app.findOrCreateAccount == nil {
+	if strings.EqualFold(strings.TrimSpace(environment), "production") {
 		return
 	}
-	mux.HandleFunc("GET /__agents/log-me-in/{email}", app.agentSignIn)
+	// Each route is registered only when the handler was given what it needs.
+	// A handler built without them is not a development server, and a route
+	// that would panic on a nil field is worse than one that answers 404.
+	if app.findOrCreateAccount != nil {
+		mux.HandleFunc("GET /__agents/log-me-in/{email}", app.agentSignIn)
+	}
+	if app.shutdown != nil {
+		mux.HandleFunc("POST /__agents/shut-it-down", app.agentShutDown)
+	}
+}
+
+// agentShutDown stops the server it is served by.
+//
+// Nothing supervises the development daemon, so an agent that starts one has
+// to stop it, and stopping it by pid means finding the pid and trusting a
+// pattern match not to take more than it meant to. This is the same graceful
+// shutdown --timeout and a cancelled context already produce: in-flight
+// requests drain, the store closes, and Run returns nil.
+//
+// It is POST because it changes the world, and it takes an admin session
+// rather than a secret on a command line. An agent reaches one the way it
+// reaches any other: log-me-in signs in as an admin as readily as a player.
+//
+// The response is written and flushed before the shutdown is asked for.
+// http.Server.Shutdown waits for an active request to return, so the body is
+// on the wire before the listener closes and the client reads a whole answer
+// rather than a reset connection.
+func (app *application) agentShutDown(w http.ResponseWriter, r *http.Request) {
+	if _, ok := app.requireRole(w, r, "admin"); !ok {
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusAccepted)
+	_, _ = io.WriteString(w, "Marajanda is shutting down.\n")
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	app.shutdown()
 }
 
 func (app *application) agentSignIn(w http.ResponseWriter, r *http.Request) {
