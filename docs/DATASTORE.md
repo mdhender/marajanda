@@ -78,9 +78,14 @@ map is drawn from them.
 
 ## Factions
 
-Each player faction is associated with one account. Faction records store the faction name and the faction's race. A faction has no coordinates: it owns entities, and each entity carries its own location.
+Each faction is associated with one account. Faction records store the faction name and the faction's race. A faction has no coordinates: it owns entities, and each entity carries its own location.
 
 Configuring a faction founds it. Seating the account, writing the faction record, and creating its founding entities happen in one transaction, so a placement that fails leaves no account seat, no faction and no entity behind. A faction is founded once; reconfiguring it renames its people and does not create a second set of entities.
+
+The main admin's faction follows a separate founding rule. Database creation
+writes the main admin account, its fixed `Marajanda` faction, `MARAJANDA-1`, and
+its normal founding knowledge in one transaction. Assistant admins control no
+faction.
 
 Every faction carries `is_active`, in the same shape and with the same default
 as the account column: an integer constrained to `0` or `1`, defaulting to `1`.
@@ -95,7 +100,7 @@ read as a reason to send a player back to the faction form.
 
 Both flags are set by hand during beta. There is no interface for either.
 
-Race is required and defaults to `human`. It is constrained to `human`, `elf`, `dwarf`, `orc`, `kobold`, and `halfling`. An account that holds an origin but controls no faction, which includes every admin, is treated as `human` by placement.
+Race is required and defaults to `human`. It is constrained to `human`, `elf`, `dwarf`, `orc`, `kobold`, and `halfling`. The main admin's faction has the fixed name `Marajanda` and the `human` race. An account that holds an origin but controls no faction, which includes every assistant admin, is treated as `human` by placement.
 
 ## Entities
 
@@ -134,9 +139,9 @@ Turn processing closes an open row at `turn + 1` and opens its replacement runni
 | `entity_allowances` | `points` | `(entity_id, effective_from)` |
 | `units` | `kind`, `quantity` | `(entity_id, kind, effective_from)` |
 
-`kind` in `entity_facts` is constrained to `leader` and `hamlet`. `q, r` in `entity_locations` references `hexes`, so an entity cannot stand on a coordinate the world does not contain. `quantity` in `units` must be positive. `kind` in `units` carries no constraint: the list of unit kinds is a game rule that arrives with the first rule producing one, and nothing seeds inventory yet.
+`kind` in `entity_facts` is constrained to `leader`, `hamlet`, and `marajanda`. `q, r` in `entity_locations` references `hexes`, so an entity cannot stand on a coordinate the world does not contain. `quantity` in `units` must be positive. `kind` in `units` carries no constraint: the list of unit kinds is a game rule that arrives with the first rule producing one, and nothing seeds inventory yet.
 
-`points` in `entity_allowances` is how many action points the entity has for a turn, and it must be positive. An entity kind that accepts no orders has no allowance, and having none is the absence of a row rather than a zero in one: a hamlet has no row, and a read that finds none reports zero. The value written at creation comes from `game.FoundingAllowance`, so the schema names no number. Nothing changes an allowance yet; the rows are dated anyway, because a rule that read the allowance off the entity's kind would price turn 3 from whatever that kind means today. See [Action points reference](reference/action-points.md#the-allowance).
+`points` in `entity_allowances` is how many action points the entity has for a turn, and it must be positive. An entity kind that accepts no orders has no allowance, and having none is the absence of a row rather than a zero in one: a hamlet and Marajanda have no row, and a read that finds none reports zero. The value written at creation comes from `game.FoundingAllowance`, so the schema names no number. Nothing changes an allowance yet; the rows are dated anyway, because a rule that read the allowance off the entity's kind would price turn 3 from whatever that kind means today. See [Action points reference](reference/action-points.md#the-allowance).
 
 Every entity fact table cascades from `entities`, which cascades from `factions`, which cascades from `accounts`. `faction_knowledge` cascades from `factions` directly, because it is what the faction knows rather than what one of its entities does.
 
@@ -257,5 +262,10 @@ When `:memory:` is selected, `--game-seed` is required. The server creates and m
 The corresponding default handles are `admin` and `player`.
 
 These are intentional credentials for temporary server instances and do not produce warnings or errors.
+
+Creating either kind of database also creates the main admin's active
+`Marajanda` faction with the `human` race, `MARAJANDA-1` at the game origin,
+and normal founding knowledge of that origin and its six neighbours. The entity
+has no action-point allowance because it accepts no orders yet.
 
 When the server creates a new persistent database, it requires `--game-seed`, migrates the database, stores both game seeds and the world's dimensions, generates the world, and seeds the configured default admin account. Those values are normally configured in an environment-specific local dotenv file. Starting with an existing persistent database does not require seed options and does not reseed it.

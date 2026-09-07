@@ -25,20 +25,25 @@ What separates a hamlet from a leader is which orders reach it.
 | --- | --- |
 | `leader` | `LEADER-` |
 | `hamlet` | `HAMLET-` |
+| `marajanda` | `MARAJANDA-` |
 
 A player's faction is founded with two entities on its origin hex, in this
 order: `LEADER-1` and `HAMLET-1`. Founding happens in the same transaction that
 seats the account and writes the faction; see
 [Datastore](../DATASTORE.md#factions).
 
+The main admin's faction is instead founded when the database is created. It
+has one entity, `MARAJANDA-1`, at the game origin. Assistant admins control no
+faction.
+
 Which order kinds an entity kind accepts is a game rule: a leader accepts
-`move`, and a hamlet accepts nothing. See
+`move` and `rest`; a hamlet and Marajanda accept nothing. See
 [Orders reference](orders.md#order-kinds).
 
 How much an entity may do in a turn is its action point allowance, which is a
 fact of the entity like its location. A leader is created with `6`; an entity
-kind that accepts no orders has no allowance, so a hamlet has none, and having
-none is the absence of a row rather than a zero in one. See
+kind that accepts no orders has no allowance, so a hamlet and Marajanda have
+none, and having none is the absence of a row rather than a zero in one. See
 [Action points reference](action-points.md#the-allowance).
 
 ## Identity, code, name, kind
@@ -54,7 +59,7 @@ none is the absence of a row rather than a zero in one. See
 | Ownership | No. Nothing transfers an entity between factions. | `entities.faction_email` |
 
 A code is a kind and a per-faction sequence for that kind: `LEADER-1`,
-`HAMLET-1`. The sequence counts codes the faction has already spent, not
+`HAMLET-1`, `MARAJANDA-1`. The sequence counts codes the faction has already spent, not
 entities that currently hold a kind, so a hamlet that changes kind still holds
 hamlet number one and the faction's next hamlet is `HAMLET-2`. Two factions each
 have a `LEADER-1`.

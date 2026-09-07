@@ -45,7 +45,7 @@ func TestFoundingAllowance(t *testing.T) {
 	if got := FoundingAllowance(EntityKindLeader); got != LeaderAllowance {
 		t.Fatalf("leader allowance = %d, want %d", got, LeaderAllowance)
 	}
-	for _, kind := range []EntityKind{EntityKindHamlet, EntityKind("village")} {
+	for _, kind := range []EntityKind{EntityKindHamlet, EntityKindMarajanda, EntityKind("village")} {
 		if got := FoundingAllowance(kind); got != 0 {
 			t.Fatalf("%s allowance = %d, want none", kind, got)
 		}

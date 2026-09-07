@@ -41,7 +41,7 @@ const (
 // for reading that fact: the allowance is effective-dated like the entity's
 // location, and a rule that priced from the kind would price turn 3 from
 // whatever the kind means today. An entity kind that accepts no orders has no
-// allowance, so a hamlet has none.
+// allowance, so a hamlet and Marajanda have none.
 func FoundingAllowance(kind EntityKind) int {
 	if kind == EntityKindLeader {
 		return LeaderAllowance

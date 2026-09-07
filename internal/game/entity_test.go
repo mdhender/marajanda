@@ -24,6 +24,9 @@ func TestFoundingEntityKindsAreKindsTheGameKnows(t *testing.T) {
 	if len(founding) != 2 || founding[0] != EntityKindLeader || founding[1] != EntityKindHamlet {
 		t.Fatalf("FoundingEntityKinds = %v, want a leader then a hamlet", founding)
 	}
+	if len(EntityKinds()) == len(founding) {
+		t.Fatal("all entity kinds are player founding kinds; want marajanda excluded")
+	}
 	for _, kind := range founding {
 		if !kind.Valid() {
 			t.Errorf("a faction is founded with %q, which is not a kind", kind)
@@ -48,6 +51,9 @@ func TestEntityCodeRoundTrips(t *testing.T) {
 	}
 	if code := EntityCode(EntityKindHamlet, 1); code != "HAMLET-1" {
 		t.Errorf("EntityCode(hamlet, 1) = %q, want HAMLET-1", code)
+	}
+	if code := EntityCode(EntityKindMarajanda, 1); code != "MARAJANDA-1" {
+		t.Errorf("EntityCode(marajanda, 1) = %q, want MARAJANDA-1", code)
 	}
 }
 

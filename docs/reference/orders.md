@@ -43,6 +43,7 @@ Which kinds an entity accepts is a function of its kind:
 | --- | --- |
 | `leader` | `move`, `rest` |
 | `hamlet` | Nothing |
+| `marajanda` | Nothing |
 
 `game.EntityKind.OrderKinds` lists them and `game.EntityKind.Accepts` reports
 one. The form offers only the kinds an entity accepts, and the datastore refuses

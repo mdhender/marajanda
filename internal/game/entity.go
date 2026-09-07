@@ -22,22 +22,22 @@ import (
 type EntityKind string
 
 const (
-	EntityKindLeader EntityKind = "leader"
-	EntityKindHamlet EntityKind = "hamlet"
+	EntityKindLeader    EntityKind = "leader"
+	EntityKindHamlet    EntityKind = "hamlet"
+	EntityKindMarajanda EntityKind = "marajanda"
 )
 
 // EntityKinds lists every kind an entity may hold.
 func EntityKinds() []EntityKind {
-	return []EntityKind{EntityKindLeader, EntityKindHamlet}
+	return []EntityKind{EntityKindLeader, EntityKindHamlet, EntityKindMarajanda}
 }
 
 // FoundingEntityKinds are the entities a faction is founded with, in the order
 // they are created: a leader to give orders to, and a hamlet to give them from.
 // Both stand on the faction's origin hex.
 //
-// It happens to list the same kinds as EntityKinds today. They are different
-// rules - what a kind may be, and what a faction starts with - and they part
-// company as soon as either grows.
+// It differs from EntityKinds because the Marajanda faction is founded by the
+// datastore with its own entity, not with a player's leader and hamlet.
 func FoundingEntityKinds() []EntityKind {
 	return []EntityKind{EntityKindLeader, EntityKindHamlet}
 }

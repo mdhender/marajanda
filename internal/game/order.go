@@ -47,11 +47,12 @@ func (k OrderKind) Valid() bool {
 // the server refuses the rest, so a hand-built request cannot do what the form
 // declines to show.
 //
-// A hamlet accepts nothing today. That is a rule with no orders in it yet, not
-// a gap: what separates a hamlet from a leader is which orders reach it.
+// A hamlet and Marajanda accept nothing today. Those are rules with no orders
+// in them yet, not gaps: what separates kinds is which orders reach them.
 var entityOrderKinds = map[EntityKind][]OrderKind{
-	EntityKindLeader: {OrderKindMove, OrderKindRest},
-	EntityKindHamlet: {},
+	EntityKindLeader:    {OrderKindMove, OrderKindRest},
+	EntityKindHamlet:    {},
+	EntityKindMarajanda: {},
 }
 
 // OrderKinds returns the order kinds an entity of this kind accepts, in the

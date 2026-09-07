@@ -6,7 +6,7 @@ Marajanda is an open-ended fantasy game.
 
 Accounts have exactly one of two mutually exclusive roles:
 
-- `admin`: manages the server and game and controls the single Marajanda faction. Marajanda has almost god-like powers in the game.
+- `admin`: manages the server and game. The seeded main admin controls the single Marajanda faction; assistant admins control no faction. Marajanda has almost god-like powers in the game.
 - `player`: controls exactly one faction. A player faction starts with limited capabilities that increase through gameplay.
 
 A faction owns entities. An entity is anything that stands in the world: it has a location, a permanent code such as `LEADER-1`, a name, and a kind. Orders are issued to entities, and an entity's kind decides which orders are legal for it. A unit is inventory held by an entity, such as 40 archers, and has no identity of its own. See [Entities reference](reference/entities.md).
@@ -32,6 +32,12 @@ A faction has no coordinates of its own. It owns entities, and they are what sta
 A faction's race is one of `human`, `elf`, `dwarf`, `orc`, `kobold`, or `halfling`. It defaults to `human` when none is chosen, and a race outside that list is rejected. Race decides only where a faction is settled; it has no other effect on play. See [Terrain reference](reference/terrain.md#race-terrain-preference) for each race's terrain preference.
 
 Configuring a faction is what gives a player account its origin hex, because placement depends on the race. A player account has no origin between its creation and that moment.
+
+The main admin's Marajanda faction is created with the database. It is named
+`Marajanda`, has the `human` race, and is founded at the game origin with one
+entity, `MARAJANDA-1`. It begins with the same local knowledge as a player
+faction: its origin and the six neighbouring hexes. The entity accepts no
+orders yet. Assistant admins are seated when created but control no faction.
 
 ## Map coordinates
 

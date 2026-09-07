@@ -100,7 +100,7 @@ The main admin is exempt from all three rules.
 The exclusion set is the origins accounts already hold, each with the race of
 the faction that holds it. It is not the hexes the world contains: every hex of
 the world exists before the first account is created. An account with no
-faction, which includes every admin, counts as race `human`.
+faction, which includes every assistant admin, counts as race `human`.
 
 ## Placement procedure
 

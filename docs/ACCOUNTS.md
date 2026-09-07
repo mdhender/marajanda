@@ -12,10 +12,12 @@
   origin; later player and admin accounts use deterministic placement. An origin
   is a true map coordinate, the same one every other account means. See
   [Player origin reference](reference/player-origin.md).
-- An admin account is seated as it is created. A player account is created
-  before it is seated and takes its origin hex when it configures its faction,
-  because placement depends on the faction's race. An account that cannot be
-  seated is refused, and no partially built account remains.
+- An admin account is seated as it is created. The seeded main admin controls
+  the single Marajanda faction; assistant admins control no faction. A player
+  account is created before it is seated and takes its origin hex when it
+  configures its faction, because placement depends on the faction's race. An
+  account that cannot be seated is refused, and no partially built account
+  remains.
 - Every account is active or deactivated. Accounts are created active.
 
 ## Deactivation
@@ -63,7 +65,7 @@ Submitting `POST /sign-out` invalidates the current session, expires its cookie,
 
 Non-production builds register `GET /__agents/log-me-in/{email}` when `ENV` is not `production`. The route finds the normalized account or creates a player account with a generated handle and secret, starts a normal browser session, and redirects to the safe same-origin path supplied by `returnTo`. Missing, absolute, protocol-relative, and malformed return paths redirect to `/`.
 
-A player account reached through this route is given a randomly generated faction name and the default `human` race if it has no configured faction, so that the player dashboard does not divert the session to `/player/faction`. That also seats the account. An already configured faction is never replaced, and admin accounts receive no faction. The name is drawn from a passphrase generator, not from the game PRNG.
+A player account reached through this route is given a randomly generated faction name and the default `human` race if it has no configured faction, so that the player dashboard does not divert the session to `/player/faction`. That also seats the account. An already configured faction is never replaced, and an admin account's faction state is never changed. The name is drawn from a passphrase generator, not from the game PRNG.
 
 The `production` build tag omits the route. Setting `ENV=production` also prevents registration in a non-production build.
 

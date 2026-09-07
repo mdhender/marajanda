@@ -88,13 +88,14 @@ See [effective dating](#effective-dating).
 
 ## Faction
 
-What a player controls.
+What an account may control. A player controls one player faction; the seeded
+main admin controls the single Marajanda faction.
 A faction has a name, a race, and no location of its own: it owns [entities](#entity), and they are what stand on the map.
 See [Product reference](../PRODUCT.md#roles-and-factions).
 
 ## Kind
 
-What an [entity](#entity) is: `leader` or `hamlet`.
+What an [entity](#entity) is: `leader`, `hamlet`, or `marajanda`.
 Kind is mutable and tracked as a [fact](#fact), so growth from one kind to another is a new fact about one entity rather than a new entity.
 An entity's kind decides which order kinds are legal for it.
 
@@ -127,7 +128,7 @@ See [Turn results reference](turn-results.md#observations).
 
 One instruction issued to one [entity](#entity) for one [turn](#turn), also called a stanza.
 An order is one action: `move` walks the entity one hex in the [compass point](#compass-point) it names, and [rest](#rest) spends action points and moves nothing.
-An entity's [kind](#kind) decides which order kinds it accepts: a leader accepts both, a hamlet accepts nothing.
+An entity's [kind](#kind) decides which order kinds it accepts: a leader accepts both, while a hamlet and Marajanda accept nothing.
 Only the current turn's orders are writable; advancing the turn freezes the turn before it.
 See [Orders reference](orders.md).
 

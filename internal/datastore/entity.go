@@ -159,6 +159,29 @@ func foundFaction(conn *sqlite.Conn, normalizedEmail string, origin hexg.Hex) er
 	return foundKnowledge(conn, normalizedEmail, origin, turn)
 }
 
+// foundMarajandaFaction creates the single faction controlled by the main
+// admin and its one founding entity. Assistant admins control no faction.
+//
+// It runs inside the account-creation transaction, so the account, faction,
+// entity, and normal founding knowledge either all exist or none do.
+func foundMarajandaFaction(conn *sqlite.Conn, normalizedEmail string, origin hexg.Hex) error {
+	if err := sqlitex.ExecuteTransient(conn, `
+		INSERT INTO factions (account_email, name, race)
+		VALUES (?1, 'Marajanda', ?2);`, &sqlitex.ExecOptions{
+		Args: []any{normalizedEmail, string(game.RaceHuman)},
+	}); err != nil {
+		return fmt.Errorf("found Marajanda faction: %w", err)
+	}
+	turn, err := readCurrentTurn(conn)
+	if err != nil {
+		return err
+	}
+	if _, err := createEntity(conn, normalizedEmail, game.EntityKindMarajanda, origin, turn); err != nil {
+		return err
+	}
+	return foundKnowledge(conn, normalizedEmail, origin, turn)
+}
+
 func factionHasEntities(conn *sqlite.Conn, normalizedEmail string) (bool, error) {
 	found := false
 	if err := sqlitex.ExecuteTransient(conn, `

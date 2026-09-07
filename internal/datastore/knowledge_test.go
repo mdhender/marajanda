@@ -367,15 +367,15 @@ func TestOnlyOnePeriodPerKnownHexRunsToTheEndOfTime(t *testing.T) {
 	})
 }
 
-// Knowledge belongs to a faction. An account that controls none has none, and
+// Knowledge belongs to a faction. An unconfigured player controls none, and
 // asking for it says so rather than answering with an empty world.
 func TestKnowledgeRequiresAFaction(t *testing.T) {
 	eachMemoryMode(t, func(t *testing.T, store *Store) {
-		if _, err := store.KnowledgeAsOf(t.Context(), "admin@marajanda.com", game.FirstTurn); !errors.Is(err, ErrUnknownFaction) {
-			t.Fatalf("KnowledgeAsOf(admin) = %v, want %v", err, ErrUnknownFaction)
+		if _, err := store.KnowledgeAsOf(t.Context(), orderPlayer, game.FirstTurn); !errors.Is(err, ErrUnknownFaction) {
+			t.Fatalf("KnowledgeAsOf(unconfigured player) = %v, want %v", err, ErrUnknownFaction)
 		}
-		if err := store.MarkEntered(t.Context(), "admin@marajanda.com", game.FirstTurn, hexg.NewHex(0, 0)); !errors.Is(err, ErrUnknownFaction) {
-			t.Fatalf("MarkEntered(admin) = %v, want %v", err, ErrUnknownFaction)
+		if err := store.MarkEntered(t.Context(), orderPlayer, game.FirstTurn, hexg.NewHex(0, 0)); !errors.Is(err, ErrUnknownFaction) {
+			t.Fatalf("MarkEntered(unconfigured player) = %v, want %v", err, ErrUnknownFaction)
 		}
 	})
 }

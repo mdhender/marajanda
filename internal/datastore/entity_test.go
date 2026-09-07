@@ -121,15 +121,15 @@ func TestFoundingEntitiesStandOnTheOriginFromTheCurrentTurn(t *testing.T) {
 			t.Fatalf("%s stands at %v, want the origin %v", entity.Code, entity.Location, seated.Origin)
 		}
 	}
-	if turns := createdTurns(t, store); len(turns) != 2 || turns[0] != game.FirstTurn || turns[1] != game.FirstTurn {
+	if turns := createdTurns(t, store, "player@marajanda.com"); len(turns) != 2 || turns[0] != game.FirstTurn || turns[1] != game.FirstTurn {
 		t.Fatalf("created turns = %v, want both on turn %d", turns, game.FirstTurn)
 	}
 	// The founding facts are open: each runs to the end of time.
-	if open := openPeriodCount(t, store, "entity_facts"); open != 2 {
-		t.Fatalf("open fact periods = %d, want 2", open)
+	if open := openPeriodCount(t, store, "entity_facts"); open != 3 {
+		t.Fatalf("open fact periods = %d, want the admin's and the player's 2", open)
 	}
-	if open := openPeriodCount(t, store, "entity_locations"); open != 2 {
-		t.Fatalf("open location periods = %d, want 2", open)
+	if open := openPeriodCount(t, store, "entity_locations"); open != 3 {
+		t.Fatalf("open location periods = %d, want the admin's and the player's 2", open)
 	}
 }
 
@@ -186,9 +186,9 @@ func TestAKindChangeLeavesTheCodeAlone(t *testing.T) {
 	}
 	hamlet := entitiesNow(t, store, "player@marajanda.com")[1]
 
-	// The kinds this schema knows are leader and hamlet, so this is the change
-	// available to make. A hamlet growing into a village is the same two
-	// statements once village is a kind.
+	// The kinds this schema knows are leader, hamlet, and marajanda, so this is
+	// the change available to make. A hamlet growing into a village is the same
+	// two statements once village is a kind.
 	closeAndReopenFact(t, store, hamlet.ID, hamlet.Code, "Smirnopolis", game.EntityKindLeader, 4)
 
 	before, err := store.EntitiesAsOf(t.Context(), "player@marajanda.com", 3)
@@ -516,8 +516,8 @@ func TestDeletingAnAccountRemovesItsEntitiesAndTheirFacts(t *testing.T) {
 	if _, err := store.SaveFaction(t.Context(), "player@marajanda.com", "The Wayfarers", game.RaceHuman); err != nil {
 		t.Fatal(err)
 	}
-	if entityCount(t, store) != 2 {
-		t.Fatalf("entity count = %d, want the founding two", entityCount(t, store))
+	if entityCount(t, store) != 3 {
+		t.Fatalf("entity count = %d, want the admin's and the player's founding two", entityCount(t, store))
 	}
 
 	conn, release, err := store.take(t.Context())
@@ -530,14 +530,14 @@ func TestDeletingAnAccountRemovesItsEntitiesAndTheirFacts(t *testing.T) {
 	}
 	release()
 
-	if count := entityCount(t, store); count != 0 {
-		t.Fatalf("entity count after deleting the account = %d, want 0", count)
+	if count := entityCount(t, store); count != 1 {
+		t.Fatalf("entity count after deleting the account = %d, want only the admin's", count)
 	}
-	if count := tableCount(t, store, "entity_facts"); count != 0 {
-		t.Fatalf("entity_facts after deleting the account = %d, want 0", count)
+	if count := tableCount(t, store, "entity_facts"); count != 1 {
+		t.Fatalf("entity_facts after deleting the account = %d, want only the admin's", count)
 	}
-	if count := tableCount(t, store, "entity_locations"); count != 0 {
-		t.Fatalf("entity_locations after deleting the account = %d, want 0", count)
+	if count := tableCount(t, store, "entity_locations"); count != 1 {
+		t.Fatalf("entity_locations after deleting the account = %d, want only the admin's", count)
 	}
 }
 
@@ -635,7 +635,7 @@ func otherHex(t *testing.T, store *Store, not hexg.Hex) hexg.Hex {
 	return found
 }
 
-func createdTurns(t *testing.T, store *Store) []int {
+func createdTurns(t *testing.T, store *Store, email string) []int {
 	t.Helper()
 	conn, release, err := store.take(t.Context())
 	if err != nil {
@@ -644,7 +644,9 @@ func createdTurns(t *testing.T, store *Store) []int {
 	defer release()
 
 	var turns []int
-	if err := sqlitex.ExecuteTransient(conn, `SELECT created_turn FROM entities ORDER BY id;`, &sqlitex.ExecOptions{
+	if err := sqlitex.ExecuteTransient(conn, `
+		SELECT created_turn FROM entities WHERE faction_email = ?1 ORDER BY id;`, &sqlitex.ExecOptions{
+		Args: []any{normalizeEmail(email)},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			turns = append(turns, stmt.ColumnInt(0))
 			return nil

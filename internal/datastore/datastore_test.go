@@ -85,6 +85,12 @@ func TestOpenPersistentCreatesMigratesAndSeeds(t *testing.T) {
 	if terrain := readTerrain(t, store, account.origin); !terrain.Valid() {
 		t.Fatalf("main admin terrain = %q, want a generated terrain", terrain)
 	}
+	if faction, found, err := store.Faction(t.Context(), "admin@example.com"); err != nil || !found || faction.Name != "Marajanda" || faction.Race != game.RaceHuman {
+		t.Fatalf("main admin faction = %#v, %t, %v; want human Marajanda", faction, found, err)
+	}
+	if entities := entitiesNow(t, store, "admin@example.com"); len(entities) != 1 || entities[0].Code != "MARAJANDA-1" {
+		t.Fatalf("main admin entities = %#v, want MARAJANDA-1", entities)
+	}
 	if err := bcrypt.CompareHashAndPassword(account.hash, []byte("temporary")); err != nil {
 		t.Fatalf("compare password hash: %v", err)
 	}
@@ -201,6 +207,27 @@ func TestOpenMemorySeedsDefaults(t *testing.T) {
 	admin := readAccount(t, store, "admin@marajanda.com")
 	if !admin.origin.Equals(hexg.NewHex(0, 0)) {
 		t.Fatalf("main admin origin = %v, want the game origin", admin.origin)
+	}
+	faction, found, err := store.Faction(t.Context(), "admin@marajanda.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || faction.Name != "Marajanda" || faction.Race != game.RaceHuman || !faction.Active {
+		t.Fatalf("main admin faction = %#v, %t; want active human Marajanda", faction, found)
+	}
+	entities, err := store.EntitiesAsOf(t.Context(), "admin@marajanda.com", game.FirstTurn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entities) != 1 || entities[0].Code != "MARAJANDA-1" || entities[0].Name != "MARAJANDA-1" ||
+		entities[0].Kind != game.EntityKindMarajanda || !entities[0].Location.Equals(admin.origin) || entities[0].Allowance != 0 {
+		t.Fatalf("main admin entities = %#v, want MARAJANDA-1 at the game origin with no allowance", entities)
+	}
+	if _, err := store.SaveFaction(t.Context(), "admin@marajanda.com", "Not Marajanda", game.RaceElf); err == nil {
+		t.Fatal("SaveFaction(main admin) succeeded, want its fixed faction preserved")
+	}
+	if faction, found, err = store.Faction(t.Context(), "admin@marajanda.com"); err != nil || !found || faction.Name != "Marajanda" || faction.Race != game.RaceHuman {
+		t.Fatalf("main admin faction after SaveFaction = %#v, %t, %v; want human Marajanda", faction, found, err)
 	}
 	// A seeded player is created unseated. Placement needs the faction's race,
 	// which nothing has chosen yet.
@@ -398,6 +425,15 @@ func TestCreateAccountSeatsAdminsAndLeavesPlayersUnseated(t *testing.T) {
 	if terrain := readTerrain(t, store, admin.Origin); !terrain.IsLand() {
 		t.Fatalf("assistant admin origin %v is %q, want land", admin.Origin, terrain)
 	}
+	if faction, found, err := store.Faction(t.Context(), admin.Email); err != nil || found {
+		t.Fatalf("assistant admin faction = %#v, %t, %v; want none", faction, found, err)
+	}
+	if _, err := store.SaveFaction(t.Context(), admin.Email, "Pretenders", game.RaceHuman); err == nil {
+		t.Fatal("SaveFaction(assistant admin) succeeded, want refused")
+	}
+	if faction, found, err := store.Faction(t.Context(), admin.Email); err != nil || found {
+		t.Fatalf("assistant admin faction after SaveFaction = %#v, %t, %v; want none", faction, found, err)
+	}
 
 	player, err := store.CreateAccount(t.Context(), SeedAccount{
 		Email: "recruit@example.com", Secret: "temporary", Handle: "recruit", Role: "player",
@@ -455,9 +491,9 @@ func TestSaveFactionLeavesNoFactionWhenPlacementFails(t *testing.T) {
 		t.Fatalf("a failed placement seated the account at %v", stored.origin)
 	}
 	// The founding entities are written in the same transaction, so a placement
-	// that failed leaves no entity standing anywhere either.
-	if count := entityCount(t, store); count != 0 {
-		t.Fatalf("entity count after a failed placement = %d, want 0", count)
+	// that failed leaves no entity owned by the player either.
+	if entities := entitiesNow(t, store, "player@marajanda.com"); len(entities) != 0 {
+		t.Fatalf("entities after a failed placement = %#v, want none", entities)
 	}
 }
 
@@ -1071,18 +1107,15 @@ func TestVisibleHexes(t *testing.T) {
 	}
 	defer store.Close()
 
-	// The main admin holds an origin and controls no faction, so it knows
-	// nothing. Sight comes from the knowledge record now, and that record
-	// belongs to a faction. It is a floor rather than a state the UI reaches:
-	// the player map is a player's, and an admin who asks for one is sent to
-	// the admin dashboard.
+	// The Marajanda faction begins with the same local knowledge as any newly
+	// founded faction, not god-like knowledge of the whole world.
 	admin := readAccount(t, store, "admin@marajanda.com")
 	visible, err := store.VisibleHexes(t.Context(), "admin@marajanda.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(visible) != 0 {
-		t.Fatalf("admin visible hexes = %v, want none", visible)
+	if len(visible) != 7 || !slices.ContainsFunc(visible, func(hex hexg.Hex) bool { return hex.Equals(admin.origin) }) {
+		t.Fatalf("admin visible hexes = %v, want the origin and its six neighbours", visible)
 	}
 
 	// An unseated player has seen nothing at all, for the same reason and by

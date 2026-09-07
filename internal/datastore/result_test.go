@@ -360,8 +360,9 @@ func TestResultsAreReadForOneTurn(t *testing.T) {
 		if _, err := store.ResultsAsOf(t.Context(), orderPlayer, 0); err == nil {
 			t.Fatal("ResultsAsOf(turn 0) = nil error, want an error")
 		}
-		if _, err := store.ResultsAsOf(t.Context(), "admin@marajanda.com", game.FirstTurn); err == nil {
-			t.Fatal("ResultsAsOf(admin) = nil error, want ErrUnknownFaction")
+		results, err := store.ResultsAsOf(t.Context(), "admin@marajanda.com", game.FirstTurn)
+		if err != nil || len(results) != 1 || results[0].Allowance != 0 || results[0].Spent != 0 || len(results[0].Orders) != 0 {
+			t.Fatalf("ResultsAsOf(admin) = %#v, %v; want one inert Marajanda result", results, err)
 		}
 	})
 }

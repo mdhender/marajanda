@@ -37,6 +37,7 @@ func TestEntityKindsAcceptTheirOwnOrders(t *testing.T) {
 	}{
 		{EntityKindLeader, []OrderKind{OrderKindMove, OrderKindRest}},
 		{EntityKindHamlet, nil},
+		{EntityKindMarajanda, nil},
 		{EntityKind("village"), nil},
 	} {
 		got := test.kind.OrderKinds()

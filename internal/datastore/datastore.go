@@ -178,7 +178,7 @@ CREATE TABLE entity_facts (
 	entity_id         INTEGER NOT NULL REFERENCES entities (id) ON DELETE CASCADE,
 	code              TEXT NOT NULL,
 	name              TEXT NOT NULL,
-	kind              TEXT NOT NULL CHECK (kind IN ('leader', 'hamlet')),
+	kind              TEXT NOT NULL CHECK (kind IN ('leader', 'hamlet', 'marajanda')),
 	effective_from    INTEGER NOT NULL CHECK (effective_from >= 0),
 	effective_through INTEGER NOT NULL CHECK (effective_through > effective_from),
 	PRIMARY KEY (entity_id, effective_from)
@@ -490,7 +490,7 @@ func (g Game) Seeds() prng.Seeds {
 	return prng.New(uint64(g.Seed1), uint64(g.Seed2))
 }
 
-// Faction contains a player's faction metadata.
+// Faction contains a faction's metadata.
 //
 // A faction has no location. It owns entities, and they are what stand on the
 // map; see Entity.
@@ -844,6 +844,9 @@ func (s *Store) SaveFaction(ctx context.Context, email, name string, race game.R
 	if !found {
 		return Account{}, errors.New("save faction: unknown account")
 	}
+	if account.Role != "player" {
+		return Account{}, errors.New("save faction: account is not a player")
+	}
 
 	// Placement reads the world and every seated origin, so it runs before the
 	// write transaction opens rather than holding one across a full map scan.
@@ -1187,6 +1190,11 @@ func (s *Store) createAccount(ctx context.Context, seed SeedAccount, hash []byte
 	// The origin hex is not created here: the world already holds it. The
 	// deferred foreign key from accounts to hexes now does real work, rejecting
 	// an origin that is not a hex of this world.
+	if mainAdmin {
+		if err := foundMarajandaFaction(conn, seed.Email, origin); err != nil {
+			return Account{}, err
+		}
+	}
 	// An account is created active. The column defaults to 1 and the INSERT
 	// has no opinion, so this is the row that was written.
 	return Account{
@@ -1203,7 +1211,7 @@ func (s *Store) createAccount(ctx context.Context, seed SeedAccount, hash []byte
 //
 // Spacing now depends on who holds an origin as well as where it is, so each
 // one is joined to its faction's race. The join is a LEFT JOIN defaulting to
-// human because an admin holds an origin and controls no faction.
+// human because an assistant admin holds an origin and controls no faction.
 func accountPlacement(conn *sqlite.Conn, normalizedEmail string, race game.Race) (hexg.Hex, error) {
 	record, foundGame, err := readGameRecord(conn)
 	if err != nil {
