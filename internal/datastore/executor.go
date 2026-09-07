@@ -77,12 +77,10 @@ func processFaction(conn *sqlite.Conn, normalizedEmail string, turn int, cyl cyl
 		return err
 	}
 	for _, entity := range entities {
-		if len(orders[entity.ID]) == 0 {
-			// An entity nobody gave orders to does nothing and reveals
-			// nothing. Its whole allowance lapses, which is a reporting line
-			// and not a fact to write.
-			continue
-		}
+		// An entity nobody gave orders to is walked anyway. It does nothing
+		// and reveals nothing, but its whole allowance lapses, and that is a
+		// line a player asks about: the empty turn is recorded rather than
+		// left to be inferred from a missing row.
 		outcome := game.Execute(game.Plan{
 			Sight:     game.GroundTruth(world.at),
 			World:     cyl,
@@ -103,22 +101,26 @@ func processFaction(conn *sqlite.Conn, normalizedEmail string, turn int, cyl cyl
 	return nil
 }
 
-// applyOutcome writes the facts one entity's turn produced.
+// applyOutcome writes what one entity's turn produced: the record of it, and
+// the facts it changed.
 //
-// The order of the writes does not matter and neither does the order of the
-// entities: knowledge is monotone and idempotent, and a location is written
-// once per entity per turn. What matters is that all of it is dated from
-// turn+1.
+// The result is written first and it is written whole. It is the reason the
+// facts that follow exist, so the two are one transaction and a report can
+// always answer why a leader is where it is.
+//
+// The order of the knowledge writes does not matter and neither does the order
+// of the entities: knowledge is monotone and idempotent, and a location is
+// written once per entity per turn. What matters is that all of it is dated
+// from turn+1.
 func applyOutcome(conn *sqlite.Conn, normalizedEmail string, turn int, entity Entity, outcome game.Outcome, cyl cylinder.Cylinder) error {
-	for _, entered := range outcome.Entered {
-		if err := markEntered(conn, normalizedEmail, turn, entered, cyl); err != nil {
-			return err
-		}
+	if err := writeResult(conn, turn, entity, outcome); err != nil {
+		return err
 	}
-	for _, revealed := range outcome.Revealed {
-		// A step that failed on terrain reveals the hex it walked into and
-		// nothing around it: the exploration happened, the entity did not.
-		if err := learn(conn, normalizedEmail, turn+1, cyl.Normalize(revealed), game.KnowledgeObserved); err != nil {
+	for _, observation := range outcome.Observations {
+		// The sightings the turn produced are what the faction's knowledge is
+		// written from, so the record of the turn and the record of what the
+		// faction knows are one list read twice rather than two rules.
+		if err := learn(conn, normalizedEmail, turn+1, observation.Hex, observation.State); err != nil {
 			return err
 		}
 	}

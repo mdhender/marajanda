@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/maloquacious/hexg"
+	"github.com/mdhender/marajanda/internal/compass"
 )
 
 // The two states are the two states. Anything else is not a state a hex is in,
@@ -79,5 +80,38 @@ func TestKnowledgeSetAnswersForAHexItDoesNotHold(t *testing.T) {
 
 	if got := known.Hexes(); len(got) != len(known) {
 		t.Fatalf("Hexes() = %d coordinates, want %d", len(got), len(known))
+	}
+}
+
+// What standing in a hex reveals is one rule with two callers: the founding of
+// a faction on its origin, and a step the executor carried out. Seven hexes,
+// the one stood in explored and the ring around it observed, every one of them
+// canonical.
+func TestRevealsExploresTheHexAndObservesTheRing(t *testing.T) {
+	world := testCylinder(t)
+	entered := hexg.NewHex(3, -2)
+
+	seen := Reveals(world, entered)
+
+	if len(seen) != 1+len(compass.Points()) {
+		t.Fatalf("Reveals produced %d observations, want the hex and its six neighbours", len(seen))
+	}
+	if seen[0].Hex != entered || seen[0].State != KnowledgeExplored {
+		t.Fatalf("first observation = %#v, want %v explored", seen[0], entered)
+	}
+	ring := compass.Neighbors(world, entered)
+	for index, observation := range seen[1:] {
+		if observation.Hex != ring[index] || observation.State != KnowledgeObserved {
+			t.Fatalf("observation %d = %#v, want %v observed", index+1, observation, ring[index])
+		}
+		if observation.Seq != 0 {
+			t.Fatalf("observation %d = %#v, want no order hung off it", index+1, observation)
+		}
+	}
+
+	// A hex named outside the wrap is answered as the hex it actually is.
+	off := hexg.NewHex(entered.Q()+world.Columns(), entered.R())
+	if got := Reveals(world, off); got[0].Hex != entered {
+		t.Fatalf("Reveals(%v) explored %v, want the canonical %v", off, got[0].Hex, entered)
 	}
 }

@@ -116,6 +116,13 @@ An [entity](#entity) entering a hex observes the six hexes around it.
 A hex the faction has neither observed nor [explored](#explored) is unknown, which is the absence of a record rather than a third state.
 See [Knowledge reference](knowledge.md).
 
+## Observation
+
+One hex one [order](#order) revealed, and the state it was revealed in.
+A step that lands produces up to seven: the hex it entered [explored](#explored), the six around it [observed](#observed).
+It is the grain a [result](#result) records sightings on; what the faction ends the turn knowing collapses every entity's sightings into one state per hex.
+See [Turn results reference](turn-results.md#observations).
+
 ## Order
 
 One instruction issued to one [entity](#entity) for one [turn](#turn), also called a stanza.
@@ -158,6 +165,13 @@ A leader accepts it, it carries a count rather than a direction, it costs 1 AP p
 A rest at the end of a list is the [trailing Rest](#trailing-rest).
 What it recovers is not yet decided.
 See [Action points reference](action-points.md#rest).
+
+## Result
+
+The record of what one [entity](#entity)'s [turn](#turn) was: its action point ledger, one outcome per [order](#order), and one [observation](#observation) per hex an order revealed.
+Orders are what a player asked for and results are what the engine decided, so they are separate records and nothing writes an outcome onto an order row.
+Every entity of an active [faction](#faction) has one for every turn it was processed on, whether or not it was given anything to do.
+See [Turn results reference](turn-results.md).
 
 ## Settlement
 

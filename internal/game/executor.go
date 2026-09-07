@@ -78,10 +78,11 @@ type StepOutcome struct {
 // Outcome is one entity's whole turn: what it was charged, where it ended, and
 // what the turn revealed.
 //
-// Entered and Revealed are what the knowledge record is written from and they
-// are different things. A hex the entity stood in is explored and its six
-// neighbours are observed; a hex a step failed into is observed and nothing
-// else, because the exploration happened and the entity did not.
+// Orders and Observations are two grains and not one list. An order produces
+// one outcome; the step it carried out produces up to seven observations, one
+// per hex it revealed. Both hang off the order that caused them, which is what
+// lets a report say that the second step was what showed the mountains. See
+// docs/reference/turn-results.md.
 type Outcome struct {
 	// Allowance is what the entity had to spend on the turn.
 	Allowance int
@@ -95,10 +96,27 @@ type Outcome struct {
 	Start, End hexg.Hex
 	// Orders is one outcome per order, in the order they were given.
 	Orders []StepOutcome
-	// Entered are the hexes the entity stood in, in the order it entered them.
-	Entered []hexg.Hex
-	// Revealed are the hexes a failed step revealed without entering.
-	Revealed []hexg.Hex
+	// Observations are the hexes the turn revealed, in the order they were
+	// revealed. A step that landed explores the hex it entered and observes
+	// the six around it; a step that failed on terrain observes the hex it
+	// walked into and nothing else, because the exploration happened and the
+	// entity did not.
+	Observations []Observation
+}
+
+// Entered are the hexes the entity stood in, in the order it entered them.
+//
+// It is read off the orders rather than carried beside them: the hexes an
+// entity entered are exactly the destinations of the steps it carried out, and
+// a second list of them is a second thing to keep true.
+func (o Outcome) Entered() []hexg.Hex {
+	entered := make([]hexg.Hex, 0, len(o.Orders))
+	for _, order := range o.Orders {
+		if order.Carried && order.Kind == OrderKindMove {
+			entered = append(entered, order.To)
+		}
+	}
+	return entered
 }
 
 // Execute walks an entity's orders and answers with what they did.
@@ -129,11 +147,11 @@ func Execute(plan Plan) Outcome {
 			step.Reason = FailureUnknown
 		case priced.Failed:
 			step.Cost, step.Target, step.Reason = priced.Cost, priced.Target, FailureTerrain
-			outcome.Revealed = append(outcome.Revealed, priced.Target)
+			outcome.observe(priced.Seq, Observation{Hex: priced.Target, State: KnowledgeObserved})
 		default:
 			step.Cost, step.Target, step.To, step.Carried = priced.Cost, priced.Target, priced.To, true
 			if priced.Kind == OrderKindMove {
-				outcome.Entered = append(outcome.Entered, priced.To)
+				outcome.observe(priced.Seq, Reveals(plan.World, priced.To)...)
 			}
 		}
 		outcome.Spent += step.Cost
@@ -143,4 +161,17 @@ func Execute(plan Plan) Outcome {
 	outcome.End = at
 	outcome.Lapsed = max(0, plan.Allowance-outcome.Spent)
 	return outcome
+}
+
+// observe records what one order revealed, stamping each observation with the
+// order that caused it.
+//
+// The stamp is done here rather than by Reveals because a reveal is not always
+// an order's doing: a faction knows its homeland ring from founding, which is
+// the same rule with nothing to hang it on.
+func (o *Outcome) observe(seq int, seen ...Observation) {
+	for _, observation := range seen {
+		observation.Seq = seq
+		o.Observations = append(o.Observations, observation)
+	}
 }

@@ -7,8 +7,8 @@ The costs, the allowance and the order pre-processor are implemented by
 `internal/game` (`actionpoints.go`), `internal/datastore` (`preprocessor.go`)
 and `internal/server` (`orders.go`). Turn processing, which is what charges
 them, is `executor.go` in the first two of those; see
-[Turn processing reference](turn-processing.md). What a player is told about
-what happened is [#33](https://github.com/mdhender/marajanda/issues/33).
+[Turn processing reference](turn-processing.md). What it charged is recorded
+per entity per turn; see [Turn results reference](turn-results.md#the-ledger).
 
 ## Vocabulary
 

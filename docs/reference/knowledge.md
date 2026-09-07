@@ -89,8 +89,14 @@ something to show.
 
 What an explored hex holds — a rival's entities, a settlement, whatever else a
 hex may contain — is not recorded yet, and neither is what an observation of
-another faction's entity contains. That arrives with the turn results that read
-it, [#33](https://github.com/mdhender/marajanda/issues/33).
+another faction's entity contains. See
+[#38](https://github.com/mdhender/marajanda/issues/38).
+
+Which hexes were seen, by which entity and on which step, is recorded: it is the
+observation grain of the turn results, and this table is what those sightings
+collapse into. Both are written from one list, `game.Reveals`, so what a report
+says an entity saw is what the faction ends the turn knowing. See
+[Turn results reference](turn-results.md#observations).
 
 ## Storage
 

@@ -8,7 +8,6 @@ import (
 	"fmt"
 
 	"github.com/maloquacious/hexg"
-	"github.com/mdhender/marajanda/internal/compass"
 	"github.com/mdhender/marajanda/internal/cylinder"
 	"github.com/mdhender/marajanda/internal/game"
 	"zombiezen.com/go/sqlite"
@@ -89,11 +88,17 @@ func (s *Store) MarkEntered(ctx context.Context, email string, turn int, entered
 // caller opened, so turn processing can walk a whole turn's movement without
 // leaving the record half written.
 func markEntered(conn *sqlite.Conn, normalizedEmail string, turn int, entered hexg.Hex, cyl cylinder.Cylinder) error {
-	if err := learn(conn, normalizedEmail, turn+1, cyl.Normalize(entered), game.KnowledgeExplored); err != nil {
-		return err
-	}
-	for _, neighbour := range compass.Neighbors(cyl, entered) {
-		if err := learn(conn, normalizedEmail, turn+1, neighbour, game.KnowledgeObserved); err != nil {
+	return learnAll(conn, normalizedEmail, turn+1, game.Reveals(cyl, entered))
+}
+
+// learnAll writes a list of sightings, effective from a turn.
+//
+// What a hex reveals is game.Reveals's rule and not this file's. Founding and a
+// step reveal the same seven hexes and differ only in the turn they are
+// effective from, so they are one write with two callers.
+func learnAll(conn *sqlite.Conn, normalizedEmail string, effectiveFrom int, seen []game.Observation) error {
+	for _, observation := range seen {
+		if err := learn(conn, normalizedEmail, effectiveFrom, observation.Hex, observation.State); err != nil {
 			return err
 		}
 	}
@@ -113,15 +118,7 @@ func foundKnowledge(conn *sqlite.Conn, normalizedEmail string, origin hexg.Hex, 
 		return err
 	}
 
-	if err := learn(conn, normalizedEmail, turn, cyl.Normalize(origin), game.KnowledgeExplored); err != nil {
-		return err
-	}
-	for _, neighbour := range compass.Neighbors(cyl, origin) {
-		if err := learn(conn, normalizedEmail, turn, neighbour, game.KnowledgeObserved); err != nil {
-			return err
-		}
-	}
-	return nil
+	return learnAll(conn, normalizedEmail, turn, game.Reveals(cyl, origin))
 }
 
 // learn records that a faction knows a hex in a state, effective from a turn.

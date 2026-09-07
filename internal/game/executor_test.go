@@ -27,6 +27,19 @@ func outcomes(outcome Outcome) []string {
 	return lines
 }
 
+// revealed returns the hexes a turn recorded in one knowledge state, in the
+// order they were revealed. Observations are the grain the record of a turn
+// keeps its sightings on, so a test that asks what a step showed asks here.
+func revealed(outcome Outcome, state Knowledge) []hexg.Hex {
+	hexes := make([]hexg.Hex, 0, len(outcome.Observations))
+	for _, observation := range outcome.Observations {
+		if observation.State == state {
+			hexes = append(hexes, observation.Hex)
+		}
+	}
+	return hexes
+}
+
 // A turn an entity can afford in full is carried out in full: every step lands,
 // the entity ends where its orders take it, and what the allowance did not
 // reach lapses.
@@ -47,11 +60,21 @@ func TestExecuteWalksOrdersItCanAfford(t *testing.T) {
 	if outcome.End != east {
 		t.Fatalf("ended at %v, want %v", outcome.End, east)
 	}
-	if len(outcome.Entered) != 1 || outcome.Entered[0] != east {
-		t.Fatalf("entered %v, want just %v", outcome.Entered, east)
+	if entered := outcome.Entered(); len(entered) != 1 || entered[0] != east {
+		t.Fatalf("entered %v, want just %v", entered, east)
 	}
-	if len(outcome.Revealed) != 0 {
-		t.Fatalf("a step that landed revealed %v", outcome.Revealed)
+	// A step that lands explores the hex it entered and observes the six
+	// around it: one row on the step grain, seven on the observation grain.
+	if explored := revealed(outcome, KnowledgeExplored); len(explored) != 1 || explored[0] != east {
+		t.Fatalf("explored %v, want just %v", explored, east)
+	}
+	if observed := revealed(outcome, KnowledgeObserved); len(observed) != len(compass.Points()) {
+		t.Fatalf("observed %v, want the six hexes around %v", observed, east)
+	}
+	for _, observation := range outcome.Observations {
+		if observation.Seq != 1 {
+			t.Fatalf("observation %#v, want it hung off the step that caused it", observation)
+		}
 	}
 	// The ring is known, so the step is the cheap one and the rest of the
 	// allowance lapses: processing appends nothing to an entity's orders.
@@ -85,8 +108,8 @@ func TestExecuteStopsWhereTheEntityRunsOut(t *testing.T) {
 	if outcome.End != stopped {
 		t.Fatalf("ended at %v, want %v", outcome.End, stopped)
 	}
-	if len(outcome.Entered) != 2 {
-		t.Fatalf("entered %v, want the two hexes it could afford", outcome.Entered)
+	if entered := outcome.Entered(); len(entered) != 2 {
+		t.Fatalf("entered %v, want the two hexes it could afford", entered)
 	}
 	if outcome.Spent != KnownStepCost+UnknownStepCost || outcome.Lapsed != LeaderAllowance-outcome.Spent {
 		t.Fatalf("spent %d and lapsed %d of %d", outcome.Spent, outcome.Lapsed, outcome.Allowance)
@@ -127,15 +150,22 @@ func TestExecuteChargesAStepIntoImpassableGround(t *testing.T) {
 	if failed.Cost != UnknownStepCost || failed.Target != wall || failed.To != origin {
 		t.Fatalf("failed step = %#v, want %d AP, aimed at %v, moving nothing", failed, UnknownStepCost, wall)
 	}
-	if len(outcome.Revealed) != 1 || outcome.Revealed[0] != wall {
-		t.Fatalf("revealed %v, want just the wall", outcome.Revealed)
+	// The exploration happened and the entity did not, so the step that failed
+	// observed the wall and revealed nothing around it.
+	if observed := revealed(outcome, KnowledgeObserved); len(observed) == 0 || observed[0] != wall {
+		t.Fatalf("observed %v, want the wall first", observed)
+	}
+	for _, observation := range outcome.Observations {
+		if observation.Seq == failed.Seq && observation.Hex != wall {
+			t.Fatalf("the failed step revealed %v as well as the wall", observation.Hex)
+		}
 	}
 	// The second order is walked from the hex the entity did not leave.
 	if outcome.Orders[1].From != origin {
 		t.Fatalf("second order started at %v, want the origin", outcome.Orders[1].From)
 	}
-	if len(outcome.Entered) != 1 || outcome.Entered[0] != outcome.End {
-		t.Fatalf("entered %v and ended at %v", outcome.Entered, outcome.End)
+	if entered := outcome.Entered(); len(entered) != 1 || entered[0] != outcome.End {
+		t.Fatalf("entered %v and ended at %v", entered, outcome.End)
 	}
 }
 
@@ -154,7 +184,7 @@ func TestExecuteChargesARestAndMovesNothing(t *testing.T) {
 	if got := outcomes(outcome); !slices.Equal(got, []string{"carried"}) {
 		t.Fatalf("outcomes = %v, want a carried rest", got)
 	}
-	if outcome.End != origin || len(outcome.Entered) != 0 {
+	if outcome.End != origin || len(outcome.Entered()) != 0 {
 		t.Fatalf("a rest moved the entity to %v", outcome.End)
 	}
 	// A trailing Rest sized to the whole allowance spends it, so nothing
@@ -221,7 +251,7 @@ func TestExecuteWalksNothingWhenThereAreNoOrders(t *testing.T) {
 		Start: origin, Allowance: LeaderAllowance,
 	})
 
-	if len(outcome.Orders) != 0 || len(outcome.Entered) != 0 || len(outcome.Revealed) != 0 {
+	if len(outcome.Orders) != 0 || len(outcome.Entered()) != 0 || len(outcome.Observations) != 0 {
 		t.Fatalf("an entity with no orders produced %#v", outcome)
 	}
 	if outcome.Start != origin || outcome.End != origin {

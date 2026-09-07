@@ -332,6 +332,110 @@ CREATE TABLE rest_orders (
 	FOREIGN KEY (turn, entity_id, seq) REFERENCES orders (turn, entity_id, seq) ON DELETE CASCADE
 ) STRICT;
 
+-- What one entity's turn did. This is the result record, and it is
+-- deliberately not a column on an order: an order is what a player
+-- asked for and a result is what the engine decided, so writing an
+-- outcome back onto an order row would make "orders freeze when the
+-- turn advances" read "orders freeze except for these columns".
+--
+-- The key is the entity and the turn, with no order in it. An entity
+-- that was given nothing to do still has a turn to account for - its
+-- whole allowance lapsed - and a settlement's outcomes will have no
+-- order to hang from either. The order address lives on the child
+-- table, which is what "turn results with an optional order key"
+-- means here.
+--
+-- allowance, spent and lapsed are the action point ledger a report
+-- accounts for six points from: what the entity had, what its orders
+-- were charged, and what nothing reached. They are of the turn and
+-- never a running balance; nothing carries into the next turn.
+--
+-- A result is written per entity rather than per faction. Knowledge is
+-- what a faction knows however many of its entities did the learning,
+-- but a result is the record of what one entity's turn was, and two
+-- leaders walking the same hex had two turns.
+CREATE TABLE turn_results (
+	turn      INTEGER NOT NULL CHECK (turn >= 1),
+	entity_id INTEGER NOT NULL REFERENCES entities (id) ON DELETE CASCADE,
+	allowance INTEGER NOT NULL CHECK (allowance >= 0),
+	spent     INTEGER NOT NULL CHECK (spent >= 0),
+	lapsed    INTEGER NOT NULL CHECK (lapsed >= 0),
+	start_q   INTEGER NOT NULL,
+	start_r   INTEGER NOT NULL,
+	end_q     INTEGER NOT NULL,
+	end_r     INTEGER NOT NULL,
+	PRIMARY KEY (turn, entity_id),
+	FOREIGN KEY (start_q, start_r) REFERENCES hexes (q, r),
+	FOREIGN KEY (end_q, end_r) REFERENCES hexes (q, r)
+) STRICT;
+
+-- What one order did. It shares the orders key, (turn, entity_id,
+-- seq), and references the order it is the outcome of: the record of
+-- intent and the record of consequence are separable and joined.
+--
+-- cost is what the entity was charged, which is not what the order
+-- would have cost. An order it could not afford is not carried out and
+-- charges nothing; a step that failed on terrain is charged in full.
+--
+-- reason is null exactly when the order was carried out, which the
+-- check holds. The vocabulary is the failure vocabulary of
+-- internal/game; blocked is in it and is not produced, because
+-- nothing blocks a hex yet.
+--
+-- The three coordinate pairs are where the entity stood, where the
+-- step was aimed, and where the order left it. From is not the
+-- entity's location at the start of the turn: a step that fails does
+-- not move it, so the next order resolves from the hex it did not
+-- leave, and a report cannot explain a plan that went sideways at step
+-- 2 without it. None of the three references hexes, because target may
+-- be a coordinate the world does not have - that is what a step off a
+-- pole is.
+CREATE TABLE turn_result_orders (
+	turn      INTEGER NOT NULL,
+	entity_id INTEGER NOT NULL,
+	seq       INTEGER NOT NULL,
+	kind      TEXT NOT NULL CHECK (kind IN ('move', 'rest')),
+	cost      INTEGER NOT NULL CHECK (cost >= 0),
+	carried   INTEGER NOT NULL CHECK (carried IN (0, 1)),
+	reason    TEXT CHECK (reason IN ('terrain', 'exhaust', 'blocked', 'unknown')),
+	from_q    INTEGER NOT NULL,
+	from_r    INTEGER NOT NULL,
+	target_q  INTEGER NOT NULL,
+	target_r  INTEGER NOT NULL,
+	to_q      INTEGER NOT NULL,
+	to_r      INTEGER NOT NULL,
+	CHECK ((reason IS NULL) = (carried = 1)),
+	PRIMARY KEY (turn, entity_id, seq),
+	FOREIGN KEY (turn, entity_id) REFERENCES turn_results (turn, entity_id) ON DELETE CASCADE,
+	FOREIGN KEY (turn, entity_id, seq) REFERENCES orders (turn, entity_id, seq) ON DELETE CASCADE
+) STRICT;
+
+-- What one order revealed. A step is one row on the table above and up
+-- to seven here: the hex it entered explored, and the six around it
+-- observed. They are different grains, which is why they are different
+-- tables and not one row with six nullable coordinate pairs.
+--
+-- This is the record of the sighting, not the knowledge itself. What a
+-- faction knows is faction_knowledge, where every entity's sightings
+-- collapse into one monotone state per hex; this says which entity saw
+-- what, on which step, and is what a report reads to say the second
+-- step was what showed the mountains.
+--
+-- The foreign key to hexes clips a ring that runs off a pole, exactly
+-- as the knowledge write does: the world is the filter, and a
+-- neighbour the world does not have is never inserted.
+CREATE TABLE turn_result_observations (
+	turn      INTEGER NOT NULL,
+	entity_id INTEGER NOT NULL,
+	seq       INTEGER NOT NULL,
+	q         INTEGER NOT NULL,
+	r         INTEGER NOT NULL,
+	state     TEXT NOT NULL CHECK (state IN ('observed', 'explored')),
+	PRIMARY KEY (turn, entity_id, seq, q, r),
+	FOREIGN KEY (turn, entity_id, seq) REFERENCES turn_result_orders (turn, entity_id, seq) ON DELETE CASCADE,
+	FOREIGN KEY (q, r) REFERENCES hexes (q, r)
+) STRICT;
+
 -- For one subject - an entity, or a faction and a hex - the periods of a
 -- fact table are contiguous and never overlap, and exactly one of them
 -- runs to the end of time. These are what hold the second half of that.

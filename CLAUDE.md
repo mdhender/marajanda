@@ -16,7 +16,7 @@ that covers the area you touch, and do not silently reinterpret it:
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — stack, package boundaries, flag/env table, server lifecycle.
 - [docs/DATASTORE.md](docs/DATASTORE.md) — SQLite identity, open modes, migrations, seed data.
 - [docs/ACCOUNTS.md](docs/ACCOUNTS.md) — identity, sessions, invitations, registration.
-- [docs/reference/](docs/reference/) — `player-origin.md`, `terrain.md`, `compass.md`, `map-view.md`, `entities.md`, `orders.md`, `action-points.md`, `turn-processing.md`, `knowledge.md`, `glossary.md`.
+- [docs/reference/](docs/reference/) — `player-origin.md`, `terrain.md`, `compass.md`, `map-view.md`, `entities.md`, `orders.md`, `action-points.md`, `turn-processing.md`, `turn-results.md`, `knowledge.md`, `glossary.md`.
 - [docs/explanation/](docs/explanation/) — `action-points.md`, `world-size.md`. Informative only; nothing in them is decided.
 
 Ask the user before deciding game rules or server behavior these documents do
@@ -116,6 +116,9 @@ Dependency direction is one-way: `cmd/marajanda` → `internal/server` →
   a `game.Plan` from the stored knowledge, location, allowance and orders;
   every order write strips the trailing `Rest` before it and re-prices the whole
   list after it, which is why `writeOrders` takes the entities it touches.
+  `result.go` records what a processed turn did on three grains - a ledger per
+  entity, an outcome per order, an observation per hex revealed - beside the
+  orders rather than on them.
 - **`internal/game`** — pure deterministic rules over `github.com/maloquacious/hexg`:
   `GenerateWorld`, `AssignOrigin`, `WindowView`/`PlayerView`, faction-name
   normalization, and `Price` — the one action-point cost function the order

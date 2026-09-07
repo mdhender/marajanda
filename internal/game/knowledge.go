@@ -2,7 +2,11 @@
 
 package game
 
-import "github.com/maloquacious/hexg"
+import (
+	"github.com/maloquacious/hexg"
+	"github.com/mdhender/marajanda/internal/compass"
+	"github.com/mdhender/marajanda/internal/cylinder"
+)
 
 // Knowledge is what a faction knows about one hex.
 //
@@ -92,4 +96,43 @@ func (s KnowledgeSet) Hexes() []hexg.Hex {
 		hexes = append(hexes, hex)
 	}
 	return hexes
+}
+
+// Observation is one hex a turn revealed to a faction, and how well.
+//
+// It is the grain a reveal is recorded on, which is not the grain a step is
+// recorded on: one step reveals the hex it entered and as many as six around
+// it, so a step outcome is one row and the observations it caused are up to
+// seven. See docs/reference/turn-results.md.
+//
+// Seq is the order that revealed the hex. It is zero when no order did, which
+// is what founding is: a faction knows its homeland ring before it has been
+// given anything to do.
+type Observation struct {
+	Seq   int
+	Hex   hexg.Hex
+	State Knowledge
+}
+
+// Reveals returns what standing in a hex reveals: that hex explored, and the
+// six around it observed.
+//
+// This is the rule knowledge is written from, wherever the standing came from -
+// a step the executor carried out, or the founding of a faction on its origin.
+// It lives here rather than in the store because what a hex reveals is a game
+// rule, and two copies of it would be two rules.
+//
+// Every coordinate it answers with is canonical. A hex beyond a pole is still
+// answered, because whether the world has that hex is the world's question: the
+// store inserts by selecting from the hexes it has, so a ring that runs off a
+// pole records fewer than seven rows rather than naming a row the world does
+// not have.
+func Reveals(world cylinder.Cylinder, entered hexg.Hex) []Observation {
+	entered = world.Normalize(entered)
+	seen := make([]Observation, 0, 1+len(compass.Points()))
+	seen = append(seen, Observation{Hex: entered, State: KnowledgeExplored})
+	for _, neighbour := range compass.Neighbors(world, entered) {
+		seen = append(seen, Observation{Hex: neighbour, State: KnowledgeObserved})
+	}
+	return seen
 }

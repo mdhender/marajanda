@@ -4,7 +4,8 @@ What happens when the admin advances the turn: which orders are carried out,
 what they write, and what is left alone.
 
 Implemented by `internal/game` (`executor.go`) and `internal/datastore`
-(`executor.go`, `order.go`). See
+(`executor.go`, `order.go`, `result.go`). What it records is
+[Turn results reference](turn-results.md). See
 [#28](https://github.com/mdhender/marajanda/issues/28).
 
 ## Vocabulary
@@ -14,6 +15,7 @@ Implemented by `internal/game` (`executor.go`) and `internal/datastore`
 | Closed turn | The turn the game was on when processing ran. Its orders are the ones carried out. |
 | Executor | What walks an entity's orders and decides what happened. |
 | Outcome | What one order did: carried out, or failed for a reason. |
+| Result | The record of what a turn did, kept apart from the orders that asked for it. See [Turn results reference](turn-results.md). |
 | Carried | Of an order: it happened, and it was charged. |
 | Lapsed | Action points the entity's orders did not reach. |
 
@@ -29,9 +31,11 @@ an entity may spend. This document describes what processing does with them.
    they stood on that turn, and their orders for it.
 3. Walks each entity's orders against its allowance, resolving every step from
    where the entity actually stands.
-4. Writes what the turn produced — locations and knowledge — effective from
+4. Records what the turn did for every entity: its action point ledger, one
+   outcome per order, and one observation per hex an order revealed.
+5. Writes what the turn produced — locations and knowledge — effective from
    `turn + 1`.
-5. Increments `game.current_turn`.
+6. Increments `game.current_turn`.
 
 A turn is processed whole or not at all. Every write is in the one transaction
 that moves the clock, so a failure anywhere leaves the game on the turn it was
@@ -42,7 +46,7 @@ on with nothing applied.
 | Subject | Processed |
 | --- | --- |
 | An active faction's entity carrying orders | Yes |
-| An entity carrying no orders | No. It does nothing, reveals nothing, and its whole allowance lapses. |
+| An entity carrying no orders | Yes. It does nothing and reveals nothing, and the turn records that its whole allowance lapsed. |
 | An entity that did not stand in the world on the turn | No. It is not read. |
 | A deactivated faction | No. See below. |
 
@@ -101,10 +105,18 @@ spends four and loses two. See
 
 | Record | Written when | Effective from |
 | --- | --- | --- |
+| `turn_results` | Always, for every entity processed | The turn itself |
+| `turn_result_orders` | The entity carried orders: one row each | The turn itself |
+| `turn_result_observations` | An order revealed a hex: one row each | The turn itself |
 | `entity_locations` | The entity ended the turn somewhere other than where it started | `turn + 1` |
 | `faction_knowledge` | An entity entered a hex: that hex explored, its six neighbours observed | `turn + 1` |
 | `faction_knowledge` | A step failed on terrain: the hex it walked into observed | `turn + 1` |
 | `game.current_turn` | Always | Immediately |
+
+The result is the record of what happened and the facts are what it changed, so
+the two are written together. A result is of the turn it was recorded on and is
+never dated forward; see
+[Turn results reference](turn-results.md#storage).
 
 Nothing is updated in place. A location fact is closed at `turn + 1` and its
 replacement opened there, so the row that said where the entity was during the
@@ -121,9 +133,8 @@ nothing to date: the fact did not change.
   trailing Rest. See [Orders reference](orders.md#history).
 - **Allowances.** An allowance is not a balance. Nothing carries into the next
   turn, so no total is written back.
-- **Results.** What happened is computed and applied; it is not yet stored.
-  [#33](https://github.com/mdhender/marajanda/issues/33) owns the record and
-  the reports that read it.
+- **Reports.** What a player is shown reads the result record; nothing renders
+  it yet.
 
 ## Determinism
 
@@ -138,7 +149,9 @@ entities in creation order anyway, so two runs write the same rows in the same
 order.
 
 A replay is: create a database with the same seeds and dimensions, insert the
-same orders for turn 1, advance, and compare. See `internal/prng/doc.go` and
+same orders for turn 1, advance, and compare — the world it wrote, and the
+results it recorded. See `internal/prng/doc.go`,
+[Turn results reference](turn-results.md#determinism) and
 [Orders reference](orders.md#history).
 
 ## Store methods
@@ -146,6 +159,7 @@ same orders for turn 1, advance, and compare. See `internal/prng/doc.go` and
 | Method | Effect |
 | --- | --- |
 | `AdvanceTurn(ctx)` | Processes the current turn's orders, moves the clock on by one, and returns the new turn. |
+| `ResultsAsOf(ctx, email, turn)` | Reads what the faction's entities did on a turn that was processed. |
 
 ## Routes
 
@@ -153,5 +167,5 @@ same orders for turn 1, advance, and compare. See `internal/prng/doc.go` and
 | --- | --- | --- |
 | `POST /admin/turn` | `admin` | Processes the turn, advances it, and returns to the admin dashboard |
 
-The route reports nothing about what the turn did. What a player is told
-arrives with [#33](https://github.com/mdhender/marajanda/issues/33).
+The route reports nothing about what the turn did. What it recorded is read with
+`ResultsAsOf`; see [Turn results reference](turn-results.md#store-methods).

@@ -194,6 +194,39 @@ Deleting an account erases its orders through the cascade from `entities`. Nothi
 
 See [Orders reference](reference/orders.md) for the order kinds, the numbering rules, and the pages that write these rows.
 
+## Turn results
+
+Turn processing records what it decided. Orders are the record of intent and these are the record of consequence: they are separate tables sharing the key `(turn, entity_id, seq)`, and nothing ever writes an outcome back onto an order row.
+
+Three tables, because three things of different cardinality happen in a turn. `turn_results` is one row per entity per turn, `turn_result_orders` one row per order, and `turn_result_observations` one row per hex an order revealed.
+
+| Table | Column | Notes |
+| --- | --- | --- |
+| `turn_results` | `turn`, `entity_id` | Whose turn it was. `ON DELETE CASCADE` from `entities`. |
+| `turn_results` | `allowance`, `spent`, `lapsed` | The action point ledger: what the entity had, what its orders were charged, and what nothing reached. |
+| `turn_results` | `start_q`, `start_r`, `end_q`, `end_r` | Where the entity stood when the turn opened and where it stopped. Both reference `hexes`. |
+| `turn_result_orders` | `turn`, `entity_id`, `seq` | The order this is the outcome of. References both `turn_results` and `orders`, `ON DELETE CASCADE`. |
+| `turn_result_orders` | `kind` | Constrained to `move` and `rest`, as `orders.kind` is. |
+| `turn_result_orders` | `cost` | What the entity was charged, which is not what the order would have cost. |
+| `turn_result_orders` | `carried` | `0` or `1`. STRICT tables have no boolean. |
+| `turn_result_orders` | `reason` | `terrain`, `exhaust`, `blocked` or `unknown`, and `NULL` exactly when the order was carried out. |
+| `turn_result_orders` | `from_q`, `from_r`, `target_q`, `target_r`, `to_q`, `to_r` | Where the order was resolved from, where a step was aimed, and where it left the entity. |
+| `turn_result_observations` | `turn`, `entity_id`, `seq` | The order that revealed the hex. References `turn_result_orders`, `ON DELETE CASCADE`. |
+| `turn_result_observations` | `q`, `r` | The hex revealed. References `hexes`. |
+| `turn_result_observations` | `state` | `observed` or `explored`, the states of `faction_knowledge`. |
+
+The primary keys are `(turn, entity_id)`, `(turn, entity_id, seq)` and `(turn, entity_id, seq, q, r)`.
+
+A check holds `reason` and `carried` in step, so a carried order cannot also name a failure and a failed one cannot be silent about why.
+
+None of the three coordinate pairs on `turn_result_orders` references `hexes`, because `target` may be a coordinate the world does not have — a step off a pole is exactly that. `turn_result_observations` does reference it, and the insert selects its coordinates from `hexes`, so a ring that runs off a pole records fewer than seven rows. It is the clip `faction_knowledge` takes, and for the same reason.
+
+These are not fact tables. A result belongs to the turn it was recorded on and carries no period: the facts a turn produces are effective from `turn + 1`, and the record of why they exist stays on the turn that produced them.
+
+Nothing deletes a result. They grow every turn for every entity, unlike orders, which exist only where a player acted; retention is not decided. Deleting an account erases them through the cascade from `entities`.
+
+See [Turn results reference](reference/turn-results.md) for the three grains, the failure vocabulary, and the determinism check the record exists for.
+
 ## Open modes
 
 The datastore exposes distinct open operations for:

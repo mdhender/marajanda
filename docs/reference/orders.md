@@ -120,11 +120,15 @@ update and delete where the turn is not `game.current_turn`, whatever turn a
 caller asks for. Advancing the turn is what freezes the turn before it, and
 nothing deletes an order from a turn the game has moved past.
 
-Processing never touches them either: it reads the orders of the turn it
-closes and writes only facts. A replay is therefore: regenerate the world from
-the stored seeds and dimensions, apply turn 1's orders in `(entity, seq)` order,
-then turn 2, and so on. Entity ids are identity, not randomness: a rule needing per-entity
-randomness keys on values recorded in history, never on the id. See
+Processing never touches them either: it reads the orders of the turn it closes
+and writes facts and results. What an order did is recorded beside it rather
+than on it, sharing the key `(turn, entity_id, seq)`; see
+[Turn results reference](turn-results.md#orders-and-results). A replay is
+therefore: regenerate the world from the stored seeds and dimensions, apply turn
+1's orders in `(entity, seq)` order, then turn 2, and so on, and compare the
+results against the ones recorded. Entity ids are identity, not randomness: a
+rule needing per-entity randomness keys on values recorded in history, never on
+the id. See
 `internal/prng/doc.go` and [Entities reference](entities.md).
 
 Deleting an account erases its orders through the cascade. Nothing deletes
