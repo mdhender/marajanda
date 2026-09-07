@@ -28,8 +28,19 @@ func foundedFaction(t *testing.T, store *Store) (leader, hamlet Entity) {
 	return entities[0], entities[1]
 }
 
-// ordersNow reads one entity's orders as of the turn the game is on.
-func ordersNow(t *testing.T, store *Store, entityID int64) []Order {
+// moving is the detail a move carries: which way it goes.
+func moving(direction compass.Point) game.OrderDetail {
+	return game.OrderDetail{Direction: direction}
+}
+
+// resting is the detail a rest carries: how long it lasts.
+func resting(count int) game.OrderDetail {
+	return game.OrderDetail{Count: count}
+}
+
+// storedOrdersNow reads everything one entity carries as of the turn the game
+// is on, the trailing Rest included.
+func storedOrdersNow(t *testing.T, store *Store, entityID int64) []Order {
 	t.Helper()
 	turn, err := store.CurrentTurn(t.Context())
 	if err != nil {
@@ -42,6 +53,25 @@ func ordersNow(t *testing.T, store *Store, entityID int64) []Order {
 	return orders[entityID]
 }
 
+// ordersNow reads the orders one entity's player authored, which is its stored
+// list without the trailing Rest the pre-processor keeps at the end of it.
+func ordersNow(t *testing.T, store *Store, entityID int64) []Order {
+	t.Helper()
+	authored, _ := game.SplitTrailingRest(storedOrdersNow(t, store, entityID))
+	return authored
+}
+
+// trailingRest is the count of the Rest an entity's list ends with, or zero
+// when it ends with something else. Nothing stores a Rest x0.
+func trailingRest(t *testing.T, store *Store, entityID int64) int {
+	t.Helper()
+	orders := storedOrdersNow(t, store, entityID)
+	if _, trailing := game.SplitTrailingRest(orders); !trailing {
+		return 0
+	}
+	return orders[len(orders)-1].Detail.Count
+}
+
 // march names an entity's orders in one string, so a test can say what it
 // wanted in one line and read what it got in another. An order with no
 // direction yet is a dash, because it is a row on the page either way.
@@ -51,8 +81,8 @@ func march(orders []Order) string {
 		if names != "" {
 			names += " "
 		}
-		if order.Direction.IsValid() {
-			names += order.Direction.String()
+		if order.Detail.Direction.IsValid() {
+			names += order.Detail.Direction.String()
 		} else {
 			names += "-"
 		}
@@ -66,7 +96,7 @@ func addMove(t *testing.T, store *Store, entityID int64, direction compass.Point
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := store.AddOrder(t.Context(), orderPlayer, turn, entityID, game.OrderKindMove, direction)
+	seq, err := store.AddOrder(t.Context(), orderPlayer, turn, entityID, game.OrderKindMove, moving(direction))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +109,7 @@ func setDirection(t *testing.T, store *Store, entityID int64, seq int, direction
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetOrderDirection(t.Context(), orderPlayer, turn, entityID, seq, direction); err != nil {
+	if err := store.SetOrderDetail(t.Context(), orderPlayer, turn, entityID, seq, moving(direction)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -97,7 +127,7 @@ func TestAnOrderCarriesOneDirection(t *testing.T) {
 			t.Fatalf("first order = %d, want 1", seq)
 		}
 		orders := ordersNow(t, store, leader.ID)
-		if len(orders) != 1 || orders[0].Kind != game.OrderKindMove || orders[0].Direction.IsValid() {
+		if len(orders) != 1 || orders[0].Kind != game.OrderKindMove || orders[0].Detail.Direction.IsValid() {
 			t.Fatalf("orders = %#v, want one move with no direction", orders)
 		}
 
@@ -138,7 +168,7 @@ func TestInsertingAnOrderShiftsTheRestUp(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if err := store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, 2, game.OrderKindMove, compass.NE); err != nil {
+		if err := store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, 2, game.OrderKindMove, moving(compass.NE)); err != nil {
 			t.Fatal(err)
 		}
 		if got := march(ordersNow(t, store, leader.ID)); got != "NW NE E" {
@@ -159,14 +189,14 @@ func TestInsertingAnOrderShiftsTheRestUp(t *testing.T) {
 
 		// One past the end is a place: it is what "insert after the last
 		// order" asks for.
-		if err := store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, 4, game.OrderKindMove, compass.SW); err != nil {
+		if err := store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, 4, game.OrderKindMove, moving(compass.SW)); err != nil {
 			t.Fatal(err)
 		}
 		if got := march(ordersNow(t, store, leader.ID)); got != "NW NE E SW" {
 			t.Fatalf("orders = %q, want SW appended", got)
 		}
 		// Two past the end is not.
-		if err := store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, 6, game.OrderKindMove, compass.W); !errors.Is(err, ErrUnknownOrder) {
+		if err := store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, 6, game.OrderKindMove, moving(compass.W)); !errors.Is(err, ErrUnknownOrder) {
 			t.Fatalf("insert at 6 = %v, want %v", err, ErrUnknownOrder)
 		}
 	})
@@ -192,10 +222,10 @@ func TestRemovingAnOrderRenumbersTheRest(t *testing.T) {
 		if len(orders) != 2 {
 			t.Fatalf("orders = %#v, want two", orders)
 		}
-		if orders[0].Seq != 1 || orders[0].Direction != compass.E {
+		if orders[0].Seq != 1 || orders[0].Detail.Direction != compass.E {
 			t.Fatalf("first order = %#v, want the old second renumbered to 1", orders[0])
 		}
-		if orders[1].Seq != 2 || orders[1].Direction != compass.SW {
+		if orders[1].Seq != 2 || orders[1].Detail.Direction != compass.SW {
 			t.Fatalf("second order = %#v, want the old third renumbered to 2", orders[1])
 		}
 		// No direction is left under a sequence number that no longer exists.
@@ -214,15 +244,15 @@ func TestAnEntityRefusesAnOrderItsKindDoesNotAccept(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.AddOrder(t.Context(), orderPlayer, turn, hamlet.ID, game.OrderKindMove, compass.E); !errors.Is(err, ErrOrderKindRefused) {
+		if _, err := store.AddOrder(t.Context(), orderPlayer, turn, hamlet.ID, game.OrderKindMove, moving(compass.E)); !errors.Is(err, ErrOrderKindRefused) {
 			t.Fatalf("hamlet move = %v, want %v", err, ErrOrderKindRefused)
 		}
 		// An order kind the game does not know is refused the same way, and so
 		// is an insert of one.
-		if _, err := store.AddOrder(t.Context(), orderPlayer, turn, hamlet.ID, game.OrderKind("besiege"), 0); !errors.Is(err, ErrOrderKindRefused) {
+		if _, err := store.AddOrder(t.Context(), orderPlayer, turn, hamlet.ID, game.OrderKind("besiege"), game.OrderDetail{}); !errors.Is(err, ErrOrderKindRefused) {
 			t.Fatalf("unknown kind = %v, want %v", err, ErrOrderKindRefused)
 		}
-		if err := store.InsertOrder(t.Context(), orderPlayer, turn, hamlet.ID, 1, game.OrderKindMove, compass.E); !errors.Is(err, ErrOrderKindRefused) {
+		if err := store.InsertOrder(t.Context(), orderPlayer, turn, hamlet.ID, 1, game.OrderKindMove, moving(compass.E)); !errors.Is(err, ErrOrderKindRefused) {
 			t.Fatalf("hamlet insert = %v, want %v", err, ErrOrderKindRefused)
 		}
 		if orders := ordersNow(t, store, hamlet.ID); len(orders) != 0 {
@@ -251,7 +281,7 @@ func TestOrdersAreRefusedForAnotherFactionsEntity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.AddOrder(t.Context(), orderPlayer, turn, rival[0].ID, game.OrderKindMove, compass.E); !errors.Is(err, ErrUnknownEntity) {
+		if _, err := store.AddOrder(t.Context(), orderPlayer, turn, rival[0].ID, game.OrderKindMove, moving(compass.E)); !errors.Is(err, ErrUnknownEntity) {
 			t.Fatalf("ordering a rival's leader = %v, want %v", err, ErrUnknownEntity)
 		}
 	})
@@ -275,18 +305,18 @@ func TestOnlyTheCurrentTurnIsWritable(t *testing.T) {
 
 		for name, write := range map[string]func() error{
 			"add": func() error {
-				_, err := store.AddOrder(t.Context(), orderPlayer, closed, leader.ID, game.OrderKindMove, compass.E)
+				_, err := store.AddOrder(t.Context(), orderPlayer, closed, leader.ID, game.OrderKindMove, moving(compass.E))
 				return err
 			},
 			"insert": func() error {
-				return store.InsertOrder(t.Context(), orderPlayer, closed, leader.ID, seq, game.OrderKindMove, compass.E)
+				return store.InsertOrder(t.Context(), orderPlayer, closed, leader.ID, seq, game.OrderKindMove, moving(compass.E))
 			},
 			"set a direction": func() error {
-				return store.SetOrderDirection(t.Context(), orderPlayer, closed, leader.ID, seq, compass.E)
+				return store.SetOrderDetail(t.Context(), orderPlayer, closed, leader.ID, seq, moving(compass.E))
 			},
 			"save directions": func() error {
-				return store.SetOrderDirections(t.Context(), orderPlayer, closed, []OrderDirection{
-					{EntityID: leader.ID, Seq: seq, Direction: compass.E},
+				return store.SetOrderDetails(t.Context(), orderPlayer, closed, []OrderUpdate{
+					{EntityID: leader.ID, Seq: seq, Detail: moving(compass.E)},
 				})
 			},
 			"remove": func() error {
@@ -299,7 +329,7 @@ func TestOnlyTheCurrentTurnIsWritable(t *testing.T) {
 		}
 
 		// A turn ahead of the clock is refused for the same reason.
-		if _, err := store.AddOrder(t.Context(), orderPlayer, next+1, leader.ID, game.OrderKindMove, 0); !errors.Is(err, ErrTurnClosed) {
+		if _, err := store.AddOrder(t.Context(), orderPlayer, next+1, leader.ID, game.OrderKindMove, game.OrderDetail{}); !errors.Is(err, ErrTurnClosed) {
 			t.Fatalf("add on turn %d = %v, want %v", next+1, err, ErrTurnClosed)
 		}
 	})
@@ -360,9 +390,9 @@ func TestSavingAWholePageOfDirections(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := store.SetOrderDirections(t.Context(), orderPlayer, turn, []OrderDirection{
-			{EntityID: leader.ID, Seq: first, Direction: compass.NW},
-			{EntityID: leader.ID, Seq: second, Direction: compass.E},
+		if err := store.SetOrderDetails(t.Context(), orderPlayer, turn, []OrderUpdate{
+			{EntityID: leader.ID, Seq: first, Detail: moving(compass.NW)},
+			{EntityID: leader.ID, Seq: second, Detail: moving(compass.E)},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -371,8 +401,8 @@ func TestSavingAWholePageOfDirections(t *testing.T) {
 		}
 
 		// A blank select empties its own row and leaves every other row alone.
-		if err := store.SetOrderDirections(t.Context(), orderPlayer, turn, []OrderDirection{
-			{EntityID: leader.ID, Seq: first, Direction: 0},
+		if err := store.SetOrderDetails(t.Context(), orderPlayer, turn, []OrderUpdate{
+			{EntityID: leader.ID, Seq: first, Detail: moving(0)},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -392,7 +422,7 @@ func TestOrderWritesRefuseWhatThePageNeverShowed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := store.SetOrderDirection(t.Context(), orderPlayer, turn, leader.ID, seq+1, compass.E); !errors.Is(err, ErrUnknownOrder) {
+		if err := store.SetOrderDetail(t.Context(), orderPlayer, turn, leader.ID, seq+1, moving(compass.E)); !errors.Is(err, ErrUnknownOrder) {
 			t.Fatalf("a direction on a missing order = %v, want %v", err, ErrUnknownOrder)
 		}
 		if err := store.RemoveOrder(t.Context(), orderPlayer, turn, leader.ID, seq+1); !errors.Is(err, ErrUnknownOrder) {
@@ -407,11 +437,11 @@ func TestOrderWritesRefuseWhatThePageNeverShowed(t *testing.T) {
 		if got := len(ordersNow(t, store, leader.ID)); got != MaxOrdersPerEntity {
 			t.Fatalf("orders = %d, want the cap of %d", got, MaxOrdersPerEntity)
 		}
-		if _, err := store.AddOrder(t.Context(), orderPlayer, turn, leader.ID, game.OrderKindMove, compass.E); !errors.Is(err, ErrTooManyOrders) {
+		if _, err := store.AddOrder(t.Context(), orderPlayer, turn, leader.ID, game.OrderKindMove, moving(compass.E)); !errors.Is(err, ErrTooManyOrders) {
 			t.Fatalf("order %d = %v, want %v", MaxOrdersPerEntity+1, err, ErrTooManyOrders)
 		}
 		// An insert is bounded by the same cap: it lengthens the list too.
-		if err := store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, 1, game.OrderKindMove, compass.E); !errors.Is(err, ErrTooManyOrders) {
+		if err := store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, 1, game.OrderKindMove, moving(compass.E)); !errors.Is(err, ErrTooManyOrders) {
 			t.Fatalf("insert at the cap = %v, want %v", err, ErrTooManyOrders)
 		}
 		if got := len(ordersNow(t, store, leader.ID)); got != MaxOrdersPerEntity {
@@ -430,9 +460,9 @@ func TestAFailedSaveWritesNothing(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = store.SetOrderDirections(t.Context(), orderPlayer, turn, []OrderDirection{
-			{EntityID: leader.ID, Seq: seq, Direction: compass.NW},
-			{EntityID: leader.ID, Seq: seq + 1, Direction: compass.E},
+		err = store.SetOrderDetails(t.Context(), orderPlayer, turn, []OrderUpdate{
+			{EntityID: leader.ID, Seq: seq, Detail: moving(compass.NW)},
+			{EntityID: leader.ID, Seq: seq + 1, Detail: moving(compass.E)},
 		})
 		if !errors.Is(err, ErrUnknownOrder) {
 			t.Fatalf("save = %v, want %v", err, ErrUnknownOrder)

@@ -32,6 +32,7 @@ import (
 // select with it, and the URL is what says which of them was touched.
 const (
 	directionField = "direction" // direction.<entity>.<seq>
+	countField     = "count"     // count.<entity>.<seq>
 	kindField      = "kind"      // kind.<entity>
 	addField       = "add"       // the add button's value: <entity>
 	insertField    = "insert"    // the insert button's value: <entity>.<seq>
@@ -55,7 +56,8 @@ type ordersView struct {
 }
 
 // entityOrders is one entity's section of the page: what it is, what it has
-// been told to do, and what else it can be told.
+// been told to do, what its turn is estimated to cost, and what else it can be
+// told.
 type entityOrders struct {
 	Entity  datastore.Entity
 	Stanzas []orderStanza
@@ -65,6 +67,29 @@ type entityOrders struct {
 	Kinds     []orderKindOption
 	KindField string
 	AddValue  string
+	// Budget is the entity's action points: what it has, what its orders are
+	// estimated to spend, and what they leave over. It is nil for an entity
+	// with no allowance, which is one that takes no orders.
+	Budget *orderBudget
+}
+
+// orderBudget is the line below an entity's orders: the trailing Rest, and what
+// the orders above it are estimated to cost.
+//
+// The line is rendered whatever the numbers are, so the page does not change
+// shape as a player edits. The Rest is stored as an order only when its count
+// is at least one; see docs/reference/action-points.md#the-trailing-rest.
+type orderBudget struct {
+	Allowance int
+	// Spent is what every order costs, whether or not the entity can afford it.
+	Spent int
+	// Rest is the trailing Rest's count: what the orders leave unspent.
+	Rest int
+	// Overspend is what the orders cost beyond the allowance.
+	Overspend int
+	// ExhaustsAt is the sequence number of the first order the entity cannot
+	// afford, or zero when it can afford them all.
+	ExhaustsAt int
 }
 
 // orderKindOption is one choice in an entity's "add order" control.
@@ -82,16 +107,32 @@ type orderStanza struct {
 	Seq   int
 	Kind  string
 	Label string
-	// Name, Post and Current are the direction select: what it posts under,
-	// where a scripted change posts to, and what it currently shows.
+	// Name, Post and Current are the row's one control: what it posts under,
+	// where a scripted change posts to, and what it currently shows. A move
+	// says which way it goes and a rest says how long it lasts, so the control
+	// differs and its address does not.
 	Name        string
 	Post        string
 	Current     string
 	SelectLabel string
+	// IsRest picks the control. A rest carries a count rather than a
+	// direction, and a count has no blank: a rest lasts at least one point.
+	IsRest bool
+	// CountMax is the largest count a rest may carry, which is the bound
+	// storage puts on it.
+	CountMax    int
 	InsertURL   string
 	InsertValue string
 	RemoveURL   string
 	RemoveValue string
+	// Cost is what this order is estimated to cost, in action points, or an em
+	// dash for an order that cannot be priced - a move with no direction yet
+	// has nowhere to go, so it has no price rather than a price of nothing.
+	Cost string
+	// Exhausts marks an order the entity cannot afford. It is set on the order
+	// where the running total crosses the allowance and on every order after
+	// it.
+	Exhausts bool
 	// Error is a failure that belongs to this order, shown beside it.
 	Error string
 }
@@ -125,10 +166,10 @@ func (app *application) orders(w http.ResponseWriter, r *http.Request) {
 	app.renderOrders(w, r, account, faction, orderFeedback{})
 }
 
-// saveOrders is the whole form: every direction select, and at most one button.
+// saveOrders is the whole form: every order's control, and at most one button.
 //
 // It is what the script-free page's Save button posts, and it is also where the
-// add and insert controls go, scripted or not. The directions are applied first
+// add and insert controls go, scripted or not. The details are applied first
 // and the button afterwards, so a player who picks a direction and presses "add
 // order" in one unscripted submission keeps both.
 func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
@@ -147,14 +188,14 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	directions, err := parseDirectionFields(r.PostForm)
+	updates, err := parseDetailFields(r.PostForm)
 	if err != nil {
 		app.renderOrders(w, r, account, faction, orderFeedback{
 			message: "Marajanda could not read those orders.", status: http.StatusBadRequest,
 		})
 		return
 	}
-	if err := app.store.SetOrderDirections(r.Context(), account.Email, turn, directions); err != nil {
+	if err := app.store.SetOrderDetails(r.Context(), account.Email, turn, updates); err != nil {
 		app.renderOrders(w, r, account, faction, orderWriteFeedback(err, 0, 0))
 		return
 	}
@@ -167,7 +208,8 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		if _, err := app.store.AddOrder(r.Context(), account.Email, turn, entity, formOrderKind(r.PostForm, entity), 0); err != nil {
+		kind := formOrderKind(r.PostForm, entity)
+		if _, err := app.store.AddOrder(r.Context(), account.Email, turn, entity, kind, newOrderDetail(kind)); err != nil {
 			app.renderOrders(w, r, account, faction, orderWriteFeedback(err, entity, 0))
 			return
 		}
@@ -181,7 +223,8 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 		}
 		// The button names the order the new one goes after, so the position
 		// it takes is the next one.
-		if err := app.store.InsertOrder(r.Context(), account.Email, turn, entity, seq+1, formOrderKind(r.PostForm, entity), 0); err != nil {
+		kind := formOrderKind(r.PostForm, entity)
+		if err := app.store.InsertOrder(r.Context(), account.Email, turn, entity, seq+1, kind, newOrderDetail(kind)); err != nil {
 			app.renderOrders(w, r, account, faction, orderWriteFeedback(err, entity, seq))
 			return
 		}
@@ -201,13 +244,14 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 	app.renderOrders(w, r, account, faction, orderFeedback{saved: true})
 }
 
-// setOrderDirection sets which way one order goes. The order is addressed by
-// the URL, and the direction arrives under the name that addresses it.
+// setOrderDetail sets what one order carries: which way a move goes, or how
+// long a rest lasts. The order is addressed by the URL, and its value arrives
+// under the name that addresses it.
 //
-// HTMX sends the whole enclosing form with the request, so the other selects
-// are in it too. They are ignored: this route changes the one order it names,
-// and every other order was saved when it changed.
-func (app *application) setOrderDirection(w http.ResponseWriter, r *http.Request) {
+// HTMX sends the whole enclosing form with the request, so every other order's
+// control is in it too. They are ignored: this route changes the one order it
+// names, and every other order was saved when it changed.
+func (app *application) setOrderDetail(w http.ResponseWriter, r *http.Request) {
 	account, faction, ok := app.playerFaction(w, r)
 	if !ok {
 		return
@@ -228,14 +272,14 @@ func (app *application) setOrderDirection(w http.ResponseWriter, r *http.Request
 		})
 		return
 	}
-	direction, err := parseDirection(r.PostForm.Get(directionFieldName(entity, seq)))
+	detail, err := postedDetail(r.PostForm, entity, seq)
 	if err != nil {
 		app.renderOrders(w, r, account, faction, orderFeedback{
 			message: err.Error(), entity: entity, seq: seq, status: http.StatusUnprocessableEntity,
 		})
 		return
 	}
-	if err := app.store.SetOrderDirection(r.Context(), account.Email, turn, entity, seq, direction); err != nil {
+	if err := app.store.SetOrderDetail(r.Context(), account.Email, turn, entity, seq, detail); err != nil {
 		app.renderOrders(w, r, account, faction, orderWriteFeedback(err, entity, seq))
 		return
 	}
@@ -269,7 +313,8 @@ func (app *application) insertOrder(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if err := app.store.InsertOrder(r.Context(), account.Email, turn, entity, seq+1, formOrderKind(r.PostForm, entity), 0); err != nil {
+	kind := formOrderKind(r.PostForm, entity)
+	if err := app.store.InsertOrder(r.Context(), account.Email, turn, entity, seq+1, kind, newOrderDetail(kind)); err != nil {
 		app.renderOrders(w, r, account, faction, orderWriteFeedback(err, entity, seq))
 		return
 	}
@@ -385,6 +430,15 @@ func (app *application) renderOrders(w http.ResponseWriter, r *http.Request, acc
 		http.Error(w, "Marajanda could not load your orders.", http.StatusInternalServerError)
 		return
 	}
+	// The pre-processor runs during this render, on every write, over the whole
+	// of every entity's list. Inserting or removing an order changes where the
+	// entity stands for every order after it, so re-pricing one row would be
+	// wrong; the costs then ride along in markup that is already being sent.
+	estimates, err := app.store.EstimateOrders(r.Context(), account.Email, turn)
+	if err != nil {
+		http.Error(w, "Marajanda could not price your orders.", http.StatusInternalServerError)
+		return
+	}
 	// One URL, two shapes of answer, so the response says what it varied on -
 	// the same reason the map region does.
 	w.Header().Set("Vary", "HX-Request")
@@ -394,7 +448,7 @@ func (app *application) renderOrders(w http.ResponseWriter, r *http.Request, acc
 		Account: account,
 		Faction: faction,
 		Turn:    turn,
-		Orders:  buildOrdersView(turn, entities, orders, feedback),
+		Orders:  buildOrdersView(turn, entities, orders, estimates, feedback),
 	}
 	if wantsFragment(r) {
 		app.renderFragment(w, http.StatusOK, "orders-list", data)
@@ -420,7 +474,7 @@ func (app *application) renderOrders(w http.ResponseWriter, r *http.Request, acc
 // Every entity the faction owns gets a section, in the order the force is
 // listed, whether or not it can be given an order. A player sees their whole
 // force in one place rather than wondering what happened to their hamlet.
-func buildOrdersView(turn int, entities []datastore.Entity, orders map[int64][]datastore.Order, feedback orderFeedback) ordersView {
+func buildOrdersView(turn int, entities []datastore.Entity, orders map[int64][]datastore.Order, estimates map[int64]game.Estimate, feedback orderFeedback) ordersView {
 	view := ordersView{Turn: turn, Directions: orderDirections()}
 	if feedback.saved {
 		view.Saved = time.Now().UTC().Format("15:04:05 MST")
@@ -435,10 +489,29 @@ func buildOrdersView(turn int, entities []datastore.Entity, orders map[int64][]d
 		for _, kind := range entity.Kind.OrderKinds() {
 			section.Kinds = append(section.Kinds, orderKindOption{Value: string(kind), Label: orderKindLabel(kind)})
 		}
-		for _, order := range orders[entity.ID] {
-			stanza := buildStanza(entity.ID, order, feedback)
+		estimate := estimates[entity.ID]
+		costs := make(map[int]game.OrderCost, len(estimate.Orders))
+		for _, cost := range estimate.Orders {
+			costs[cost.Seq] = cost
+		}
+		// The trailing Rest is the residue, not a row a player wrote, so it is
+		// drawn on the budget line below rather than as a stanza with controls
+		// on it. A Rest anywhere else is the player's, and is a stanza.
+		authored, _ := game.SplitTrailingRest(orders[entity.ID])
+		for _, order := range authored {
+			stanza := buildStanza(entity.ID, order, costs[order.Seq], feedback)
 			attached = attached || stanza.Error != ""
 			section.Stanzas = append(section.Stanzas, stanza)
+		}
+		// An entity with no allowance takes no orders, so it is owed no budget.
+		if entity.Allowance > 0 {
+			section.Budget = &orderBudget{
+				Allowance:  estimate.Allowance,
+				Spent:      estimate.Total,
+				Rest:       estimate.Residue,
+				Overspend:  estimate.Overspend,
+				ExhaustsAt: estimate.ExhaustsAt,
+			}
 		}
 		view.Entities = append(view.Entities, section)
 	}
@@ -451,29 +524,51 @@ func buildOrdersView(turn int, entities []datastore.Entity, orders map[int64][]d
 	return view
 }
 
-func buildStanza(entityID int64, order datastore.Order, feedback orderFeedback) orderStanza {
+func buildStanza(entityID int64, order datastore.Order, cost game.OrderCost, feedback orderFeedback) orderStanza {
 	address := fmt.Sprintf("%d.%d", entityID, order.Seq)
 	stanza := orderStanza{
 		Seq:         order.Seq,
 		Kind:        string(order.Kind),
 		Label:       orderKindLabel(order.Kind),
-		Name:        directionFieldName(entityID, order.Seq),
 		Post:        stanzaPath(entityID, order.Seq),
-		SelectLabel: fmt.Sprintf("%s %d direction", orderKindLabel(order.Kind), order.Seq),
 		InsertURL:   stanzaPath(entityID, order.Seq) + "/insert",
 		InsertValue: address,
 		RemoveURL:   stanzaPath(entityID, order.Seq),
 		RemoveValue: address,
+		Cost:        orderCostLabel(cost),
+		Exhausts:    cost.Exhausts,
 	}
-	// An order with no direction yet shows the blank option, which is what a
-	// row a player has just added looks like.
-	if order.Direction.IsValid() {
-		stanza.Current = strings.ToLower(order.Direction.String())
+	if order.Kind == game.OrderKindRest {
+		stanza.IsRest = true
+		stanza.Name = countFieldName(entityID, order.Seq)
+		stanza.SelectLabel = fmt.Sprintf("%s %d length", orderKindLabel(order.Kind), order.Seq)
+		stanza.Current = strconv.Itoa(order.Detail.Count)
+		stanza.CountMax = datastore.MaxOrdersPerEntity
+	} else {
+		stanza.Name = directionFieldName(entityID, order.Seq)
+		stanza.SelectLabel = fmt.Sprintf("%s %d direction", orderKindLabel(order.Kind), order.Seq)
+		// An order with no direction yet shows the blank option, which is what
+		// a row a player has just added looks like.
+		if order.Detail.Direction.IsValid() {
+			stanza.Current = strings.ToLower(order.Detail.Direction.String())
+		}
 	}
 	if feedback.entity == entityID && feedback.seq == order.Seq {
 		stanza.Error = feedback.message
 	}
 	return stanza
+}
+
+// orderCostLabel is how an order's estimated cost is written on the page.
+//
+// An order that could not be priced shows an em dash rather than a zero. A move
+// a player has added and not yet said the direction of has nowhere to go, so it
+// has no price; saying it costs nothing would be a different claim.
+func orderCostLabel(cost game.OrderCost) string {
+	if !cost.Priced {
+		return "\u2014"
+	}
+	return fmt.Sprintf("%d AP", cost.Cost)
 }
 
 // orderDirections are the six points a direction select offers, in compass
@@ -507,6 +602,55 @@ func stanzaPath(entityID int64, seq int) string {
 
 func directionFieldName(entityID int64, seq int) string {
 	return fmt.Sprintf("%s.%d.%d", directionField, entityID, seq)
+}
+
+func countFieldName(entityID int64, seq int) string {
+	return fmt.Sprintf("%s.%d.%d", countField, entityID, seq)
+}
+
+// newOrderDetail is what a freshly added order carries.
+//
+// A move carries nothing: the add control makes a row and the player says which
+// way it goes afterwards. A rest has no such state - it lasts at least one
+// point - so it starts at one.
+func newOrderDetail(kind game.OrderKind) game.OrderDetail {
+	if kind == game.OrderKindRest {
+		return game.OrderDetail{Count: 1}
+	}
+	return game.OrderDetail{}
+}
+
+// postedDetail reads the value the form carries for one order.
+//
+// The page draws one control per row and its name says which kind it is, so
+// only one of the two names is ever present for a given order. Reading the
+// count first is not a preference between them, it is which name exists.
+func postedDetail(form url.Values, entityID int64, seq int) (game.OrderDetail, error) {
+	if value, found := form[countFieldName(entityID, seq)]; found {
+		count, err := parseCount(value[0])
+		if err != nil {
+			return game.OrderDetail{}, err
+		}
+		return game.OrderDetail{Count: count}, nil
+	}
+	direction, err := parseDirection(form.Get(directionFieldName(entityID, seq)))
+	if err != nil {
+		return game.OrderDetail{}, err
+	}
+	return game.OrderDetail{Direction: direction}, nil
+}
+
+// parseCount reads one rest's length. A rest lasts at least one action point,
+// so there is no blank to mean "not chosen yet" the way a direction has one.
+func parseCount(value string) (int, error) {
+	count, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0, fmt.Errorf("a rest lasts a whole number of action points")
+	}
+	if count < 1 || count > datastore.MaxOrdersPerEntity {
+		return 0, datastore.ErrOrderCountRefused
+	}
+	return count, nil
 }
 
 // formOrderKind reads the kind an entity's add control is showing. It is the
@@ -558,48 +702,45 @@ func parseDirection(value string) (compass.Point, error) {
 	return compass.Parse(value)
 }
 
-// parseDirectionFields reads every direction select a form carries into the
-// orders they belong to.
+// parseDetailFields reads every order control a form carries into the orders
+// they belong to.
 //
 // A blank select is kept rather than dropped: it means an order whose direction
 // is not chosen, and a save that dropped it would leave the order pointing
 // where it used to. Emptying a row is not removing it; the remove control does
-// that.
+// that. A count has no blank, because a rest lasts at least one point.
 //
-// The orders come back in a fixed order - by entity, then by sequence - so a
+// The updates come back in a fixed order - by entity, then by sequence - so a
 // save writes the same rows in the same order however a browser laid the form
 // out.
-func parseDirectionFields(form url.Values) ([]datastore.OrderDirection, error) {
-	directions := make([]datastore.OrderDirection, 0, len(form))
+func parseDetailFields(form url.Values) ([]datastore.OrderUpdate, error) {
+	updates := make([]datastore.OrderUpdate, 0, len(form))
 	for name, values := range form {
-		if !strings.HasPrefix(name, directionField+".") {
+		field, address, found := strings.Cut(name, ".")
+		if !found || (field != directionField && field != countField) {
 			continue
 		}
-		parts := strings.Split(strings.TrimPrefix(name, directionField+"."), ".")
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("direction field %q: want %s.<entity>.<seq>", name, directionField)
-		}
-		entity, err := strconv.ParseInt(parts[0], 10, 64)
+		entity, seq, err := parseStanzaAddress(address)
 		if err != nil {
-			return nil, fmt.Errorf("direction field %q: %w", name, err)
+			return nil, fmt.Errorf("%s field %q: %w", field, name, err)
 		}
-		seq, err := strconv.Atoi(parts[1])
-		if err != nil {
-			return nil, fmt.Errorf("direction field %q: %w", name, err)
+		update := datastore.OrderUpdate{EntityID: entity, Seq: seq}
+		if field == countField {
+			if update.Detail.Count, err = parseCount(values[0]); err != nil {
+				return nil, fmt.Errorf("%s field %q: %w", field, name, err)
+			}
+		} else if update.Detail.Direction, err = parseDirection(values[0]); err != nil {
+			return nil, fmt.Errorf("%s field %q: %w", field, name, err)
 		}
-		point, err := parseDirection(values[0])
-		if err != nil {
-			return nil, fmt.Errorf("direction field %q: %w", name, err)
-		}
-		directions = append(directions, datastore.OrderDirection{EntityID: entity, Seq: seq, Direction: point})
+		updates = append(updates, update)
 	}
-	sort.Slice(directions, func(i, j int) bool {
-		if directions[i].EntityID != directions[j].EntityID {
-			return directions[i].EntityID < directions[j].EntityID
+	sort.Slice(updates, func(i, j int) bool {
+		if updates[i].EntityID != updates[j].EntityID {
+			return updates[i].EntityID < updates[j].EntityID
 		}
-		return directions[i].Seq < directions[j].Seq
+		return updates[i].Seq < updates[j].Seq
 	})
-	return directions, nil
+	return updates, nil
 }
 
 // orderWriteFeedback turns a store's refusal into something a player can read,
@@ -627,6 +768,8 @@ func orderWriteFeedback(err error, entity int64, seq int) orderFeedback {
 		feedback.message = "That order is no longer there."
 	case errors.Is(err, datastore.ErrTooManyOrders):
 		feedback.message = datastore.ErrTooManyOrders.Error() + "."
+	case errors.Is(err, datastore.ErrOrderCountRefused):
+		feedback.message = datastore.ErrOrderCountRefused.Error() + "."
 	case errors.Is(err, datastore.ErrUnknownEntity):
 		return orderFeedback{
 			message: "That is not one of your faction's.",

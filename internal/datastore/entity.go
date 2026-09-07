@@ -30,6 +30,10 @@ type Entity struct {
 	Name     string
 	Kind     game.EntityKind
 	Location hexg.Hex
+	// Allowance is how many action points the entity had for the turn. An
+	// entity kind that accepts no orders has none, and reads as zero: a hamlet
+	// has no allowance row, and no plan to price against one.
+	Allowance int
 }
 
 // CurrentTurn returns the turn the game is on.
@@ -87,28 +91,34 @@ func readCurrentTurn(conn *sqlite.Conn) (int, error) {
 // contains the turn. Both joins carry the same between-test, and neither has a
 // NULL to reason about: a period that has not ended runs to game.EndOfTimeTurn.
 //
-// The joins are inner. An entity with no fact covering the turn did not stand
-// in the world on that turn, and a query for it should say so by omission.
+// The joins are inner but one. An entity with no fact covering the turn did not
+// stand in the world on that turn, and a query for it should say so by
+// omission; an entity with no allowance is an entity that takes no orders, and
+// that is a hamlet rather than an absence, so that join is outer.
 func readEntities(conn *sqlite.Conn, normalizedEmail string, turn int) ([]Entity, error) {
 	entities := make([]Entity, 0)
 	if err := sqlitex.ExecuteTransient(conn, `
 		SELECT entities.id, entity_facts.code, entity_facts.name, entity_facts.kind,
-		       entity_locations.q, entity_locations.r
+		       entity_locations.q, entity_locations.r,
+		       COALESCE(entity_allowances.points, 0)
 		FROM entities
 		JOIN entity_facts ON entity_facts.entity_id = entities.id
 			AND entity_facts.effective_from <= ?2 AND ?2 < entity_facts.effective_through
 		JOIN entity_locations ON entity_locations.entity_id = entities.id
 			AND entity_locations.effective_from <= ?2 AND ?2 < entity_locations.effective_through
+		LEFT JOIN entity_allowances ON entity_allowances.entity_id = entities.id
+			AND entity_allowances.effective_from <= ?2 AND ?2 < entity_allowances.effective_through
 		WHERE entities.faction_email = ?1
 		ORDER BY entities.id;`, &sqlitex.ExecOptions{
 		Args: []any{normalizedEmail, turn},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			entities = append(entities, Entity{
-				ID:       stmt.ColumnInt64(0),
-				Code:     stmt.ColumnText(1),
-				Name:     stmt.ColumnText(2),
-				Kind:     game.EntityKind(stmt.ColumnText(3)),
-				Location: hexg.NewHex(stmt.ColumnInt(4), stmt.ColumnInt(5)),
+				ID:        stmt.ColumnInt64(0),
+				Code:      stmt.ColumnText(1),
+				Name:      stmt.ColumnText(2),
+				Kind:      game.EntityKind(stmt.ColumnText(3)),
+				Location:  hexg.NewHex(stmt.ColumnInt(4), stmt.ColumnInt(5)),
+				Allowance: stmt.ColumnInt(6),
 			})
 			return nil
 		},
@@ -205,6 +215,17 @@ func createEntity(conn *sqlite.Conn, normalizedEmail string, kind game.EntityKin
 		Args: []any{entity.ID, location.Q(), location.R(), turn, game.EndOfTimeTurn},
 	}); err != nil {
 		return Entity{}, fmt.Errorf("create entity location: %w", err)
+	}
+	// An entity kind that accepts no orders has no allowance, and having none
+	// is the absence of a row rather than a zero in one.
+	if entity.Allowance = game.FoundingAllowance(kind); entity.Allowance > 0 {
+		if err := sqlitex.ExecuteTransient(conn, `
+			INSERT INTO entity_allowances (entity_id, points, effective_from, effective_through)
+			VALUES (?1, ?2, ?3, ?4);`, &sqlitex.ExecOptions{
+			Args: []any{entity.ID, entity.Allowance, turn, game.EndOfTimeTurn},
+		}); err != nil {
+			return Entity{}, fmt.Errorf("create entity allowance: %w", err)
+		}
 	}
 	return entity, nil
 }

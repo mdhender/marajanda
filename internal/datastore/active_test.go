@@ -171,18 +171,18 @@ func TestAnInactiveFactionGivesNoOrders(t *testing.T) {
 		write func() error
 	}{
 		{name: "AddOrder", write: func() error {
-			_, err := store.AddOrder(t.Context(), orderPlayer, turn, leader.ID, game.OrderKindMove, compass.E)
+			_, err := store.AddOrder(t.Context(), orderPlayer, turn, leader.ID, game.OrderKindMove, moving(compass.E))
 			return err
 		}},
 		{name: "InsertOrder", write: func() error {
-			return store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, seq, game.OrderKindMove, compass.SE)
+			return store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, seq, game.OrderKindMove, moving(compass.SE))
 		}},
 		{name: "SetOrderDirection", write: func() error {
-			return store.SetOrderDirection(t.Context(), orderPlayer, turn, leader.ID, seq, compass.E)
+			return store.SetOrderDetail(t.Context(), orderPlayer, turn, leader.ID, seq, moving(compass.E))
 		}},
 		{name: "SetOrderDirections", write: func() error {
-			return store.SetOrderDirections(t.Context(), orderPlayer, turn, []OrderDirection{
-				{EntityID: leader.ID, Seq: seq, Direction: compass.E},
+			return store.SetOrderDetails(t.Context(), orderPlayer, turn, []OrderUpdate{
+				{EntityID: leader.ID, Seq: seq, Detail: moving(compass.E)},
 			})
 		}},
 		{name: "RemoveOrder", write: func() error {

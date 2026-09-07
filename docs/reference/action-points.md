@@ -3,10 +3,10 @@
 What an entity may do in a turn, what each thing costs it, and what happens when
 it runs out.
 
-Nothing implements these rules yet. `rest_orders` is defined ahead of the kind
-that writes to it; see [Orders reference](orders.md#storage). The decisions this
-document records are in
-[#28](https://github.com/mdhender/marajanda/issues/28) and
+The costs, the allowance and the order pre-processor are implemented by
+`internal/game` (`actionpoints.go`), `internal/datastore` (`preprocessor.go`)
+and `internal/server` (`orders.go`). Turn processing, which is what charges
+them, is not: see [#28](https://github.com/mdhender/marajanda/issues/28) and
 [#33](https://github.com/mdhender/marajanda/issues/33).
 
 ## Vocabulary
@@ -18,6 +18,9 @@ document records are in
 | Rest | An order kind that spends action points and moves nothing. |
 | Exhaust | The failure of a step an entity cannot afford. |
 | Known | Of a hex: the faction had observed or explored it when the turn opened. |
+| Pre-processor | What prices an entity's orders during order entry and keeps its trailing Rest. Binds nothing. |
+| Executor | What walks an entity's orders when the turn is processed and charges them. Decides what happened. |
+| Estimate | What the pre-processor answers with. Every order is priced as though it lands, and unknown ground at a flat cost. |
 
 An [order](orders.md) is one action, so a `move` is one step and a move's cost
 is a step's cost. *Step* is the grain a turn's results are recorded on.
@@ -36,10 +39,12 @@ The allowance is a [fact](entities.md#effective-dating) of the entity,
 effective-dated like its location, and it is not a running balance. Nothing
 carries into the next turn: a turn opens at the allowance effective on that
 turn, that is the whole of what the entity may spend, and turn processing never
-writes a total back.
+writes a total back. It is stored in `entity_allowances` and written at creation
+from `game.FoundingAllowance`; see [Datastore](../DATASTORE.md#fact-tables).
 
 An entity whose kind accepts no orders has no allowance. A hamlet accepts
-nothing, so it has none.
+nothing, so it has none, and having none is the absence of a row rather than a
+zero in one.
 
 ## What a step costs
 
@@ -120,9 +125,15 @@ not an allowance. See [Orders reference](orders.md#storage).
 | --- | --- | --- | ---: |
 | `rest` | `leader` | none | 1 AP each |
 
+A rest carries a count and costs one action point per point of it, so a
+`Rest x3` is one order with one cost rather than three rows. The count is at
+least one: a `Rest x0` is an order that costs nothing and does nothing, and
+nothing stores one.
+
 A rest may be ordered more than once in a turn, and it may sit anywhere in an
 entity's list. Ordering one before a move is legal: it spends the AP where it
-was asked for and leaves the move to exhaust.
+was asked for and leaves the move to exhaust. A rest at the *end* of a list is
+the trailing Rest, which is the pre-processor's; see below.
 
 What a rest recovers is open. Nothing tracks a condition a rest could restore,
 so a rest today costs its AP, records that it happened, and changes no state.
@@ -130,12 +141,94 @@ so a rest today costs its AP, records that it happened, and changes no state.
 Its cost and its position among the order kinds do not change when that answer
 arrives.
 
-## The engine never writes orders
+## The two engines
 
-Unspent action points are the player's business. The orders page carries a
-trailing `Rest xN` stanza that starts at the entity's whole allowance and
-decrements as move steps are added, so a player sees where their six points went
-and the stored orders are exactly what the player agreed to.
+Two things price orders, and the distinction is the point.
+
+| | Serves | Writes orders | Binding |
+| --- | --- | --- | --- |
+| Pre-processor | Order entry. Prices the set and keeps the trailing Rest. | Yes, on the player's behalf. | **No** |
+| Executor | Turn processing. Walks the orders and charges them. | No | Yes. It decides what happened. |
+
+The invariant is the narrow one: **the executor writes no orders.** Everything
+the pre-processor does is the player acting through the page.
+
+Both price through one function, `game.Price`, so the two agree exactly over
+ground the faction knows. Where they differ, the difference is exploration and
+nothing else.
+
+### The pre-processor's numbers are an estimate
+
+The word is not hedging, it names two specific approximations.
+
+- **Every order is assumed to land.** Row `n` is priced from where rows `1..n-1`
+  would leave the entity. A step that fails leaves the entity elsewhere, and
+  every row after it was priced from a hex it never reached.
+- **Unknown ground is priced flat.** An unknown hex costs the exploration price
+  whatever is actually there. A cost that varied with terrain the faction has
+  not seen would tell a player what is there, so it does not vary. The executor
+  charges the real cost, the difference comes out of the entity's remaining
+  orders, and the tail of the turn exhausts. That is the risk of exploration,
+  priced as a real cost rather than as a warning.
+
+An order that cannot be priced at all — a move a player has added and not yet
+said the direction of — is shown unpriced rather than as costing nothing.
+
+### Accuracy is a parameter, never a request
+
+What a costing may see is `game.Sight`. Its zero value is fogged, and a
+ground-truth costing cannot be built without handing over a world to read.
+
+| Sight | Reads | Used by |
+| --- | --- | --- |
+| Fogged | The faction's knowledge. Every order lands. | The orders page, for a player |
+| Ground truth | The knowledge *and* the world. A step that will fail is shown as failing, and the orders after it are priced from the hex the entity did not leave. | The executor, and the admin path |
+
+The level is set from the session's role and never from anything in a request.
+A player who hand-builds a request cannot ask for the accurate answer, because
+there is nothing in a request that says which answer to give.
+
+The pairing is what the two engines are tested against: over ground the faction
+knows in full, the fogged estimate and the ground truth agree on every row.
+
+### Whole-set recalculation
+
+Every write re-prices every row of the entity's list. Inserting or removing an
+order changes where the entity stands for every order after it — a move that was
+onto known ground may now be onto unknown ground, or the reverse — so any scheme
+that re-priced only the touched row would be wrong.
+
+It needs no endpoint of its own. Every write already returns the whole
+re-rendered `#orders` region, so the pre-processor runs during that render and
+the costs ride along in markup already being sent. See
+[Orders reference](orders.md#page).
+
+## The trailing Rest
+
+Unspent action points are the player's business. An entity's orders end with a
+`Rest xN` whose count is what everything before it leaves unspent. It starts at
+the entity's whole allowance and decrements as orders are added, so a player
+sees where their six points went and the stored orders are exactly what the
+player agreed to.
+
+**The line is rendered always; the row is stored only when the count is at least
+one.** The page therefore keeps its shape as a player edits, which is the
+convention the faction picker follows, and the database never holds a `Rest x0`,
+which is the convention [Datastore](../DATASTORE.md#orders) follows. When the
+orders reach the allowance the row is deleted rather than written as a zero.
+
+A rest at the end of a list *is* the trailing Rest. There is nothing to tell one
+the player placed apart from one the pre-processor wrote, and nothing that needs
+to be: unspent points at the end of a turn are what a trailing Rest means. A
+rest a player wants at a length of their own goes somewhere other than the end.
+
+The Rest comes off before every order write and goes back after it. That is what
+makes an added order land in front of the residue rather than after it, and what
+makes a position on the page the position the write addresses.
+
+A plain read stores nothing. Opening the orders page and leaving it prices the
+turn and writes no rows; the residue is still drawn, and points nobody spends
+simply lapse.
 
 That count is exact only while every step lands. A move that fails partway
 leaves the entity somewhere else, and the true residue may differ from the
@@ -144,6 +237,19 @@ projection.
 Turn processing appends nothing. Action points still unspent when an entity's
 orders run out lapse, and the turn result records how much lapsed. That is a
 reporting line, not a rule.
+
+## Overspend
+
+Overspending is allowed during entry as a courtesy and bounded by
+`MaxOrdersPerEntity`. It is not an obligation, and it is not tolerated when the
+turn is processed: the entity is walked until it cannot afford its next order,
+the orders it could afford stand, and each one it could not is recorded as
+exhausted. The excess is rejected, not the set.
+
+The page owes the player the running total, the row where the committed cost
+crosses the allowance, and a mark on every row at or after it that will exhaust.
+There is no negative residue to render, because the trailing Rest stops existing
+before the residue could go below zero.
 
 ## Founding
 

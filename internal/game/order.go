@@ -2,7 +2,11 @@
 
 package game
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/mdhender/marajanda/internal/compass"
+)
 
 // OrderKind is what an order tells an entity to do.
 //
@@ -12,15 +16,23 @@ import "slices"
 type OrderKind string
 
 const (
-	// OrderKindMove walks an entity a list of compass points, one step per
-	// point, in the order they are given.
+	// OrderKindMove walks an entity one hex, in the direction the order names.
+	// An order is one action, so "move nw ne e" is three orders.
 	OrderKindMove OrderKind = "move"
+
+	// OrderKindRest spends action points and moves nothing. It carries a
+	// count, so a Rest xN is one order with one cost rather than N rows.
+	//
+	// What a rest recovers is open (#36). Today it costs its points, records
+	// that it happened, and changes no state. Its cost and its place among the
+	// kinds do not change when that answer arrives.
+	OrderKindRest OrderKind = "rest"
 )
 
 // OrderKinds lists every order kind the game knows, in the order a form offers
 // them.
 func OrderKinds() []OrderKind {
-	return []OrderKind{OrderKindMove}
+	return []OrderKind{OrderKindMove, OrderKindRest}
 }
 
 // Valid reports whether the order kind is one this game knows.
@@ -38,7 +50,7 @@ func (k OrderKind) Valid() bool {
 // A hamlet accepts nothing today. That is a rule with no orders in it yet, not
 // a gap: what separates a hamlet from a leader is which orders reach it.
 var entityOrderKinds = map[EntityKind][]OrderKind{
-	EntityKindLeader: {OrderKindMove},
+	EntityKindLeader: {OrderKindMove, OrderKindRest},
 	EntityKindHamlet: {},
 }
 
@@ -55,4 +67,31 @@ func (k EntityKind) OrderKinds() []OrderKind {
 // Accepts reports whether an entity of this kind may be given that order.
 func (k EntityKind) Accepts(order OrderKind) bool {
 	return slices.Contains(entityOrderKinds[k], order)
+}
+
+// OrderDetail is what an order carries beyond its kind: the direction a move
+// goes, the count a rest lasts.
+//
+// The two live on one struct here and in two tables on disk, and both are
+// right. A caller writing an order says one thing about it, so one argument is
+// the shape that call wants; a column that had to mean "not applicable to this
+// order kind" is what the detail tables exist to avoid. See
+// docs/reference/orders.md#storage.
+type OrderDetail struct {
+	// Direction is the way a move goes. The zero value is not a compass point,
+	// so it is a move a player has added and not yet said the direction of.
+	Direction compass.Point
+	// Count is how many points a rest lasts. A rest lasts at least one.
+	Count int
+}
+
+// Order is one instruction issued to one entity for one turn, and one action.
+//
+// The shape is a game rule rather than a storage detail, so it lives here and
+// the store stores it. Seq is the order's position in its entity's list,
+// contiguous from 1.
+type Order struct {
+	Seq    int
+	Kind   OrderKind
+	Detail OrderDetail
 }

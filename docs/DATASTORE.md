@@ -111,7 +111,7 @@ Everything else about an entity is a fact dated in turns.
 
 ### Effective-dated facts
 
-`entity_facts`, `entity_locations`, `units` and `faction_knowledge` are fact tables. Each carries `effective_from` and `effective_through` as turn numbers over the half-open period `[from, through)`, and each row is true on a turn when
+`entity_facts`, `entity_locations`, `entity_allowances`, `units` and `faction_knowledge` are fact tables. Each carries `effective_from` and `effective_through` as turn numbers over the half-open period `[from, through)`, and each row is true on a turn when
 
 ```sql
 effective_from <= :turn AND :turn < effective_through
@@ -119,7 +119,7 @@ effective_from <= :turn AND :turn < effective_through
 
 Both columns are `NOT NULL`. A period that has not ended runs to the end-of-time turn, `99999999`, never to `NULL`. The predicate above is therefore the only one any read needs: no `IS NULL` branch, no `COALESCE`, and no index that behaves differently for an open period than for a closed one. A row missing its end is a constraint violation rather than an open period nobody meant to write, and the check that a period is non-empty — `effective_through > effective_from` — is unconditional.
 
-For one subject, the periods of one fact table are contiguous, never overlap, and exactly one of them runs to the end of time. The subject is the fact's natural key without the period: an entity for most of them, a faction and a hex for `faction_knowledge`. A partial unique index on each fact table holds the last of those: `entity_facts_open` and `entity_locations_open` on `entity_id`, `units_open` on `entity_id, kind`, and `faction_knowledge_open` on `faction_email, q, r`.
+For one subject, the periods of one fact table are contiguous, never overlap, and exactly one of them runs to the end of time. The subject is the fact's natural key without the period: an entity for most of them, a faction and a hex for `faction_knowledge`. A partial unique index on each fact table holds the last of those: `entity_facts_open`, `entity_locations_open` and `entity_allowances_open` on `entity_id`, `units_open` on `entity_id, kind`, and `faction_knowledge_open` on `faction_email, q, r`.
 
 The end-of-time turn appears in the schema and in `internal/game` as `EndOfTimeTurn`. The schema is built from that constant, so the two cannot drift.
 
@@ -131,9 +131,12 @@ Turn processing closes an open row at `turn + 1` and opens its replacement runni
 | --- | --- | --- |
 | `entity_facts` | `code`, `name`, `kind` | `(entity_id, effective_from)` |
 | `entity_locations` | `q`, `r` | `(entity_id, effective_from)` |
+| `entity_allowances` | `points` | `(entity_id, effective_from)` |
 | `units` | `kind`, `quantity` | `(entity_id, kind, effective_from)` |
 
 `kind` in `entity_facts` is constrained to `leader` and `hamlet`. `q, r` in `entity_locations` references `hexes`, so an entity cannot stand on a coordinate the world does not contain. `quantity` in `units` must be positive. `kind` in `units` carries no constraint: the list of unit kinds is a game rule that arrives with the first rule producing one, and nothing seeds inventory yet.
+
+`points` in `entity_allowances` is how many action points the entity has for a turn, and it must be positive. An entity kind that accepts no orders has no allowance, and having none is the absence of a row rather than a zero in one: a hamlet has no row, and a read that finds none reports zero. The value written at creation comes from `game.FoundingAllowance`, so the schema names no number. Nothing changes an allowance yet; the rows are dated anyway, because a rule that read the allowance off the entity's kind would price turn 3 from whatever that kind means today. See [Action points reference](reference/action-points.md#the-allowance).
 
 Every entity fact table cascades from `entities`, which cascades from `factions`, which cascades from `accounts`. `faction_knowledge` cascades from `factions` directly, because it is what the faction knows rather than what one of its entities does.
 
@@ -165,11 +168,11 @@ An order is one instruction issued to one entity for one turn, and it is one act
 | `orders` | `turn` | The turn the order was issued for. At least 1. |
 | `orders` | `entity_id` | The entity the order is issued to. `ON DELETE CASCADE`. |
 | `orders` | `seq` | The order's position in that entity's list for the turn. Contiguous from 1, and constrained to `1 .. 32`. |
-| `orders` | `kind` | Constrained to `move`. |
+| `orders` | `kind` | Constrained to `move` and `rest`. |
 | `move_orders` | `turn`, `entity_id`, `seq` | The order the direction belongs to. `ON DELETE CASCADE`. |
 | `move_orders` | `direction` | Constrained to `ne`, `e`, `se`, `sw`, `w`, `nw`. |
 | `rest_orders` | `turn`, `entity_id`, `seq` | The order the count belongs to. `ON DELETE CASCADE`. |
-| `rest_orders` | `count` | How many times the rest repeats. At least 1. |
+| `rest_orders` | `count` | How many action points the rest lasts. Constrained to `1 .. 32`. |
 
 Every one of the three has the primary key `(turn, entity_id, seq)`.
 
@@ -177,7 +180,9 @@ An order is issued to an entity rather than to a faction: the faction is reached
 
 A direction is not a nullable column on `orders`. Such a column would also have to mean "not applicable to this order kind", which is what the detail-table pattern exists to avoid: a rest has no direction. A move with no row in `move_orders` is an order a player has added and not yet said the direction of, and the absence of a row is what the blank select on the page means.
 
-`rest_orders` is defined ahead of the kind that writes to it. The `kind` check on `orders` does not admit `rest` yet, so nothing can put a row in it; whether a rest keeps a repeat count is [#36](https://github.com/mdhender/marajanda/issues/36).
+A rest is always one row in `rest_orders`, because a rest has no state a player fills in afterwards: it lasts at least one action point, and a `Rest x0` would be an order that costs nothing and does nothing. The bound on the count is the bound on `seq` and carries it for the same reason: it is what keeps a tolerated overspend bounded. What a rest recovers is still [#36](https://github.com/mdhender/marajanda/issues/36).
+
+The last order in an entity's list, when it is a rest, is the trailing Rest the order pre-processor maintains: its count is what the orders before it leave unspent, and the row is deleted rather than written as a zero when they leave nothing. See [Action points reference](reference/action-points.md#the-trailing-rest).
 
 Sequences are contiguous 1..N and every write leaves them that way: removing an order renumbers what follows it, and inserting one shifts what follows it up. An entity's orders therefore have exactly one stored form.
 

@@ -104,8 +104,8 @@ func TestOrdersRoutesRefuseADeactivatedFaction(t *testing.T) {
 				t.Fatalf("response = %d %q, want %d /player/dashboard",
 					response.Code, response.Header().Get("Location"), http.StatusSeeOther)
 			}
-			if len(store.orders[7]) != 0 || store.savedDirections != nil {
-				t.Fatalf("a refused request wrote %#v and %#v", store.orders, store.savedDirections)
+			if len(store.orders[7]) != 0 || store.savedUpdates != nil {
+				t.Fatalf("a refused request wrote %#v and %#v", store.orders, store.savedUpdates)
 			}
 
 			// HTMX follows a 303 itself and swaps what comes back into the

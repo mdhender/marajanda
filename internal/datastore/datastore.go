@@ -196,6 +196,26 @@ CREATE TABLE entity_locations (
 	FOREIGN KEY (q, r) REFERENCES hexes (q, r)
 ) STRICT;
 
+-- How much an entity may do in a turn is its action point allowance. It
+-- is its own fact table because it is a fact of the entity dated in
+-- turns, read as of the turn a plan is priced for, and because nothing
+-- about it changes when a code or a name does.
+--
+-- An entity kind that accepts no orders has no allowance, so a hamlet
+-- has no row. Absence is the whole of "has none": a zero would be an
+-- entity that may act and may spend nothing.
+--
+-- Nothing changes an allowance today. The rows are still dated, because
+-- a rule that read the allowance off the kind would price turn 3 from
+-- whatever the kind means today. See internal/game.FoundingAllowance.
+CREATE TABLE entity_allowances (
+	entity_id         INTEGER NOT NULL REFERENCES entities (id) ON DELETE CASCADE,
+	points            INTEGER NOT NULL CHECK (points > 0),
+	effective_from    INTEGER NOT NULL CHECK (effective_from >= 0),
+	effective_through INTEGER NOT NULL CHECK (effective_through > effective_from),
+	PRIMARY KEY (entity_id, effective_from)
+) STRICT;
+
 -- A unit is inventory: a quantity of a kind held by an entity. It has
 -- no code, no name and no identity of its own, so merging two stacks is
 -- addition. kind carries no CHECK: the list of unit kinds is a game
@@ -266,7 +286,7 @@ CREATE TABLE orders (
 	turn      INTEGER NOT NULL CHECK (turn >= 1),
 	entity_id INTEGER NOT NULL REFERENCES entities (id) ON DELETE CASCADE,
 	seq       INTEGER NOT NULL CHECK (seq BETWEEN 1 AND %[2]d),
-	kind      TEXT NOT NULL CHECK (kind IN ('move')),
+	kind      TEXT NOT NULL CHECK (kind IN ('move', 'rest')),
 	PRIMARY KEY (turn, entity_id, seq)
 ) STRICT;
 
@@ -293,15 +313,21 @@ CREATE TABLE move_orders (
 ) STRICT;
 
 -- Rest is the one order kind that is not one action: a repeat count
--- makes "rest x6" one order with one cost rather than six rows. The
--- table is here so the detail-table shape is one shape, and nothing
--- writes to it yet - the kind check on orders does not admit 'rest'
--- until the rules that give Rest an effect land. See #36.
+-- makes "rest x6" one order with one cost rather than six rows.
+--
+-- A count is at least one, because a Rest x0 is an order that costs
+-- nothing and does nothing. The order pre-processor keeps a trailing
+-- Rest equal to the points an entity's orders leave unspent, and it
+-- deletes the row rather than writing a zero into it.
+--
+-- The upper bound is the order limit, for the reason the bound on seq
+-- carries it: it is what keeps a tolerated overspend bounded. What a
+-- rest recovers is still open; see #36.
 CREATE TABLE rest_orders (
 	turn      INTEGER NOT NULL,
 	entity_id INTEGER NOT NULL,
 	seq       INTEGER NOT NULL,
-	count     INTEGER NOT NULL CHECK (count >= 1),
+	count     INTEGER NOT NULL CHECK (count BETWEEN 1 AND %[2]d),
 	PRIMARY KEY (turn, entity_id, seq),
 	FOREIGN KEY (turn, entity_id, seq) REFERENCES orders (turn, entity_id, seq) ON DELETE CASCADE
 ) STRICT;
@@ -311,6 +337,7 @@ CREATE TABLE rest_orders (
 -- runs to the end of time. These are what hold the second half of that.
 CREATE UNIQUE INDEX entity_facts_open ON entity_facts (entity_id) WHERE effective_through = %[1]d;
 CREATE UNIQUE INDEX entity_locations_open ON entity_locations (entity_id) WHERE effective_through = %[1]d;
+CREATE UNIQUE INDEX entity_allowances_open ON entity_allowances (entity_id) WHERE effective_through = %[1]d;
 CREATE UNIQUE INDEX units_open ON units (entity_id, kind) WHERE effective_through = %[1]d;
 CREATE UNIQUE INDEX faction_knowledge_open ON faction_knowledge (faction_email, q, r) WHERE effective_through = %[1]d;`
 

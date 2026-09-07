@@ -6,8 +6,8 @@ import "testing"
 
 func TestOrderKindsAreTheKindsTheGameKnows(t *testing.T) {
 	kinds := OrderKinds()
-	if len(kinds) != 1 || kinds[0] != OrderKindMove {
-		t.Fatalf("OrderKinds() = %v, want move alone", kinds)
+	if len(kinds) != 2 || kinds[0] != OrderKindMove || kinds[1] != OrderKindRest {
+		t.Fatalf("OrderKinds() = %v, want move then rest", kinds)
 	}
 	for _, kind := range kinds {
 		if !kind.Valid() {
@@ -18,6 +18,9 @@ func TestOrderKindsAreTheKindsTheGameKnows(t *testing.T) {
 	// and what a form posts.
 	if OrderKindMove != "move" {
 		t.Fatalf("OrderKindMove = %q, want move", OrderKindMove)
+	}
+	if OrderKindRest != "rest" {
+		t.Fatalf("OrderKindRest = %q, want rest", OrderKindRest)
 	}
 	for _, kind := range []OrderKind{"", "Move", "MOVE", "attack"} {
 		if OrderKind(kind).Valid() {
@@ -32,7 +35,7 @@ func TestEntityKindsAcceptTheirOwnOrders(t *testing.T) {
 		kind  EntityKind
 		wants []OrderKind
 	}{
-		{EntityKindLeader, []OrderKind{OrderKindMove}},
+		{EntityKindLeader, []OrderKind{OrderKindMove, OrderKindRest}},
 		{EntityKindHamlet, nil},
 		{EntityKind("village"), nil},
 	} {

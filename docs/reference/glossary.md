@@ -19,7 +19,7 @@ See [Accounts reference](../ACCOUNTS.md#deactivation).
 How many [action points](#action-point) an [entity](#entity) has for one [turn](#turn).
 A newly created leader's is 6.
 It is a [fact](#fact) of the entity and not a running balance: nothing carries into the next turn, and processing never writes a total back.
-An entity whose [kind](#kind) accepts no [orders](#order) has no allowance.
+An entity whose [kind](#kind) accepts no [orders](#order) has no allowance, and having none is the absence of a row rather than a zero in one.
 See [Action points reference](action-points.md#the-allowance).
 
 ## Code
@@ -51,6 +51,20 @@ An entity has a location, a [code](#code), a name, and a [kind](#kind), and it b
 Orders are issued to entities.
 A leader is an entity; a settlement is an entity.
 See [Entities reference](entities.md).
+
+## Estimate
+
+What the [pre-processor](#pre-processor) answers with, and the word the orders page uses.
+Every order is priced as though it lands, and unknown ground at a flat cost whatever is actually there.
+The [executor](#executor) charges the real cost; the difference is the risk of exploration.
+See [Action points reference](action-points.md#the-pre-processors-numbers-are-an-estimate).
+
+## Executor
+
+What walks an [entity](#entity)'s [orders](#order) when the [turn](#turn) is processed and charges them.
+It writes no orders and it decides what happened.
+Its twin is the [pre-processor](#pre-processor).
+See [Action points reference](action-points.md#the-two-engines).
 
 ## Exhaust
 
@@ -105,9 +119,8 @@ See [Knowledge reference](knowledge.md).
 ## Order
 
 One instruction issued to one [entity](#entity) for one [turn](#turn), also called a stanza.
-An order is one action: `move`, the only kind an entity may issue today, walks the entity one hex in the [compass point](#compass-point) it names.
-An entity's [kind](#kind) decides which order kinds it accepts: a leader accepts `move`, a hamlet accepts nothing.
-The second kind, [rest](#rest), is decided and not yet accepted.
+An order is one action: `move` walks the entity one hex in the [compass point](#compass-point) it names, and [rest](#rest) spends action points and moves nothing.
+An entity's [kind](#kind) decides which order kinds it accepts: a leader accepts both, a hamlet accepts nothing.
 Only the current turn's orders are writable; advancing the turn freezes the turn before it.
 See [Orders reference](orders.md).
 
@@ -131,10 +144,18 @@ The `ice` terrain of the northernmost and southernmost rows of the world.
 Ice is neither land nor water, and nothing may enter it.
 See [Terrain reference](terrain.md).
 
+## Pre-processor
+
+What prices an [entity](#entity)'s [orders](#order) during order entry and keeps its [trailing Rest](#trailing-rest).
+It writes orders on the player's behalf and binds nothing: its numbers are an [estimate](#estimate) rather than a quote.
+Its twin is the [executor](#executor).
+See [Action points reference](action-points.md#the-two-engines).
+
 ## Rest
 
 An [order](#order) kind that spends [action points](#action-point) and moves nothing.
-A leader accepts it, it carries no direction, it costs 1 AP each, and it may be ordered more than once and anywhere in an entity's list.
+A leader accepts it, it carries a count rather than a direction, it costs 1 AP per point, and it may be ordered more than once and anywhere in an entity's list.
+A rest at the end of a list is the [trailing Rest](#trailing-rest).
 What it recovers is not yet decided.
 See [Action points reference](action-points.md#rest).
 
@@ -149,6 +170,12 @@ It is an entity rather than a [unit](#unit) because it has a location, a mutable
 One hex of movement in a turn's results: a `move` [order](#order) that is carried out is a step taken.
 It is not a unit of order entry. An order is one action, so a step is what a move produces rather than something an order carries a list of.
 See [Orders reference](orders.md).
+
+## Trailing Rest
+
+The [rest](#rest) an [entity](#entity)'s [order](#order) list ends with, whose count is what the orders before it leave unspent.
+The line is rendered always and the row is stored only when the count is at least one, so the page keeps its shape and nothing stores a `Rest x0`.
+See [Action points reference](action-points.md#the-trailing-rest).
 
 ## Turn
 

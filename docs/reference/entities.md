@@ -37,7 +37,8 @@ Which order kinds an entity kind accepts is a game rule: a leader accepts
 
 How much an entity may do in a turn is its action point allowance, which is a
 fact of the entity like its location. A leader is created with `6`; an entity
-kind that accepts no orders has no allowance, so a hamlet has none. See
+kind that accepts no orders has no allowance, so a hamlet has none, and having
+none is the absence of a row rather than a zero in one. See
 [Action points reference](action-points.md#the-allowance).
 
 ## Identity, code, name, kind
@@ -49,6 +50,7 @@ kind that accepts no orders has no allowance, so a hamlet has none. See
 | Name | Yes, through an order. | `entity_facts.name` |
 | Kind | Yes. | `entity_facts.kind` |
 | Location | Yes. | `entity_locations` |
+| Allowance | Yes, in principle. Nothing changes one yet. | `entity_allowances` |
 | Ownership | No. Nothing transfers an entity between factions. | `entities.faction_email` |
 
 A code is a kind and a per-faction sequence for that kind: `LEADER-1`,
@@ -117,13 +119,18 @@ because both describe the same rows.
 | --- | --- | --- |
 | `entity_facts` | `code`, `name`, `kind` | One row per entity per period |
 | `entity_locations` | `q`, `r` | One row per entity per period |
+| `entity_allowances` | `points` | One row per entity per period, and none for an entity that takes no orders |
 | `units` | `kind`, `quantity` | One row per entity per unit kind per period |
 
 Location is its own table because it is the attribute that changes every turn a
 leader moves. Code, name and kind share one table because they change rarely and
-together. As other attributes prove volatile they get their own fact tables: the
-action point allowance is expected to be one of them, and nothing stores it yet.
-See [Action points reference](action-points.md#the-allowance).
+together.
+
+The action point allowance is its own table because it is read as of the turn a
+plan is priced for and has nothing to do with a code or a name. Nothing changes
+an allowance yet; it is dated anyway, because a rule that read it off the
+entity's kind would price turn 3 from whatever that kind means today. See
+[Action points reference](action-points.md#the-allowance).
 
 A unit's `kind` carries no constraint. The list of unit kinds is a game rule,
 and it arrives with the first rule that produces one. Nothing creates, consumes

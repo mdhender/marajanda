@@ -13,7 +13,7 @@ import (
 
 	"github.com/maloquacious/hexg"
 	"github.com/mdhender/marajanda"
-	"github.com/mdhender/marajanda/internal/compass"
+	"github.com/mdhender/marajanda/internal/cylinder"
 	"github.com/mdhender/marajanda/internal/datastore"
 	"github.com/mdhender/marajanda/internal/game"
 )
@@ -463,9 +463,9 @@ type testStore struct {
 	orderErr  error
 	wroteTurn int
 	advanced  int
-	// savedDirections is what the last whole-page save asked for, which is
-	// where a test reads what the handler made of the form on the way in.
-	savedDirections []datastore.OrderDirection
+	// savedUpdates is what the last whole-page save asked for, which is where
+	// a test reads what the handler made of the form on the way in.
+	savedUpdates []datastore.OrderUpdate
 	// insertedAt is the sequence the last insert asked for, so a test can see
 	// that "insert after order 1" asked for position 2.
 	insertedAt int
@@ -476,7 +476,7 @@ func (s *testStore) OrdersAsOf(_ context.Context, _ string, turn int) (map[int64
 	return s.orders, nil
 }
 
-func (s *testStore) AddOrder(_ context.Context, _ string, turn int, entityID int64, kind game.OrderKind, direction compass.Point) (int, error) {
+func (s *testStore) AddOrder(_ context.Context, _ string, turn int, entityID int64, kind game.OrderKind, detail game.OrderDetail) (int, error) {
 	s.wroteTurn = turn
 	if s.orderErr != nil {
 		return 0, s.orderErr
@@ -485,11 +485,11 @@ func (s *testStore) AddOrder(_ context.Context, _ string, turn int, entityID int
 		s.orders = make(map[int64][]datastore.Order)
 	}
 	seq := len(s.orders[entityID]) + 1
-	s.orders[entityID] = append(s.orders[entityID], datastore.Order{Seq: seq, Kind: kind, Direction: direction})
+	s.orders[entityID] = append(s.orders[entityID], datastore.Order{Seq: seq, Kind: kind, Detail: detail})
 	return seq, nil
 }
 
-func (s *testStore) InsertOrder(_ context.Context, _ string, turn int, entityID int64, seq int, kind game.OrderKind, direction compass.Point) error {
+func (s *testStore) InsertOrder(_ context.Context, _ string, turn int, entityID int64, seq int, kind game.OrderKind, detail game.OrderDetail) error {
 	s.wroteTurn = turn
 	s.insertedAt = seq
 	if s.orderErr != nil {
@@ -504,7 +504,7 @@ func (s *testStore) InsertOrder(_ context.Context, _ string, turn int, entityID 
 	}
 	inserted := make([]datastore.Order, 0, len(orders)+1)
 	inserted = append(inserted, orders[:seq-1]...)
-	inserted = append(inserted, datastore.Order{Kind: kind, Direction: direction})
+	inserted = append(inserted, datastore.Order{Kind: kind, Detail: detail})
 	inserted = append(inserted, orders[seq-1:]...)
 	for index := range inserted {
 		inserted[index].Seq = index + 1
@@ -513,31 +513,59 @@ func (s *testStore) InsertOrder(_ context.Context, _ string, turn int, entityID 
 	return nil
 }
 
-func (s *testStore) SetOrderDirection(ctx context.Context, email string, turn int, entityID int64, seq int, direction compass.Point) error {
-	return s.SetOrderDirections(ctx, email, turn, []datastore.OrderDirection{
-		{EntityID: entityID, Seq: seq, Direction: direction},
+func (s *testStore) SetOrderDetail(ctx context.Context, email string, turn int, entityID int64, seq int, detail game.OrderDetail) error {
+	return s.SetOrderDetails(ctx, email, turn, []datastore.OrderUpdate{
+		{EntityID: entityID, Seq: seq, Detail: detail},
 	})
 }
 
-func (s *testStore) SetOrderDirections(_ context.Context, _ string, turn int, directions []datastore.OrderDirection) error {
+func (s *testStore) SetOrderDetails(_ context.Context, _ string, turn int, updates []datastore.OrderUpdate) error {
 	s.wroteTurn = turn
 	if s.orderErr != nil {
 		return s.orderErr
 	}
-	s.savedDirections = directions
-	for _, wanted := range directions {
+	s.savedUpdates = updates
+	for _, wanted := range updates {
 		found := false
 		for index, order := range s.orders[wanted.EntityID] {
-			if order.Seq == wanted.Seq {
-				s.orders[wanted.EntityID][index].Direction = wanted.Direction
-				found = true
+			if order.Seq != wanted.Seq {
+				continue
 			}
+			// The order's kind decides which half of the detail is used, the
+			// way the real store does it.
+			if order.Kind == game.OrderKindRest {
+				s.orders[wanted.EntityID][index].Detail.Count = wanted.Detail.Count
+			} else {
+				s.orders[wanted.EntityID][index].Detail.Direction = wanted.Detail.Direction
+			}
+			found = true
 		}
 		if !found {
 			return datastore.ErrUnknownOrder
 		}
 	}
 	return nil
+}
+
+// EstimateOrders prices the fake's orders the way the real store does, through
+// the one cost function in internal/game. The fake keeps no knowledge and no
+// world, so every step is onto ground the faction does not know.
+func (s *testStore) EstimateOrders(_ context.Context, _ string, _ int) (map[int64]game.Estimate, error) {
+	world, err := cylinder.New(2*testMapWidth + 1)
+	if err != nil {
+		return nil, err
+	}
+	estimates := make(map[int64]game.Estimate, len(s.entities))
+	for _, entity := range s.entities {
+		authored, _ := game.SplitTrailingRest(s.orders[entity.ID])
+		estimates[entity.ID] = game.Price(game.Plan{
+			World:     world,
+			Start:     entity.Location,
+			Allowance: entity.Allowance,
+			Orders:    authored,
+		})
+	}
+	return estimates, nil
 }
 
 func (s *testStore) RemoveOrder(_ context.Context, _ string, turn int, entityID int64, seq int) error {

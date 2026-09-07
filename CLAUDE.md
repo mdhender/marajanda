@@ -111,10 +111,15 @@ Dependency direction is one-way: `cmd/marajanda` → `internal/server` →
   migration. Creating the database generates the world and inserts every hex;
   `hexes` is the whole map, not a list of account origins, so the origin
   exclusion set comes from `accounts` (deferred FK from `accounts` to `hexes`
-  now asserts an origin is a real hex of the world).
+  now asserts an origin is a real hex of the world). `preprocessor.go` assembles
+  a `game.Plan` from the stored knowledge, location, allowance and orders;
+  every order write strips the trailing `Rest` before it and re-prices the whole
+  list after it, which is why `writeOrders` takes the entities it touches.
 - **`internal/game`** — pure deterministic rules over `github.com/maloquacious/hexg`:
   `GenerateWorld`, `AssignOrigin`, `WindowView`/`PlayerView`, faction-name
-  normalization. No database or HTTP. `GenerateWorld` builds the whole bounded
+  normalization, and `Price` — the one action-point cost function the order
+  pre-processor and the executor both call, with a `Sight` parameter for what
+  the costing may see. No database or HTTP. `GenerateWorld` builds the whole bounded
   world in one pass — sea level is a percentile of the entire field, a lake is
   water the flood fill from the rim never reaches, and a rain shadow needs an
   upwind neighbour — so terrain is generated once and stored, never recomputed

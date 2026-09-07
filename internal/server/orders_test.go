@@ -28,7 +28,7 @@ func ordersStore() *testStore {
 		found:   true,
 		turn:    3,
 		entities: []datastore.Entity{
-			{ID: 7, Code: "LEADER-1", Name: "LEADER-1", Kind: game.EntityKindLeader, Location: orderSeat},
+			{ID: 7, Code: "LEADER-1", Name: "LEADER-1", Kind: game.EntityKindLeader, Location: orderSeat, Allowance: game.LeaderAllowance},
 			{ID: 9, Code: "HAMLET-1", Name: "Mudville", Kind: game.EntityKindHamlet, Location: orderSeat},
 		},
 		orders: map[int64][]datastore.Order{},
@@ -59,7 +59,7 @@ var htmxHeader = map[string]string{"HX-Request": "true"}
 // order, and offers each entity only the kinds its own kind accepts.
 func TestOrdersPageListsTheWholeForce(t *testing.T) {
 	store := ordersStore()
-	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Direction: compass.NW}}
+	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NW}}}
 	response := ordersRequest(t, store, http.MethodGet, "/player/orders", "", nil)
 
 	if response.Code != http.StatusOK {
@@ -76,6 +76,8 @@ func TestOrdersPageListsTheWholeForce(t *testing.T) {
 		// A hamlet takes no orders today and is still on the page.
 		"No orders available yet.",
 		`<option value="move">Move</option>`,
+		// A leader accepts a rest as well as a move.
+		`<option value="rest">Rest</option>`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("orders page missing %q", want)
@@ -101,8 +103,8 @@ func TestOrdersPageListsTheWholeForce(t *testing.T) {
 func TestEachOrderIsOneDirectionSelect(t *testing.T) {
 	store := ordersStore()
 	store.orders[7] = []datastore.Order{
-		{Seq: 1, Kind: game.OrderKindMove, Direction: compass.NW},
-		{Seq: 2, Kind: game.OrderKindMove, Direction: compass.E},
+		{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NW}},
+		{Seq: 2, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.E}},
 		{Seq: 3, Kind: game.OrderKindMove},
 	}
 	body := ordersRequest(t, store, http.MethodGet, "/player/orders", "", nil).Body.String()
@@ -199,7 +201,7 @@ func TestSettingADirectionAnswersWithTheRegionAlone(t *testing.T) {
 		t.Fatalf("fragment says nothing about the save")
 	}
 	// The direction landed, and it was written for the turn the page is on.
-	if got := store.orders[7][0].Direction; got != compass.NE {
+	if got := store.orders[7][0].Detail.Direction; got != compass.NE {
 		t.Fatalf("direction = %v, want NE", got)
 	}
 	if store.wroteTurn != 3 {
@@ -216,14 +218,14 @@ func TestSettingADirectionAnswersWithTheRegionAlone(t *testing.T) {
 func TestSettingADirectionIgnoresTheOtherSelectsInTheForm(t *testing.T) {
 	store := ordersStore()
 	store.orders[7] = []datastore.Order{
-		{Seq: 1, Kind: game.OrderKindMove, Direction: compass.NW},
-		{Seq: 2, Kind: game.OrderKindMove, Direction: compass.E},
+		{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NW}},
+		{Seq: 2, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.E}},
 	}
 	ordersRequest(t, store, http.MethodPost, "/player/orders/7/2",
 		"direction.7.1=sw&direction.7.2=se", htmxHeader)
 
 	orders := store.orders[7]
-	if orders[0].Direction != compass.NW || orders[1].Direction != compass.SE {
+	if orders[0].Detail.Direction != compass.NW || orders[1].Detail.Direction != compass.SE {
 		t.Fatalf("orders = %#v, want NW SE - the first left alone", orders)
 	}
 }
@@ -233,13 +235,13 @@ func TestSettingADirectionIgnoresTheOtherSelectsInTheForm(t *testing.T) {
 func TestTheBlankOptionEmptiesARowWithoutRemovingIt(t *testing.T) {
 	store := ordersStore()
 	store.orders[7] = []datastore.Order{
-		{Seq: 1, Kind: game.OrderKindMove, Direction: compass.NW},
-		{Seq: 2, Kind: game.OrderKindMove, Direction: compass.E},
+		{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NW}},
+		{Seq: 2, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.E}},
 	}
 	body := ordersRequest(t, store, http.MethodPost, "/player/orders/7/1", "direction.7.1=", htmxHeader).Body.String()
 
 	orders := store.orders[7]
-	if len(orders) != 2 || orders[0].Direction.IsValid() || orders[1].Direction != compass.E {
+	if len(orders) != 2 || orders[0].Detail.Direction.IsValid() || orders[1].Detail.Direction != compass.E {
 		t.Fatalf("orders = %#v, want the first emptied and both still there", orders)
 	}
 	if got, want := strings.Count(body, `name="direction.7.`), 2; got != want {
@@ -252,8 +254,8 @@ func TestTheBlankOptionEmptiesARowWithoutRemovingIt(t *testing.T) {
 func TestInsertingAnOrderAfterAnother(t *testing.T) {
 	store := ordersStore()
 	store.orders[7] = []datastore.Order{
-		{Seq: 1, Kind: game.OrderKindMove, Direction: compass.NW},
-		{Seq: 2, Kind: game.OrderKindMove, Direction: compass.E},
+		{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NW}},
+		{Seq: 2, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.E}},
 	}
 	response := ordersRequest(t, store, http.MethodPost, "/player/orders/7/1/insert", "kind.7=move", htmxHeader)
 
@@ -266,12 +268,12 @@ func TestInsertingAnOrderAfterAnother(t *testing.T) {
 		t.Fatalf("inserted at %d, want 2", store.insertedAt)
 	}
 	orders := store.orders[7]
-	if len(orders) != 3 || orders[1].Direction.IsValid() || orders[2].Direction != compass.E {
+	if len(orders) != 3 || orders[1].Detail.Direction.IsValid() || orders[2].Detail.Direction != compass.E {
 		t.Fatalf("orders = %#v, want a blank move between NW and E", orders)
 	}
 	// The same button works without script, through the form.
 	unscripted := ordersStore()
-	unscripted.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Direction: compass.NW}}
+	unscripted.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NW}}}
 	ordersRequest(t, unscripted, http.MethodPost, "/player/orders", "insert=7.1&kind.7=move", nil)
 	if unscripted.insertedAt != 2 || len(unscripted.orders[7]) != 2 {
 		t.Fatalf("unscripted insert put %d orders in at %d, want 2 at 2",
@@ -310,8 +312,8 @@ func TestAddingAndRemovingAnOrder(t *testing.T) {
 func TestSavingTheWholePageRedirects(t *testing.T) {
 	store := ordersStore()
 	store.orders[7] = []datastore.Order{
-		{Seq: 1, Kind: game.OrderKindMove, Direction: compass.NW},
-		{Seq: 2, Kind: game.OrderKindMove, Direction: compass.NE},
+		{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NW}},
+		{Seq: 2, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NE}},
 	}
 	form := url.Values{
 		"direction.7.1": {"e"},
@@ -323,21 +325,21 @@ func TestSavingTheWholePageRedirects(t *testing.T) {
 		t.Fatalf("save response = %d %q, want %d /player/orders",
 			response.Code, response.Header().Get("Location"), http.StatusSeeOther)
 	}
-	if len(store.savedDirections) != 2 {
-		t.Fatalf("saved %#v, want both orders", store.savedDirections)
+	if len(store.savedUpdates) != 2 {
+		t.Fatalf("saved %#v, want both orders", store.savedUpdates)
 	}
 	// The rows arrive in a fixed order, by entity then by sequence, however a
 	// browser laid the form out.
-	first, second := store.savedDirections[0], store.savedDirections[1]
-	if first.EntityID != 7 || first.Seq != 1 || first.Direction != compass.E {
+	first, second := store.savedUpdates[0], store.savedUpdates[1]
+	if first.EntityID != 7 || first.Seq != 1 || first.Detail.Direction != compass.E {
 		t.Fatalf("first order saved as %#v, want E", first)
 	}
 	// A blank select is a direction cleared, not a row dropped. A save that
 	// dropped it would leave the order pointing where it used to.
-	if second.Seq != 2 || second.Direction.IsValid() {
+	if second.Seq != 2 || second.Detail.Direction.IsValid() {
 		t.Fatalf("second order saved as %#v, want no direction", second)
 	}
-	if got := store.orders[7]; len(got) != 2 || got[1].Direction.IsValid() {
+	if got := store.orders[7]; len(got) != 2 || got[1].Detail.Direction.IsValid() {
 		t.Fatalf("orders = %#v, want the second still there and empty", got)
 	}
 }
@@ -408,7 +410,7 @@ func TestAnUnknownDirectionIsRefused(t *testing.T) {
 	if !strings.Contains(response.Body.String(), "no hex lies in that direction") {
 		t.Fatalf("the page does not say why north was refused")
 	}
-	if got := store.orders[7][0].Direction; got.IsValid() {
+	if got := store.orders[7][0].Detail.Direction; got.IsValid() {
 		t.Fatalf("direction = %v, want none", got)
 	}
 }
@@ -493,5 +495,177 @@ func TestPlayerDashboardLinksToTheOrdersPage(t *testing.T) {
 	response := ordersRequest(t, ordersStore(), http.MethodGet, "/player/dashboard", "", nil)
 	if !strings.Contains(response.Body.String(), `href="/player/orders"`) {
 		t.Fatal("the player dashboard does not link to the orders page")
+	}
+}
+
+// An order is one action, so a row is one price. The page draws the estimate
+// against every row and the budget below them, and says that it is an estimate.
+func TestEveryOrderRowCarriesItsEstimatedCost(t *testing.T) {
+	store := ordersStore()
+	store.orders[7] = []datastore.Order{
+		{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NW}},
+		{Seq: 2, Kind: game.OrderKindMove},
+	}
+	body := ordersRequest(t, store, http.MethodGet, "/player/orders", "", nil).Body.String()
+
+	// The fake keeps no knowledge, so every step is onto ground the faction
+	// does not know and costs the exploration price.
+	if want := fmt.Sprintf(`<span class="stanza-cost">%d AP</span>`, game.UnknownStepCost); !strings.Contains(body, want) {
+		t.Fatalf("orders page missing %q", want)
+	}
+	// A move with no direction yet has nowhere to go, so it has no price
+	// rather than a price of nothing.
+	if want := "<span class=\"stanza-cost\">\u2014</span>"; !strings.Contains(body, want) {
+		t.Fatalf("orders page missing the unpriced row %q", want)
+	}
+	// The budget line is the trailing Rest and what the orders above it cost.
+	for _, want := range []string{
+		fmt.Sprintf(`<span class="budget-rest">Rest x%d</span>`, game.LeaderAllowance-game.UnknownStepCost),
+		fmt.Sprintf("%d of %d action points, estimated.", game.UnknownStepCost, game.LeaderAllowance),
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("orders page missing %q", want)
+		}
+	}
+	// The hamlet takes no orders, so it is owed no budget: one line on the
+	// page, and it is the leader's.
+	if got := strings.Count(body, `class="order-budget"`); got != 1 {
+		t.Fatalf("budget lines = %d, want the leader's alone", got)
+	}
+}
+
+// Overspending is allowed during entry. The page owes the player the running
+// total, the row where the cost crosses the allowance, and a mark on every row
+// from there on.
+func TestAnOverspendingListSaysWhatWillExhaust(t *testing.T) {
+	store := ordersStore()
+	store.orders[7] = []datastore.Order{
+		{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NW}},
+		{Seq: 2, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.E}},
+		{Seq: 3, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.SE}},
+	}
+	body := ordersRequest(t, store, http.MethodGet, "/player/orders", "", nil).Body.String()
+
+	// Three explorations at 3 AP against an allowance of 6: the third order is
+	// where the total crosses, and the residue is gone rather than negative.
+	if want := "Order 3 and everything after it will exhaust."; !strings.Contains(body, want) {
+		t.Fatalf("orders page missing %q", want)
+	}
+	if want := fmt.Sprintf("Over by %d.", 3*game.UnknownStepCost-game.LeaderAllowance); !strings.Contains(body, want) {
+		t.Fatalf("orders page missing %q", want)
+	}
+	if want := `<span class="budget-rest">Rest x0</span>`; !strings.Contains(body, want) {
+		t.Fatalf("orders page missing %q: the line is drawn whatever the count is", want)
+	}
+	if got := strings.Count(body, `class="stanza-exhausts"`); got != 1 {
+		t.Fatalf("exhaust marks = %d, want the third row's alone", got)
+	}
+}
+
+// A rest says how long it lasts rather than which way it goes, so its row
+// carries a count and not a direction select. A count has no blank: a rest
+// lasts at least one point.
+func TestARestRowCarriesACount(t *testing.T) {
+	store := ordersStore()
+	store.orders[7] = []datastore.Order{
+		{Seq: 1, Kind: game.OrderKindRest, Detail: game.OrderDetail{Count: 2}},
+		{Seq: 2, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.E}},
+	}
+	body := ordersRequest(t, store, http.MethodGet, "/player/orders", "", nil).Body.String()
+
+	want := fmt.Sprintf(`<input type="number" name="count.7.1" value="2" min="1" max="%d" step="1" hx-post="/player/orders/7/1" hx-trigger="change">`,
+		datastore.MaxOrdersPerEntity)
+	if !strings.Contains(body, want) {
+		t.Fatalf("orders page missing %q", want)
+	}
+	// A rest costs its count, and the move after it still costs a step.
+	if want := `<span class="stanza-cost">2 AP</span>`; !strings.Contains(body, want) {
+		t.Fatalf("orders page missing %q", want)
+	}
+	// The rest is not last, so it is the player's and is drawn as a row. The
+	// budget line below is still the residue.
+	if got := strings.Count(body, `name="count.7.`); got != 1 {
+		t.Fatalf("count controls = %d, want the rest's alone", got)
+	}
+}
+
+// The trailing Rest is the residue, not a row a player wrote, so it is drawn on
+// the budget line without the controls a stanza carries.
+func TestTheTrailingRestIsNotAStanza(t *testing.T) {
+	store := ordersStore()
+	store.orders[7] = []datastore.Order{
+		{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.E}},
+		{Seq: 2, Kind: game.OrderKindRest, Detail: game.OrderDetail{Count: 3}},
+	}
+	body := ordersRequest(t, store, http.MethodGet, "/player/orders", "", nil).Body.String()
+
+	if strings.Contains(body, `name="count.7.2"`) {
+		t.Fatal("the trailing rest was drawn as an editable row")
+	}
+	if strings.Contains(body, `value="7.2"`) {
+		t.Fatal("the trailing rest carries insert and remove controls")
+	}
+	if want := fmt.Sprintf(`<span class="budget-rest">Rest x%d</span>`, game.LeaderAllowance-game.UnknownStepCost); !strings.Contains(body, want) {
+		t.Fatalf("orders page missing the budget line %q", want)
+	}
+}
+
+// A rest has no state a player fills in afterwards, so an added one starts at
+// one point rather than at nothing.
+func TestAddingARestStartsItAtOnePoint(t *testing.T) {
+	store := ordersStore()
+	response := ordersRequest(t, store, http.MethodPost, "/player/orders", "kind.7=rest&add=7", htmxHeader)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	orders := store.orders[7]
+	if len(orders) != 1 || orders[0].Kind != game.OrderKindRest || orders[0].Detail.Count != 1 {
+		t.Fatalf("orders = %#v, want one rest of one point", orders)
+	}
+}
+
+// A count is set the way a direction is: the URL names the order and the form
+// carries the value under the name that addresses it.
+func TestSettingARestCount(t *testing.T) {
+	store := ordersStore()
+	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindRest, Detail: game.OrderDetail{Count: 1}}}
+	response := ordersRequest(t, store, http.MethodPost, "/player/orders/7/1", "count.7.1=4", htmxHeader)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if got := store.orders[7][0].Detail.Count; got != 4 {
+		t.Fatalf("rest count = %d, want 4", got)
+	}
+
+	// A count outside what storage admits is refused, and the row says so
+	// rather than the page silently keeping the old value.
+	refused := ordersRequest(t, store, http.MethodPost, "/player/orders/7/1", "count.7.1=0", htmxHeader)
+	if refused.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: a scripted write is always swapped", refused.Code, http.StatusOK)
+	}
+	if !strings.Contains(refused.Body.String(), datastore.ErrOrderCountRefused.Error()) {
+		t.Fatalf("the refusal is not on the page: %s", refused.Body.String())
+	}
+	if got := store.orders[7][0].Detail.Count; got != 4 {
+		t.Fatalf("rest count = %d after a refused write, want 4", got)
+	}
+}
+
+// The estimate is never asked for from the request. A player who hand-builds
+// one cannot ask for the accurate answer, because there is nothing in the
+// request that says which answer to give.
+func TestTheAccuracyLevelIsNotAFormField(t *testing.T) {
+	store := ordersStore()
+	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NW}}}
+	fogged := ordersRequest(t, store, http.MethodGet, "/player/orders", "", nil).Body.String()
+	asked := ordersRequest(t, store, http.MethodGet, "/player/orders?sight=truth&accuracy=exact", "", nil).Body.String()
+
+	if want := fmt.Sprintf(`<span class="stanza-cost">%d AP</span>`, game.UnknownStepCost); !strings.Contains(asked, want) {
+		t.Fatalf("orders page missing %q", want)
+	}
+	if fogged != asked {
+		t.Fatal("asking for a different accuracy in the query string changed the page")
 	}
 }

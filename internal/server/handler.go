@@ -15,7 +15,6 @@ import (
 
 	"github.com/maloquacious/hexg"
 	"github.com/mdhender/marajanda"
-	"github.com/mdhender/marajanda/internal/compass"
 	"github.com/mdhender/marajanda/internal/datastore"
 	"github.com/mdhender/marajanda/internal/game"
 )
@@ -32,10 +31,11 @@ type applicationStore interface {
 	Faction(context.Context, string) (datastore.Faction, bool, error)
 	EntitiesAsOf(context.Context, string, int) ([]datastore.Entity, error)
 	OrdersAsOf(context.Context, string, int) (map[int64][]datastore.Order, error)
-	AddOrder(context.Context, string, int, int64, game.OrderKind, compass.Point) (int, error)
-	InsertOrder(context.Context, string, int, int64, int, game.OrderKind, compass.Point) error
-	SetOrderDirection(context.Context, string, int, int64, int, compass.Point) error
-	SetOrderDirections(context.Context, string, int, []datastore.OrderDirection) error
+	EstimateOrders(context.Context, string, int) (map[int64]game.Estimate, error)
+	AddOrder(context.Context, string, int, int64, game.OrderKind, game.OrderDetail) (int, error)
+	InsertOrder(context.Context, string, int, int64, int, game.OrderKind, game.OrderDetail) error
+	SetOrderDetail(context.Context, string, int, int64, int, game.OrderDetail) error
+	SetOrderDetails(context.Context, string, int, []datastore.OrderUpdate) error
 	RemoveOrder(context.Context, string, int, int64, int) error
 	AdvanceTurn(context.Context) (int, error)
 	SaveFaction(context.Context, string, string, game.Race) (datastore.Account, error)
@@ -109,7 +109,7 @@ func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCrea
 	mux.HandleFunc("POST /player/faction", app.configureFaction)
 	mux.HandleFunc("GET /player/orders", app.orders)
 	mux.HandleFunc("POST /player/orders", app.saveOrders)
-	mux.HandleFunc("POST /player/orders/{entity}/{seq}", app.setOrderDirection)
+	mux.HandleFunc("POST /player/orders/{entity}/{seq}", app.setOrderDetail)
 	mux.HandleFunc("POST /player/orders/{entity}/{seq}/insert", app.insertOrder)
 	mux.HandleFunc("DELETE /player/orders/{entity}/{seq}", app.removeOrder)
 	registerAgentRoutes(mux, app, environment)
@@ -574,7 +574,17 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 	.stanza { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 	.stanza .stanza-kind { min-width: 5rem; color: var(--gold); font: 700 .78rem/1.2 system-ui, sans-serif; letter-spacing: .1em; text-transform: uppercase; }
 	.stanza select { width: auto; min-width: 8.5rem; padding: .45rem .6rem; font-size: .85rem; }
+	.stanza input[type="number"] { width: 5rem; padding: .45rem .6rem; font-size: .85rem; }
+	/* A move's select and a rest's count sit in a slot of one width, so the
+	   price column below reads as a column. */
+	.stanza .direction, .stanza .count { min-width: 8.5rem; }
+	.stanza .stanza-cost { min-width: 3.5rem; color: var(--muted); font: .82rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
+	.stanza .stanza-exhausts { color: var(--gold); font: .78rem/1.2 system-ui, sans-serif; text-transform: uppercase; letter-spacing: .06em; }
 	.stanza .stanza-error { flex-basis: 100%; margin: 0; }
+	.order-budget { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem .75rem; margin: 1rem 0 0; padding-top: .75rem; border-top: 1px solid var(--rule, rgba(255,255,255,.12)); }
+	.order-budget .budget-rest { min-width: 5rem; color: var(--gold); font: 700 .78rem/1.2 system-ui, sans-serif; letter-spacing: .1em; text-transform: uppercase; }
+	.order-budget .budget-spent { color: var(--muted); font: .82rem/1.4 system-ui, sans-serif; }
+	.order-budget .budget-overspend { flex-basis: 100%; margin: 0; }
 	.add-order { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; margin: 1.25rem 0 0; }
 	.add-order label { display: flex; align-items: center; gap: .5rem; }
 	.add-order select { width: auto; min-width: 8rem; padding: .45rem .6rem; font-size: .85rem; }
@@ -899,17 +909,39 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 			       one so a list can be corrected in the middle. */}}
 			  {{range .Stanzas}}<li class="stanza">
 				<span class="stanza-kind">{{.Label}}</span>
-				<label class="direction"><span class="visually-hidden">{{.SelectLabel}}</span>
+				{{/* A move says which way it goes and a rest says how long it
+				     lasts, so a row carries one control and which one is its
+				     kind. A count has no blank option: a rest lasts at least
+				     one point, so there is no "not chosen yet" to draw. */}}
+				{{if .IsRest}}<label class="count"><span class="visually-hidden">{{.SelectLabel}}</span>
+				<input type="number" name="{{.Name}}" value="{{.Current}}" min="1" max="{{.CountMax}}" step="1" hx-post="{{.Post}}" hx-trigger="change"></label>
+				{{else}}<label class="direction"><span class="visually-hidden">{{.SelectLabel}}</span>
 				<select name="{{.Name}}" hx-post="{{.Post}}" hx-trigger="change">
 				  <option value=""{{if not .Current}} selected{{end}}>—</option>
 				  {{$chosen := .Current}}{{range $directions}}<option value="{{.Value}}"{{if eq .Value $chosen}} selected{{end}}>{{.Label}}</option>{{end}}
-				</select></label>
+				</select></label>{{end}}
+				<span class="stanza-cost">{{.Cost}}</span>
+				{{if .Exhausts}}<span class="stanza-exhausts">Will exhaust</span>{{end}}
 				<button class="sign-link" type="submit" name="insert" value="{{.InsertValue}}" hx-post="{{.InsertURL}}">Insert after</button>
 				<button class="sign-link" type="submit" name="remove" value="{{.RemoveValue}}" hx-delete="{{.RemoveURL}}">Remove</button>
 				{{if .Error}}<p class="message stanza-error" role="alert">{{.Error}}</p>{{end}}
 			  </li>
 			  {{end}}
 			</ol>
+			{{end}}
+			{{/* The trailing Rest is what the orders above leave unspent. The
+			     line is drawn whatever the count is, so the page does not
+			     change shape as a player edits, and the row behind it is
+			     stored only when the count is at least one. The numbers are
+			     estimates: every order is priced as though it lands, and
+			     unknown ground is priced at a flat exploration cost whatever
+			     is actually there. */}}
+			{{with .Budget}}
+			<p class="order-budget">
+			  <span class="budget-rest">Rest x{{.Rest}}</span>
+			  <span class="budget-spent">{{.Spent}} of {{.Allowance}} action points, estimated.</span>
+			  {{if .Overspend}}<span class="message budget-overspend" role="status">Over by {{.Overspend}}. Order {{.ExhaustsAt}} and everything after it will exhaust.</span>{{end}}
+			</p>
 			{{end}}
 			{{if .Kinds}}
 			<p class="add-order">
