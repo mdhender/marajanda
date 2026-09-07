@@ -751,12 +751,13 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 			<div><dt>Seed 2</dt><dd>{{.Game.Seed2}}</dd></div>
 		  </dl>
 		  <p class="map-actions"><a class="sign-link" href="/admin/map">View the map</a></p>
-		  {{/* Advancing the turn is all this does. It moves the clock, which is
-		       what freezes the orders of the turn left behind; processing them
-		       is separate work. */}}
+		  {{/* Advancing carries out the orders built for the turn and then moves
+		       the clock, both in one transaction. What each faction is told
+		       about what happened is not built yet; see
+		       docs/reference/turn-processing.md. */}}
 		  <section class="turn" aria-label="The turn">
 			<h2>The turn</h2>
-			<p>Advancing the turn closes the orders factions have built for it. Nothing is processed yet.</p>
+			<p>Advancing the turn carries out the orders factions have built for it, then closes it.</p>
 			<form class="turn-control" action="/admin/turn" method="post">
 			  <strong>Turn {{.Turn}}</strong>
 			  <button class="primary" type="submit">Advance the turn</button>

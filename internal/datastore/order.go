@@ -220,12 +220,19 @@ func (s *Store) RemoveOrder(ctx context.Context, email string, turn int, entityI
 	})
 }
 
-// AdvanceTurn moves the game's clock on by one and returns the turn it now
-// sits on.
+// AdvanceTurn processes the orders of the turn the game is on, then moves the
+// clock on by one and returns the turn it now sits on.
 //
-// Advancing is what freezes the orders of the turn left behind: every write
-// checks the current turn, so the rows of a turn the game has moved past are
-// read-only from here on. Processing those orders is a separate piece of work.
+// The two halves are one transaction, so a turn is processed whole or not at
+// all. Processing walks every active faction's stored orders and writes what
+// they did - locations, knowledge - effective from turn+1, which is why a
+// turn-N report still describes the world as it was while turn N happened. See
+// docs/reference/turn-processing.md.
+//
+// Advancing is also what freezes the orders of the turn left behind: every
+// write checks the current turn, so the rows of a turn the game has moved past
+// are read-only from here on. Nothing rewrites them - processing writes no
+// orders, and the stored orders with the seeds are the replay.
 func (s *Store) AdvanceTurn(ctx context.Context) (_ int, err error) {
 	conn, release, err := s.take(ctx)
 	if err != nil {
@@ -246,6 +253,9 @@ func (s *Store) AdvanceTurn(ctx context.Context) (_ int, err error) {
 	next := turn + 1
 	if !game.ValidTurn(next) {
 		return 0, fmt.Errorf("advance turn: %d is not a turn", next)
+	}
+	if err := processTurn(conn, turn); err != nil {
+		return 0, fmt.Errorf("process turn %d: %w", turn, err)
 	}
 	if err := sqlitex.ExecuteTransient(conn, `UPDATE game SET current_turn = ?1 WHERE id = 1;`, &sqlitex.ExecOptions{
 		Args: []any{next},

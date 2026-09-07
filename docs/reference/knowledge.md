@@ -4,7 +4,8 @@ What a faction knows about the world, how it learns, and how a rule reads it as
 of a turn.
 
 Implemented by `internal/game` (`knowledge.go`) and `internal/datastore`
-(`knowledge.go`). See
+(`knowledge.go`). Turn processing is what writes it; see
+[Turn processing reference](turn-processing.md) and
 [#38](https://github.com/mdhender/marajanda/issues/38).
 
 ## Vocabulary

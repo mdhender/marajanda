@@ -6,8 +6,9 @@ it runs out.
 The costs, the allowance and the order pre-processor are implemented by
 `internal/game` (`actionpoints.go`), `internal/datastore` (`preprocessor.go`)
 and `internal/server` (`orders.go`). Turn processing, which is what charges
-them, is not: see [#28](https://github.com/mdhender/marajanda/issues/28) and
-[#33](https://github.com/mdhender/marajanda/issues/33).
+them, is `executor.go` in the first two of those; see
+[Turn processing reference](turn-processing.md). What a player is told about
+what happened is [#33](https://github.com/mdhender/marajanda/issues/33).
 
 ## Vocabulary
 
@@ -113,7 +114,9 @@ lands.
 
 An entity is walked until it cannot afford its next step. The steps it took
 stand, it stops where it stopped, and each remaining step is recorded as failed
-for `exhaust`.
+for `exhaust`. An order after the crossing exhausts whether or not it would have
+cost less than the one that crossed. See
+[Turn processing reference](turn-processing.md#outcomes).
 
 Nothing is rejected at order entry for being too long. `MaxOrdersPerEntity`
 bounds how many orders an entity may carry in a turn; it is a storage bound and
@@ -149,6 +152,9 @@ Two things price orders, and the distinction is the point.
 | --- | --- | --- | --- |
 | Pre-processor | Order entry. Prices the set and keeps the trailing Rest. | Yes, on the player's behalf. | **No** |
 | Executor | Turn processing. Walks the orders and charges them. | No | Yes. It decides what happened. |
+
+`game.Price` is the walk and `game.Execute` reads it as a result: what an entity
+is charged is what the estimate committed, so the two cannot drift.
 
 The invariant is the narrow one: **the executor writes no orders.** Everything
 the pre-processor does is the player acting through the page.
@@ -236,7 +242,9 @@ projection.
 
 Turn processing appends nothing. Action points still unspent when an entity's
 orders run out lapse, and the turn result records how much lapsed. That is a
-reporting line, not a rule.
+reporting line, not a rule. A trailing Rest sized to the whole allowance is a
+stored order the player agreed to, so processing charges it and nothing
+lapses.
 
 ## Overspend
 

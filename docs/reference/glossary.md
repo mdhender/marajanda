@@ -64,7 +64,7 @@ See [Action points reference](action-points.md#the-pre-processors-numbers-are-an
 What walks an [entity](#entity)'s [orders](#order) when the [turn](#turn) is processed and charges them.
 It writes no orders and it decides what happened.
 Its twin is the [pre-processor](#pre-processor).
-See [Action points reference](action-points.md#the-two-engines).
+See [Action points reference](action-points.md#the-two-engines) and [Turn processing reference](turn-processing.md).
 
 ## Exhaust
 
@@ -183,6 +183,13 @@ The game's clock.
 An integer that starts at 1 and only ever increases, held once per database.
 An [order](#order) issued during a turn takes effect on the turn after it is processed.
 The admin advances the turn, which closes the orders built for it.
+
+## Turn processing
+
+What the admin's advance does before it moves the clock: it carries out the [orders](#order) of the turn being closed and writes what they produced.
+Every [fact](#fact) it writes is effective from the turn after the one it processed, and the orders themselves are left exactly as they were written.
+A deactivated [faction](#faction) is not processed.
+See [Turn processing reference](turn-processing.md).
 
 ## Unit
 

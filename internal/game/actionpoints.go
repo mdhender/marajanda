@@ -188,6 +188,11 @@ type OrderCost struct {
 	// They are equal for an order that moves nothing and for a step that
 	// failed: a step is paid for whether or not it lands.
 	From, To hexg.Hex
+	// Target is where a step was aimed, which is not where it left the entity.
+	// A step that failed has to say what it walked into, or nothing downstream
+	// can record the hex the attempt revealed. It is From for an order that
+	// aims nowhere: a rest, and a move with no direction.
+	Target hexg.Hex
 }
 
 // Price prices an entity's orders.
@@ -207,7 +212,7 @@ func Price(plan Plan) Estimate {
 	at := plan.World.Normalize(plan.Start)
 	estimate := Estimate{Allowance: plan.Allowance, End: at}
 	for _, order := range plan.Orders {
-		cost := OrderCost{Seq: order.Seq, Kind: order.Kind, Priced: true, From: at, To: at}
+		cost := OrderCost{Seq: order.Seq, Kind: order.Kind, Priced: true, From: at, Target: at, To: at}
 		switch order.Kind {
 		case OrderKindMove:
 			if !order.Detail.Direction.IsValid() {
@@ -217,6 +222,7 @@ func Price(plan Plan) Estimate {
 				break
 			}
 			destination := compass.Neighbor(plan.World, at, order.Detail.Direction)
+			cost.Target = destination
 			cost.Cost = StepCost(plan.Knowledge, destination)
 			if plan.Sight.blocks(destination) {
 				// The step is paid for as what it was when it was ordered and

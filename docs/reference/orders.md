@@ -120,9 +120,10 @@ update and delete where the turn is not `game.current_turn`, whatever turn a
 caller asks for. Advancing the turn is what freezes the turn before it, and
 nothing deletes an order from a turn the game has moved past.
 
-A replay is therefore: regenerate the world from the stored seeds and
-dimensions, apply turn 1's orders in `(entity, seq)` order, then turn 2,
-and so on. Entity ids are identity, not randomness: a rule needing per-entity
+Processing never touches them either: it reads the orders of the turn it
+closes and writes only facts. A replay is therefore: regenerate the world from
+the stored seeds and dimensions, apply turn 1's orders in `(entity, seq)` order,
+then turn 2, and so on. Entity ids are identity, not randomness: a rule needing per-entity
 randomness keys on values recorded in history, never on the id. See
 `internal/prng/doc.go` and [Entities reference](entities.md).
 
@@ -140,7 +141,7 @@ accounts.
 | `SetOrderDetail(ctx, email, turn, entity, seq, detail)` | Sets what one order carries. An invalid direction clears a move's; a rest's count is bounded. |
 | `SetOrderDetails(ctx, email, turn, updates)` | Sets the detail of every named order, in one transaction. |
 | `RemoveOrder(ctx, email, turn, entity, seq)` | Removes an order and renumbers the rest. |
-| `AdvanceTurn(ctx)` | Moves the clock on by one and returns the new turn. |
+| `AdvanceTurn(ctx)` | Processes the current turn's orders, moves the clock on by one, and returns the new turn. |
 
 A `game.OrderDetail` is what an order carries beyond its kind: a move's
 direction and a rest's count. The order's stored kind decides which half is
@@ -178,7 +179,7 @@ the last row asks for.
 | `POST /player/orders/{entity}/{seq}` | `player` | Sets which way one order goes |
 | `POST /player/orders/{entity}/{seq}/insert` | `player` | Puts a new order after that one |
 | `DELETE /player/orders/{entity}/{seq}` | `player` | Removes one order |
-| `POST /admin/turn` | `admin` | Advances the turn and returns to the admin dashboard |
+| `POST /admin/turn` | `admin` | Processes the turn, advances it, and returns to the admin dashboard |
 
 A request without a valid session is directed to `/sign-in`. A request whose
 account holds the other role is directed to that account's dashboard. A player
@@ -197,8 +198,9 @@ order legality already follows: a request cannot do what the form declines to
 show. An account that should be shut out entirely is deactivated on the
 account; see [Accounts reference](../ACCOUNTS.md#deactivation).
 
-`POST /admin/turn` increments `game.current_turn` and nothing else. Processing
-the orders of the turn it closes is separate work.
+`POST /admin/turn` carries out the orders of the turn it closes and then
+increments `game.current_turn`, both in one transaction. See
+[Turn processing reference](turn-processing.md).
 
 ## Form fields
 

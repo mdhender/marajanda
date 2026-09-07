@@ -346,11 +346,17 @@ func (app *application) removeOrder(w http.ResponseWriter, r *http.Request) {
 	app.renderOrders(w, r, account, faction, orderFeedback{saved: true})
 }
 
-// advanceTurn moves the game's clock on by one.
+// advanceTurn carries out the orders of the turn the game is on and moves the
+// clock on by one.
 //
-// That is all it does. The orders of the turn it leaves behind are frozen by
-// the move itself - every write checks the current turn - and processing them
-// is separate work.
+// The store does both in one transaction, so a turn is processed whole or not
+// at all and the clock never moves past orders that were not carried out. The
+// orders themselves are left as the player wrote them, and are frozen by the
+// move: every write checks the current turn.
+//
+// The page reports nothing about what the turn did. What a player is told
+// arrives with the record of what happened; see
+// docs/reference/turn-processing.md.
 func (app *application) advanceTurn(w http.ResponseWriter, r *http.Request) {
 	if _, ok := app.requireRole(w, r, "admin"); !ok {
 		return

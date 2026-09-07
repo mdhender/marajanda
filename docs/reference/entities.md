@@ -152,7 +152,7 @@ WHERE entity_id = ?1
 | Method | Returns |
 | --- | --- |
 | `CurrentTurn(ctx)` | The turn the game is on. |
-| `AdvanceTurn(ctx)` | Moves the clock on by one and returns the new turn. |
+| `AdvanceTurn(ctx)` | Processes the current turn's orders, moves the clock on by one, and returns the new turn. |
 | `EntitiesAsOf(ctx, email, turn)` | A faction's entities as they stood on `turn`, in creation order. |
 
 `EntitiesAsOf` rejects a number that is not a turn the game can be on. Its joins

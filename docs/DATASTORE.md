@@ -21,7 +21,7 @@ Marajanda uses ZombieZen SQLite for persistent and in-memory data.
 
 The database contains exactly one game record. It stores two required signed 64-bit integer seeds used to initialize the game's deterministic PRNG, the world's required `width` and `height`, and the current turn. The seeds have no default values. The dimensions are half-extents: the world is `2*width+1` columns by `2*height+1` rows. `width` defaults to `255` when the database is created and must be between `20` and `511`; `height` defaults to `127` and must be between `20` and `255`. None of the four change when the database is reopened: the stored world was generated from all four and would no longer match if any of them did.
 
-`current_turn` is the game's clock and the one column of the record that moves. It defaults to `1` when the database is created and is constrained to `1 <= current_turn < 99999999`: a turn starts at 1, only ever increases, and never reaches the end-of-time turn that an unended period runs to. `AdvanceTurn` is the only thing that moves it, and it moves it by one.
+`current_turn` is the game's clock and the one column of the record that moves. It defaults to `1` when the database is created and is constrained to `1 <= current_turn < 99999999`: a turn starts at 1, only ever increases, and never reaches the end-of-time turn that an unended period runs to. `AdvanceTurn` is the only thing that moves it, and it moves it by one. It processes the orders of the turn it closes in the same transaction; see [Turn processing reference](reference/turn-processing.md).
 
 ## Accounts
 
