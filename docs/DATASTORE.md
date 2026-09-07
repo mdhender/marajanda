@@ -111,7 +111,7 @@ Everything else about an entity is a fact dated in turns.
 
 ### Effective-dated facts
 
-`entity_facts`, `entity_locations`, and `units` are fact tables. Each carries `effective_from` and `effective_through` as turn numbers over the half-open period `[from, through)`, and each row is true on a turn when
+`entity_facts`, `entity_locations`, `units` and `faction_knowledge` are fact tables. Each carries `effective_from` and `effective_through` as turn numbers over the half-open period `[from, through)`, and each row is true on a turn when
 
 ```sql
 effective_from <= :turn AND :turn < effective_through
@@ -119,7 +119,7 @@ effective_from <= :turn AND :turn < effective_through
 
 Both columns are `NOT NULL`. A period that has not ended runs to the end-of-time turn, `99999999`, never to `NULL`. The predicate above is therefore the only one any read needs: no `IS NULL` branch, no `COALESCE`, and no index that behaves differently for an open period than for a closed one. A row missing its end is a constraint violation rather than an open period nobody meant to write, and the check that a period is non-empty — `effective_through > effective_from` — is unconditional.
 
-For one entity, the periods of one fact table are contiguous, never overlap, and exactly one of them runs to the end of time. A partial unique index on each fact table holds the last of those: `entity_facts_open` and `entity_locations_open` on `entity_id`, and `units_open` on `entity_id, kind`.
+For one subject, the periods of one fact table are contiguous, never overlap, and exactly one of them runs to the end of time. The subject is the fact's natural key without the period: an entity for most of them, a faction and a hex for `faction_knowledge`. A partial unique index on each fact table holds the last of those: `entity_facts_open` and `entity_locations_open` on `entity_id`, `units_open` on `entity_id, kind`, and `faction_knowledge_open` on `faction_email, q, r`.
 
 The end-of-time turn appears in the schema and in `internal/game` as `EndOfTimeTurn`. The schema is built from that constant, so the two cannot drift.
 
@@ -135,9 +135,26 @@ Turn processing closes an open row at `turn + 1` and opens its replacement runni
 
 `kind` in `entity_facts` is constrained to `leader` and `hamlet`. `q, r` in `entity_locations` references `hexes`, so an entity cannot stand on a coordinate the world does not contain. `quantity` in `units` must be positive. `kind` in `units` carries no constraint: the list of unit kinds is a game rule that arrives with the first rule producing one, and nothing seeds inventory yet.
 
-Every fact table cascades from `entities`, which cascades from `factions`, which cascades from `accounts`.
+Every entity fact table cascades from `entities`, which cascades from `factions`, which cascades from `accounts`. `faction_knowledge` cascades from `factions` directly, because it is what the faction knows rather than what one of its entities does.
 
 See [Entities reference](reference/entities.md) for the vocabulary, the code rules, and how state is read as of a turn.
+
+## Knowledge
+
+`faction_knowledge` records what a faction knows about one hex. It is a fact table in the shape above, keyed on the faction and the hex.
+
+| Column | Notes |
+| --- | --- |
+| `faction_email` | The knowing faction. `ON DELETE CASCADE`. |
+| `q`, `r` | The hex. References `hexes`, so a coordinate the world does not contain cannot be written. |
+| `state` | `observed` or `explored`. |
+| `effective_from`, `effective_through` | The period, as on every fact table. |
+
+There is no `unknown` state. A hex the faction knows nothing about has no row, so nothing is written when a hex stops being unknown and nothing has to be cleaned up.
+
+The foreign key to `hexes` is also the clip. A write names the six hexes around a coordinate and inserts each by selecting it from `hexes`, so a neighbour beyond a pole matches nothing and is dropped rather than failing the write. Columns wrap before the write, so a neighbour at the eastern edge is stored as the canonical hex at the western one.
+
+The rules this table holds — the two states, what writes them, and why the record is the state at the end of a turn — are in [Knowledge reference](reference/knowledge.md).
 
 ## Orders
 

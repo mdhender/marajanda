@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1070,20 +1071,23 @@ func TestVisibleHexes(t *testing.T) {
 	}
 	defer store.Close()
 
-	// The main admin sits on the game origin, so its visible set is the one
-	// place every account agrees about.
+	// The main admin holds an origin and controls no faction, so it knows
+	// nothing. Sight comes from the knowledge record now, and that record
+	// belongs to a faction. It is a floor rather than a state the UI reaches:
+	// the player map is a player's, and an admin who asks for one is sent to
+	// the admin dashboard.
 	admin := readAccount(t, store, "admin@marajanda.com")
 	visible, err := store.VisibleHexes(t.Context(), "admin@marajanda.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(visible) != 1 || !visible[0].Equals(admin.origin) {
-		t.Fatalf("admin visible hexes = %v, want [%v]", visible, admin.origin)
+	if len(visible) != 0 {
+		t.Fatalf("admin visible hexes = %v, want none", visible)
 	}
 
-	// An unseated player has seen nothing at all. It is a floor rather than a
-	// state the UI reaches: a player with no faction is sent to the faction
-	// form, and the faction form is what seats them.
+	// An unseated player has seen nothing at all, for the same reason and by
+	// the same floor: a player with no faction is sent to the faction form,
+	// and the faction form is what seats them.
 	visible, err = store.VisibleHexes(t.Context(), " PLAYER@MARAJANDA.COM ")
 	if err != nil {
 		t.Fatal(err)
@@ -1092,6 +1096,8 @@ func TestVisibleHexes(t *testing.T) {
 		t.Fatalf("unseated player visible hexes = %v, want none", visible)
 	}
 
+	// Founding is what puts a faction on the map. It opens knowing its origin
+	// and the ring around it.
 	seated, err := store.SaveFaction(t.Context(), "player@marajanda.com", "The Wayfarers", game.RaceHuman)
 	if err != nil {
 		t.Fatal(err)
@@ -1100,10 +1106,13 @@ func TestVisibleHexes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(visible) != 1 || !visible[0].Equals(seated.Origin) {
-		t.Fatalf("player visible hexes = %v, want [%v]", visible, seated.Origin)
+	if len(visible) != 7 {
+		t.Fatalf("player visible hexes = %d, want the origin and its six neighbours", len(visible))
 	}
-	if visible[0].Equals(admin.origin) {
+	if !slices.ContainsFunc(visible, func(hex hexg.Hex) bool { return hex.Equals(seated.Origin) }) {
+		t.Fatalf("player visible hexes = %v, want the set to hold the origin %v", visible, seated.Origin)
+	}
+	if slices.ContainsFunc(visible, func(hex hexg.Hex) bool { return hex.Equals(admin.origin) }) {
 		t.Fatal("player sees the admin origin")
 	}
 

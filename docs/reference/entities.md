@@ -155,9 +155,13 @@ on that turn and is omitted.
 The player dashboard reads the current turn and then reads entities as of that
 turn, and reports both.
 
-## What this is not
+## What a faction knows
 
-Visibility does not come from entity locations yet. `VisibleHexes` still returns
-an account's origin hex alone. See
+Where an entity has been is what a faction knows. Founding records the origin
+hex explored and the six around it observed, and an entity entering a hex
+records the same shape from `turn + 1`.
+
+That record belongs to the faction rather than to the entity that made it, so it
+is not a fact table of this document. See [Knowledge reference](knowledge.md),
 [Player origin reference](player-origin.md) and
 [Map view reference](map-view.md).

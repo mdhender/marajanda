@@ -59,6 +59,13 @@ An entity is walked until its [allowance](#allowance) will not pay for its next 
 Nothing is rejected at order entry for being too long.
 See [Action points reference](action-points.md#exhaust).
 
+## Explored
+
+The stronger of the two things a faction may know about a hex: its terrain, and what was standing in it when the faction's [entity](#entity) was there.
+An entity entering a hex explores it.
+Explored outranks [observed](#observed) and nothing goes backwards, so a later sighting from next door does not write an explored hex back down.
+See [Knowledge reference](knowledge.md).
+
 ## Fact
 
 A row that is true of one [entity](#entity) over a period of turns.
@@ -86,6 +93,14 @@ A faction is founded with one, `LEADER-1`.
 
 An [entity](#entity)'s changeable label.
 It defaults to the entity's [code](#code) and is changed through an order rather than a form.
+
+## Observed
+
+The weaker of the two things a faction may know about a hex: its terrain type, its elevation, and whether it can be entered.
+Nothing about what stands in it.
+An [entity](#entity) entering a hex observes the six hexes around it.
+A hex the faction has neither observed nor [explored](#explored) is unknown, which is the absence of a record rather than a third state.
+See [Knowledge reference](knowledge.md).
 
 ## Order
 

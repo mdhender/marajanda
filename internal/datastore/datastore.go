@@ -210,6 +210,34 @@ CREATE TABLE units (
 	PRIMARY KEY (entity_id, kind, effective_from)
 ) STRICT;
 
+-- What a faction knows about one hex. The two states are ordered and
+-- monotone: unknown becomes observed, observed becomes explored, and
+-- nothing goes backwards, because a faction does not forget terrain.
+-- Unknown has no value here - it is the absence of a row.
+--
+-- This is keyed on the faction rather than on an entity because it is
+-- what the faction knows, however many of its entities did the
+-- learning, and because many entities walking through one hex in a turn
+-- have to produce one outcome rather than one each.
+--
+-- The state is the state at the end of a turn. Nothing records the
+-- middle of one, so a hex that goes from unknown straight to explored in
+-- a single turn leaves one row and not two.
+--
+-- The foreign key to hexes is what clips a neighbour beyond a pole: the
+-- world is the filter, so a write names six neighbours and the ones
+-- that are not hexes of the world are never inserted.
+CREATE TABLE faction_knowledge (
+	faction_email     TEXT NOT NULL REFERENCES factions (account_email) ON DELETE CASCADE,
+	q                 INTEGER NOT NULL,
+	r                 INTEGER NOT NULL,
+	state             TEXT NOT NULL CHECK (state IN ('observed', 'explored')),
+	effective_from    INTEGER NOT NULL CHECK (effective_from >= 0),
+	effective_through INTEGER NOT NULL CHECK (effective_through > effective_from),
+	PRIMARY KEY (faction_email, q, r, effective_from),
+	FOREIGN KEY (q, r) REFERENCES hexes (q, r)
+) STRICT;
+
 -- An order is issued to an entity, not to a faction. The faction is
 -- reached through the entity, and a faction with two leaders has to
 -- say which one is moving.
@@ -278,12 +306,13 @@ CREATE TABLE rest_orders (
 	FOREIGN KEY (turn, entity_id, seq) REFERENCES orders (turn, entity_id, seq) ON DELETE CASCADE
 ) STRICT;
 
--- For one entity the periods of a fact table are contiguous and never
--- overlap, and exactly one of them runs to the end of time. These are
--- what hold the second half of that.
+-- For one subject - an entity, or a faction and a hex - the periods of a
+-- fact table are contiguous and never overlap, and exactly one of them
+-- runs to the end of time. These are what hold the second half of that.
 CREATE UNIQUE INDEX entity_facts_open ON entity_facts (entity_id) WHERE effective_through = %[1]d;
 CREATE UNIQUE INDEX entity_locations_open ON entity_locations (entity_id) WHERE effective_through = %[1]d;
-CREATE UNIQUE INDEX units_open ON units (entity_id, kind) WHERE effective_through = %[1]d;`
+CREATE UNIQUE INDEX units_open ON units (entity_id, kind) WHERE effective_through = %[1]d;
+CREATE UNIQUE INDEX faction_knowledge_open ON faction_knowledge (faction_email, q, r) WHERE effective_through = %[1]d;`
 
 // SeedAccount contains the secret and public data needed to create an account.
 type SeedAccount struct {
@@ -739,10 +768,16 @@ func (s *Store) SaveFaction(ctx context.Context, email, name string, race game.R
 
 // VisibleHexes returns the true map coordinates an account can currently see.
 //
-// Visibility is not visitation. A player will eventually see terrain in hexes
-// they have never entered, so a map draws this set rather than a travel
-// history. Today an account sees only its origin hex, which the account record
-// already holds, so there is no visibility table to query yet.
+// Visibility is not visitation. A faction draws terrain for every hex it has
+// observed, not only the hexes it has entered, so this reads the knowledge
+// record rather than a travel history. It reads the same rows the movement cost
+// is priced against: if the map derived visibility one way and the cost rule
+// another, the map would lie about what a move will cost.
+//
+// An account that controls no faction sees nothing. It knows nothing because
+// nothing of its ever stood anywhere, and it cannot reach a map page: the
+// player map is a player's, and it sends an account without a configured
+// faction to the faction form. This is a floor, not a rendered state.
 func (s *Store) VisibleHexes(ctx context.Context, email string) ([]hexg.Hex, error) {
 	conn, release, err := s.take(ctx)
 	if err != nil {
@@ -750,20 +785,25 @@ func (s *Store) VisibleHexes(ctx context.Context, email string) ([]hexg.Hex, err
 	}
 	defer release()
 
-	account, found, err := readAccountRecord(conn, normalizeEmail(email))
+	normalizedEmail := normalizeEmail(email)
+	if _, found, err := readAccountRecord(conn, normalizedEmail); err != nil {
+		return nil, err
+	} else if !found {
+		return nil, errors.New("look up visible hexes: unknown account")
+	}
+
+	turn, err := readCurrentTurn(conn)
 	if err != nil {
 		return nil, err
 	}
-	if !found {
-		return nil, errors.New("look up visible hexes: unknown account")
-	}
-	// An account with no seat has seen nothing. It cannot reach a map page -
-	// a player without a faction is sent to the faction form, and the faction
-	// form is what seats them - so this is a floor, not a rendered state.
-	if !account.Seated {
+
+	known, err := readKnowledge(conn, normalizedEmail, turn)
+	if errors.Is(err, ErrUnknownFaction) {
 		return nil, nil
+	} else if err != nil {
+		return nil, err
 	}
-	return []hexg.Hex{account.Origin}, nil
+	return known.Hexes(), nil
 }
 
 // FindOrCreateDevelopmentAccount returns an account for development-only sign-in.

@@ -22,10 +22,10 @@ document records are in
 An [order](orders.md) is one action, so a `move` is one step and a move's cost
 is a step's cost. *Step* is the grain a turn's results are recorded on.
 
-Which hexes a faction knows is its observed and explored record, which
-[#38](https://github.com/mdhender/marajanda/issues/38) owns. This document uses
-*known* for either state, because a step costs the same onto ground the faction
-has walked as onto ground it has only seen.
+Which hexes a faction knows is its observed and explored record; see
+[Knowledge reference](knowledge.md). This document uses *known* for either
+state, because a step costs the same onto ground the faction has walked as onto
+ground it has only seen.
 
 ## The allowance
 
@@ -151,7 +151,7 @@ A faction's homeland ring is known in full when the faction is seated: the
 origin hex explored, its six neighbours observed. Those facts are effective from
 the founding turn, the exception [Entities reference](entities.md#effective-dating)
 already carves out, because nothing about founding waits on a turn to be
-processed.
+processed. See [Knowledge reference](knowledge.md#what-writes-it).
 
 Turn 1 therefore opens with seven known hexes: a leader may spend all six points
 walking the ring cheaply, or step out and explore.

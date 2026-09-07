@@ -113,7 +113,8 @@ nothing is sampled, collapsed or summarized. The default world is one
 
 The window is the smallest rectangle holding every hex the account can see,
 grown by a margin of `2` hexes on all four sides. An account that can see one
-hex is sent a five-by-five map.
+hex is sent a five-by-five map, and the window grows on its own as a faction
+learns more of the world.
 
 The margin is the same on every side and is never reduced. A hex beyond a pole
 is inside the window like any other and is drawn as fog, so the size and shape
@@ -138,8 +139,19 @@ The visible set holds the true coordinates an account can see. It is not a
 record of the hexes an account has visited; an account may see a hex it has not
 entered.
 
-An account currently sees one hex: its origin. No table records visibility, and
-the game has no turn.
+It is the faction's knowledge record as of the turn the game is on: every hex
+the faction has observed or explored. A faction is founded knowing seven hexes —
+its origin and the six around it — and learns more as its entities move. The map
+therefore draws the same rows the movement cost is priced against, so it cannot
+say a hex is known that a step would charge as unknown. See
+[Knowledge reference](knowledge.md).
+
+Observed and explored draw the same. What separates them is what was standing in
+the hex, and nothing records that yet.
+
+An account that controls no faction sees nothing. It cannot reach this page: the
+player map is a player's, and an account without a configured faction is sent to
+the faction form.
 
 ## Terrain
 

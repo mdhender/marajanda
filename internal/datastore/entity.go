@@ -119,9 +119,10 @@ func readEntities(conn *sqlite.Conn, normalizedEmail string, turn int) ([]Entity
 }
 
 // foundFaction creates the entities a faction starts with, on its origin hex
-// and effective from the current turn. Nothing is waiting on a turn to be
-// processed, so the founding facts are effective from the turn the faction was
-// configured rather than from the one after it.
+// and effective from the current turn, and records the homeland ring it knows.
+// Nothing is waiting on a turn to be processed, so the founding facts are
+// effective from the turn the faction was configured rather than from the one
+// after it.
 //
 // A faction that already holds an entity has been founded, so this does
 // nothing: reconfiguring a faction renames its people, it does not raise a
@@ -145,7 +146,7 @@ func foundFaction(conn *sqlite.Conn, normalizedEmail string, origin hexg.Hex) er
 			return err
 		}
 	}
-	return nil
+	return foundKnowledge(conn, normalizedEmail, origin, turn)
 }
 
 func factionHasEntities(conn *sqlite.Conn, normalizedEmail string) (bool, error) {
