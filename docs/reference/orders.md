@@ -31,6 +31,10 @@ out is a step taken.
 | --- | --- |
 | `move` | Walk the entity one hex, in the direction the order names. |
 
+What an order costs the entity that carries it, and the `rest` kind that is
+decided but not yet accepted, are in
+[Action points reference](action-points.md).
+
 Which kinds an entity accepts is a function of its kind:
 
 | Entity kind | Accepts |
@@ -70,15 +74,17 @@ and not yet said the direction of; the absence of a row is what the blank select
 on the page means.
 
 `rest_orders` is defined ahead of the kind that writes to it: the `kind` check
-on `orders` does not admit `rest`, so nothing can put a row in it today. Whether
-a rest keeps a repeat count is
+on `orders` does not admit `rest`, so nothing can put a row in it today. What a
+rest costs and where it may sit is in
+[Action points reference](action-points.md#rest); what it recovers is
 [#36](https://github.com/mdhender/marajanda/issues/36).
 
 `seq` is constrained to `1 .. 32`. That bound is how many orders an entity may
 carry in a turn: it keeps a tolerated overspend bounded rather than being the
-movement allowance, which turn processing decides. It is written into the schema
-from `datastore.MaxOrdersPerEntity`, so the column check and the code that has
-to satisfy it read one value.
+movement allowance, which turn processing decides. See
+[Action points reference](action-points.md#exhaust). It is written into the
+schema from `datastore.MaxOrdersPerEntity`, so the column check and the code
+that has to satisfy it read one value.
 
 Column definitions are in [Datastore](../DATASTORE.md#orders).
 

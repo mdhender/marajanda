@@ -35,6 +35,11 @@ Which order kinds an entity kind accepts is a game rule: a leader accepts
 `move`, and a hamlet accepts nothing. See
 [Orders reference](orders.md#order-kinds).
 
+How much an entity may do in a turn is its action point allowance, which is a
+fact of the entity like its location. A leader is created with `6`; an entity
+kind that accepts no orders has no allowance, so a hamlet has none. See
+[Action points reference](action-points.md#the-allowance).
+
 ## Identity, code, name, kind
 
 | Property | Mutable | Where it lives |
@@ -116,7 +121,9 @@ because both describe the same rows.
 
 Location is its own table because it is the attribute that changes every turn a
 leader moves. Code, name and kind share one table because they change rarely and
-together. As other attributes prove volatile they get their own fact tables.
+together. As other attributes prove volatile they get their own fact tables: the
+action point allowance is expected to be one of them, and nothing stores it yet.
+See [Action points reference](action-points.md#the-allowance).
 
 A unit's `kind` carries no constraint. The list of unit kinds is a game rule,
 and it arrives with the first rule that produces one. Nothing creates, consumes

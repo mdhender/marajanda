@@ -1,5 +1,11 @@
 # Glossary
 
+## Action point
+
+The unit an [entity](#entity) spends to act, abbreviated AP.
+A step onto ground the faction knew when the turn opened costs 1; a step onto ground it did not costs 3, whatever the terrain.
+See [Action points reference](action-points.md).
+
 ## Active
 
 Whether a thing may act.
@@ -7,6 +13,14 @@ An account and a [faction](#faction) each carry the flag, and the two are indepe
 A deactivated account cannot sign in; a deactivated faction cannot give [orders](#order), and its player can still sign in and look at their game.
 Everything is created active, and the flag is set by hand during beta.
 See [Accounts reference](../ACCOUNTS.md#deactivation).
+
+## Allowance
+
+How many [action points](#action-point) an [entity](#entity) has for one [turn](#turn).
+A newly created leader's is 6.
+It is a [fact](#fact) of the entity and not a running balance: nothing carries into the next turn, and processing never writes a total back.
+An entity whose [kind](#kind) accepts no [orders](#order) has no allowance.
+See [Action points reference](action-points.md#the-allowance).
 
 ## Code
 
@@ -37,6 +51,13 @@ An entity has a location, a [code](#code), a name, and a [kind](#kind), and it b
 Orders are issued to entities.
 A leader is an entity; a settlement is an entity.
 See [Entities reference](entities.md).
+
+## Exhaust
+
+The failure of a step an [entity](#entity) cannot afford.
+An entity is walked until its [allowance](#allowance) will not pay for its next step; the steps it took stand, it stops where it stopped, and every remaining step is recorded as exhausted.
+Nothing is rejected at order entry for being too long.
+See [Action points reference](action-points.md#exhaust).
 
 ## Fact
 
@@ -69,8 +90,9 @@ It defaults to the entity's [code](#code) and is changed through an order rather
 ## Order
 
 One instruction issued to one [entity](#entity) for one [turn](#turn), also called a stanza.
-`move` is the only order kind, and its directions are a list of [compass points](#compass-point), one step per hex.
+An order is one action: `move`, the only kind an entity may issue today, walks the entity one hex in the [compass point](#compass-point) it names.
 An entity's [kind](#kind) decides which order kinds it accepts: a leader accepts `move`, a hamlet accepts nothing.
+The second kind, [rest](#rest), is decided and not yet accepted.
 Only the current turn's orders are writable; advancing the turn freezes the turn before it.
 See [Orders reference](orders.md).
 
@@ -93,6 +115,13 @@ See [Player origin reference](player-origin.md).
 The `ice` terrain of the northernmost and southernmost rows of the world.
 Ice is neither land nor water, and nothing may enter it.
 See [Terrain reference](terrain.md).
+
+## Rest
+
+An [order](#order) kind that spends [action points](#action-point) and moves nothing.
+A leader accepts it, it carries no direction, it costs 1 AP each, and it may be ordered more than once and anywhere in an entity's list.
+What it recovers is not yet decided.
+See [Action points reference](action-points.md#rest).
 
 ## Settlement
 
