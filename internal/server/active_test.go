@@ -91,8 +91,9 @@ func TestOrdersRoutesRefuseADeactivatedFaction(t *testing.T) {
 	}{
 		{name: "the page", method: http.MethodGet, target: "/player/orders"},
 		{name: "the whole form", method: http.MethodPost, target: "/player/orders", body: "add=7&kind.7=move"},
-		{name: "one step box", method: http.MethodPost, target: "/player/orders/7/1/1", body: "step.7.1.1=ne"},
-		{name: "one stanza", method: http.MethodDelete, target: "/player/orders/7/1"},
+		{name: "one direction", method: http.MethodPost, target: "/player/orders/7/1", body: "direction.7.1=ne"},
+		{name: "an insert", method: http.MethodPost, target: "/player/orders/7/1/insert", body: "kind.7=move"},
+		{name: "one order", method: http.MethodDelete, target: "/player/orders/7/1"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := ordersStore()
@@ -103,8 +104,8 @@ func TestOrdersRoutesRefuseADeactivatedFaction(t *testing.T) {
 				t.Fatalf("response = %d %q, want %d /player/dashboard",
 					response.Code, response.Header().Get("Location"), http.StatusSeeOther)
 			}
-			if len(store.orders[7]) != 0 || store.savedSteps != nil {
-				t.Fatalf("a refused request wrote %#v and %#v", store.orders, store.savedSteps)
+			if len(store.orders[7]) != 0 || store.savedDirections != nil {
+				t.Fatalf("a refused request wrote %#v and %#v", store.orders, store.savedDirections)
 			}
 
 			// HTMX follows a 303 itself and swaps what comes back into the
@@ -132,7 +133,7 @@ func TestADeactivatedFactionsWriteIsAnsweredForbidden(t *testing.T) {
 	store := ordersStore()
 	store.orderErr = fmt.Errorf("%w: %s", datastore.ErrFactionInactive, "player@example.com")
 
-	response := ordersRequest(t, store, http.MethodPost, "/player/orders/7/1/1", "step.7.1.1=ne", nil)
+	response := ordersRequest(t, store, http.MethodPost, "/player/orders/7/1", "direction.7.1=ne", nil)
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
 	}

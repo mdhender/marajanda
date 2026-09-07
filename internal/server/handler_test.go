@@ -453,7 +453,7 @@ type testStore struct {
 	// with instead of seating anybody.
 	seat    hexg.Hex
 	saveErr error
-	// orders are the stanzas the faction's entities hold on turn, keyed by
+	// orders are the orders the faction's entities hold on turn, keyed by
 	// entity. The fake keeps them so a handler can be watched writing and then
 	// rendering what it wrote; the rules that decide what is stored are tested
 	// against the real store.
@@ -463,9 +463,12 @@ type testStore struct {
 	orderErr  error
 	wroteTurn int
 	advanced  int
-	// savedSteps is what the last whole-page save asked for, which is where a
-	// test reads the compaction the handler did on the way in.
-	savedSteps []datastore.OrderSteps
+	// savedDirections is what the last whole-page save asked for, which is
+	// where a test reads what the handler made of the form on the way in.
+	savedDirections []datastore.OrderDirection
+	// insertedAt is the sequence the last insert asked for, so a test can see
+	// that "insert after order 1" asked for position 2.
+	insertedAt int
 }
 
 func (s *testStore) OrdersAsOf(_ context.Context, _ string, turn int) (map[int64][]datastore.Order, error) {
@@ -473,7 +476,7 @@ func (s *testStore) OrdersAsOf(_ context.Context, _ string, turn int) (map[int64
 	return s.orders, nil
 }
 
-func (s *testStore) AddOrder(_ context.Context, _ string, turn int, entityID int64, kind game.OrderKind) (int, error) {
+func (s *testStore) AddOrder(_ context.Context, _ string, turn int, entityID int64, kind game.OrderKind, direction compass.Point) (int, error) {
 	s.wroteTurn = turn
 	if s.orderErr != nil {
 		return 0, s.orderErr
@@ -482,51 +485,56 @@ func (s *testStore) AddOrder(_ context.Context, _ string, turn int, entityID int
 		s.orders = make(map[int64][]datastore.Order)
 	}
 	seq := len(s.orders[entityID]) + 1
-	s.orders[entityID] = append(s.orders[entityID], datastore.Order{Seq: seq, Kind: kind})
+	s.orders[entityID] = append(s.orders[entityID], datastore.Order{Seq: seq, Kind: kind, Direction: direction})
 	return seq, nil
 }
 
-func (s *testStore) SetOrderStep(_ context.Context, _ string, turn int, entityID int64, seq, step int, direction compass.Point) error {
+func (s *testStore) InsertOrder(_ context.Context, _ string, turn int, entityID int64, seq int, kind game.OrderKind, direction compass.Point) error {
 	s.wroteTurn = turn
+	s.insertedAt = seq
 	if s.orderErr != nil {
 		return s.orderErr
 	}
-	for index, order := range s.orders[entityID] {
-		if order.Seq != seq {
-			continue
-		}
-		steps := order.Steps
-		switch {
-		case step == len(steps)+1:
-			if direction.IsValid() {
-				steps = append(steps, direction)
-			}
-		case step >= 1 && step <= len(steps):
-			if direction.IsValid() {
-				steps[step-1] = direction
-			} else {
-				steps = append(steps[:step-1:step-1], steps[step:]...)
-			}
-		default:
-			return datastore.ErrUnknownStep
-		}
-		s.orders[entityID][index].Steps = steps
-		return nil
+	if s.orders == nil {
+		s.orders = make(map[int64][]datastore.Order)
 	}
-	return datastore.ErrUnknownOrder
+	orders := s.orders[entityID]
+	if seq < 1 || seq > len(orders)+1 {
+		return datastore.ErrUnknownOrder
+	}
+	inserted := make([]datastore.Order, 0, len(orders)+1)
+	inserted = append(inserted, orders[:seq-1]...)
+	inserted = append(inserted, datastore.Order{Kind: kind, Direction: direction})
+	inserted = append(inserted, orders[seq-1:]...)
+	for index := range inserted {
+		inserted[index].Seq = index + 1
+	}
+	s.orders[entityID] = inserted
+	return nil
 }
 
-func (s *testStore) SetOrderSteps(_ context.Context, _ string, turn int, stanzas []datastore.OrderSteps) error {
+func (s *testStore) SetOrderDirection(ctx context.Context, email string, turn int, entityID int64, seq int, direction compass.Point) error {
+	return s.SetOrderDirections(ctx, email, turn, []datastore.OrderDirection{
+		{EntityID: entityID, Seq: seq, Direction: direction},
+	})
+}
+
+func (s *testStore) SetOrderDirections(_ context.Context, _ string, turn int, directions []datastore.OrderDirection) error {
 	s.wroteTurn = turn
 	if s.orderErr != nil {
 		return s.orderErr
 	}
-	s.savedSteps = stanzas
-	for _, stanza := range stanzas {
-		for index, order := range s.orders[stanza.EntityID] {
-			if order.Seq == stanza.Seq {
-				s.orders[stanza.EntityID][index].Steps = stanza.Steps
+	s.savedDirections = directions
+	for _, wanted := range directions {
+		found := false
+		for index, order := range s.orders[wanted.EntityID] {
+			if order.Seq == wanted.Seq {
+				s.orders[wanted.EntityID][index].Direction = wanted.Direction
+				found = true
 			}
+		}
+		if !found {
+			return datastore.ErrUnknownOrder
 		}
 	}
 	return nil

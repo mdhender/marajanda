@@ -67,29 +67,31 @@ const (
 	// grow with the square of the radius.
 	MaximumWorldRadius = 120
 
-	// MaxOrderSteps is how many steps one order may carry.
+	// MaxOrdersPerEntity is how many orders one entity may carry in a turn.
 	//
-	// It is a storage sanity limit and not a game rule: it bounds a row count
-	// that a hand-built request could otherwise run away with. What a leader
-	// can actually walk in a turn is the movement allowance, which turn
-	// processing decides. See #28.
-	MaxOrderSteps = 32
+	// An order is one action, so this is the whole of what an entity can be
+	// told to do in a turn. It is what keeps a tolerated overspend bounded:
+	// order entry lets a player spend past their allowance as a courtesy, and
+	// this is what stops that being a hundred orders. What a leader can
+	// actually carry out is the movement allowance, which turn processing
+	// decides. See #28 and #40.
+	MaxOrdersPerEntity = 32
 )
 
 // The end-of-time sentinel is written into the schema from game.EndOfTimeTurn
 // rather than typed out again beside it. It bounds the current turn and it is
 // what the partial indexes below match on, so a schema naming one value while
 // the code writes another would index no open period and close none either.
-// MaxOrderSteps goes in the same way and for the same reason: the column check
-// and the write that has to satisfy it read one value.
+// MaxOrdersPerEntity goes in the same way and for the same reason: the column
+// check and the write that has to satisfy it read one value.
 var schema = sqlitemigration.Schema{
 	AppID:      ApplicationID,
-	Migrations: []string{fmt.Sprintf(baselineMigration, game.EndOfTimeTurn, MaxOrderSteps)},
+	Migrations: []string{fmt.Sprintf(baselineMigration, game.EndOfTimeTurn, MaxOrdersPerEntity)},
 }
 
 // baselineMigration is the entire schema. During beta it is a single squashed
 // baseline: amend it and delete existing databases rather than appending a
-// migration. Its substitutions are the end-of-time turn and the step limit.
+// migration. Its substitutions are the end-of-time turn and the order limit.
 const baselineMigration = `CREATE TABLE game (
 	id           INTEGER PRIMARY KEY CHECK (id = 1),
 	seed1        INTEGER NOT NULL,
@@ -221,36 +223,58 @@ CREATE TABLE units (
 -- order: the stored orders and the seeds are the replay. Deleting
 -- an account still erases its history through the cascade, which is
 -- a known wart - nothing deletes accounts today.
+--
+-- An order is one action, so "move nw ne e" is three orders rather
+-- than one order carrying three directions. Sequence numbers are
+-- contiguous 1..N; removing an order renumbers what follows it and
+-- inserting one shifts what follows it up, so an entity's orders
+-- have exactly one stored form, which is what replay depends on.
+--
+-- The bound on seq is how many orders an entity may carry in a turn.
+-- It is what keeps a tolerated overspend bounded, not a movement
+-- allowance: what an entity can carry out is decided by turn
+-- processing.
 CREATE TABLE orders (
 	turn      INTEGER NOT NULL CHECK (turn >= 1),
 	entity_id INTEGER NOT NULL REFERENCES entities (id) ON DELETE CASCADE,
-	seq       INTEGER NOT NULL CHECK (seq >= 1),
+	seq       INTEGER NOT NULL CHECK (seq BETWEEN 1 AND %[2]d),
 	kind      TEXT NOT NULL CHECK (kind IN ('move')),
 	PRIMARY KEY (turn, entity_id, seq)
 ) STRICT;
 
--- A stanza's directions are a list, so "move nw ne e" is three rows
--- and a blank box is the absence of a row rather than a NULL in a
--- column that would also have to mean "not applicable to this order
--- kind". The second order kind brings its own detail table rather
--- than widening a fixed-slot row.
+-- What an order of a given kind needs beyond its kind lives in that
+-- kind's own detail table, one row per order. A direction is not a
+-- nullable column on orders because such a column would also have to
+-- mean "not applicable to this order kind", and a rest has no
+-- direction.
 --
--- Steps are contiguous 1..N; every write compacts them, so one order
--- has exactly one stored form, which is what replay depends on.
---
--- The bound on step is a storage sanity limit, not a game rule. The
--- movement allowance is decided by turn processing.
+-- A move with no row here is an order a player has added and not yet
+-- said which way it goes. The absence of a row is the blank select,
+-- rather than a NULL.
 --
 -- Directions are stored as the lowercase abbreviation, which is what
 -- compass.Parse accepts and what strings.ToLower of a point produces,
 -- matching how terrain and race are already stored.
-CREATE TABLE order_steps (
+CREATE TABLE move_orders (
 	turn      INTEGER NOT NULL,
 	entity_id INTEGER NOT NULL,
 	seq       INTEGER NOT NULL,
-	step      INTEGER NOT NULL CHECK (step BETWEEN 1 AND %[2]d),
 	direction TEXT NOT NULL CHECK (direction IN ('ne', 'e', 'se', 'sw', 'w', 'nw')),
-	PRIMARY KEY (turn, entity_id, seq, step),
+	PRIMARY KEY (turn, entity_id, seq),
+	FOREIGN KEY (turn, entity_id, seq) REFERENCES orders (turn, entity_id, seq) ON DELETE CASCADE
+) STRICT;
+
+-- Rest is the one order kind that is not one action: a repeat count
+-- makes "rest x6" one order with one cost rather than six rows. The
+-- table is here so the detail-table shape is one shape, and nothing
+-- writes to it yet - the kind check on orders does not admit 'rest'
+-- until the rules that give Rest an effect land. See #36.
+CREATE TABLE rest_orders (
+	turn      INTEGER NOT NULL,
+	entity_id INTEGER NOT NULL,
+	seq       INTEGER NOT NULL,
+	count     INTEGER NOT NULL CHECK (count >= 1),
+	PRIMARY KEY (turn, entity_id, seq),
 	FOREIGN KEY (turn, entity_id, seq) REFERENCES orders (turn, entity_id, seq) ON DELETE CASCADE
 ) STRICT;
 

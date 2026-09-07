@@ -141,23 +141,30 @@ See [Entities reference](reference/entities.md) for the vocabulary, the code rul
 
 ## Orders
 
-An order is one instruction issued to one entity for one turn. `orders` holds the instruction and `order_steps` holds a move's directions:
+An order is one instruction issued to one entity for one turn, and it is one action. `orders` holds the instruction; each order kind's own detail table holds what that kind needs beyond its kind, one row per order:
 
 | Table | Column | Notes |
 | --- | --- | --- |
 | `orders` | `turn` | The turn the order was issued for. At least 1. |
 | `orders` | `entity_id` | The entity the order is issued to. `ON DELETE CASCADE`. |
-| `orders` | `seq` | The order's position in that entity's list for the turn. Contiguous from 1. |
+| `orders` | `seq` | The order's position in that entity's list for the turn. Contiguous from 1, and constrained to `1 .. 32`. |
 | `orders` | `kind` | Constrained to `move`. |
-| `order_steps` | `turn`, `entity_id`, `seq` | The order the step belongs to. `ON DELETE CASCADE`. |
-| `order_steps` | `step` | The step's position in the order. Contiguous from 1, and constrained to `1 .. 32`. |
-| `order_steps` | `direction` | Constrained to `ne`, `e`, `se`, `sw`, `w`, `nw`. |
+| `move_orders` | `turn`, `entity_id`, `seq` | The order the direction belongs to. `ON DELETE CASCADE`. |
+| `move_orders` | `direction` | Constrained to `ne`, `e`, `se`, `sw`, `w`, `nw`. |
+| `rest_orders` | `turn`, `entity_id`, `seq` | The order the count belongs to. `ON DELETE CASCADE`. |
+| `rest_orders` | `count` | How many times the rest repeats. At least 1. |
 
-The primary keys are `(turn, entity_id, seq)` and `(turn, entity_id, seq, step)`.
+Every one of the three has the primary key `(turn, entity_id, seq)`.
 
-An order is issued to an entity rather than to a faction: the faction is reached through the entity. A move's directions are a list, so `move nw ne e` is three rows and a blank box is the absence of a row rather than a NULL in a column that would also have to mean "not applicable to this order kind". Sequences and steps are compacted on every write, so one order has exactly one stored form.
+An order is issued to an entity rather than to a faction: the faction is reached through the entity. A move goes one way, so `move nw ne e` is three orders rather than one order carrying three directions, and each of the three has its own sequence number and its own price.
 
-The bound on `step` is a storage sanity limit rather than a game rule; the movement allowance belongs to turn processing. It is written into the schema from `datastore.MaxOrderSteps`, so the column check and the code that satisfies it read one value, exactly as the end-of-time turn does.
+A direction is not a nullable column on `orders`. Such a column would also have to mean "not applicable to this order kind", which is what the detail-table pattern exists to avoid: a rest has no direction. A move with no row in `move_orders` is an order a player has added and not yet said the direction of, and the absence of a row is what the blank select on the page means.
+
+`rest_orders` is defined ahead of the kind that writes to it. The `kind` check on `orders` does not admit `rest` yet, so nothing can put a row in it; whether a rest keeps a repeat count is [#36](https://github.com/mdhender/marajanda/issues/36).
+
+Sequences are contiguous 1..N and every write leaves them that way: removing an order renumbers what follows it, and inserting one shifts what follows it up. An entity's orders therefore have exactly one stored form.
+
+The bound on `seq` is how many orders an entity may carry in a turn. It is what keeps a tolerated overspend bounded rather than a movement allowance, which belongs to turn processing. It is written into the schema from `datastore.MaxOrdersPerEntity`, so the column check and the code that satisfies it read one value, exactly as the end-of-time turn does.
 
 Only the current turn's rows are writable. Every insert, update and delete is refused when the turn is not `game.current_turn`, whatever turn the caller asks for, so advancing the turn is what freezes the turn before it. Nothing deletes an order from a turn the game has moved past. Which order kinds an entity accepts is a game rule in `internal/game` rather than a constraint here; the datastore reads the entity's kind as of the turn and refuses an order that kind does not accept.
 

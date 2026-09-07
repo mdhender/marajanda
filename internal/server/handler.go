@@ -32,9 +32,10 @@ type applicationStore interface {
 	Faction(context.Context, string) (datastore.Faction, bool, error)
 	EntitiesAsOf(context.Context, string, int) ([]datastore.Entity, error)
 	OrdersAsOf(context.Context, string, int) (map[int64][]datastore.Order, error)
-	AddOrder(context.Context, string, int, int64, game.OrderKind) (int, error)
-	SetOrderStep(context.Context, string, int, int64, int, int, compass.Point) error
-	SetOrderSteps(context.Context, string, int, []datastore.OrderSteps) error
+	AddOrder(context.Context, string, int, int64, game.OrderKind, compass.Point) (int, error)
+	InsertOrder(context.Context, string, int, int64, int, game.OrderKind, compass.Point) error
+	SetOrderDirection(context.Context, string, int, int64, int, compass.Point) error
+	SetOrderDirections(context.Context, string, int, []datastore.OrderDirection) error
 	RemoveOrder(context.Context, string, int, int64, int) error
 	AdvanceTurn(context.Context) (int, error)
 	SaveFaction(context.Context, string, string, game.Race) (datastore.Account, error)
@@ -103,7 +104,8 @@ func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCrea
 	mux.HandleFunc("POST /player/faction", app.configureFaction)
 	mux.HandleFunc("GET /player/orders", app.orders)
 	mux.HandleFunc("POST /player/orders", app.saveOrders)
-	mux.HandleFunc("POST /player/orders/{entity}/{seq}/{step}", app.setOrderStep)
+	mux.HandleFunc("POST /player/orders/{entity}/{seq}", app.setOrderDirection)
+	mux.HandleFunc("POST /player/orders/{entity}/{seq}/insert", app.insertOrder)
 	mux.HandleFunc("DELETE /player/orders/{entity}/{seq}", app.removeOrder)
 	registerAgentRoutes(mux, app, environment)
 
@@ -711,7 +713,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 	  <section class="dashboard orders-page">
 		<p class="eyebrow">Faction command</p>
 		<h1>Orders for turn {{.Turn}}</h1>
-		<p class="lede">Nothing here is typed. Build this turn's orders out of the boxes below, and they are saved as you make them.</p>
+		<p class="lede">Nothing here is typed. Build this turn's orders one row at a time, and they are saved as you make them.</p>
 		{{/* A player commands one faction, so the picker holds one entry and it
 		     is selected. It is here so the page has a stable shape for the day
 		     something commands more than one. */}}
@@ -855,24 +857,25 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		</div>{{end}}
 
 {{/* The orders region is everything a write changes: every entity, its
-     stanzas, its boxes, and whatever the last write had to say. A write
+     orders, their directions, and whatever the last write had to say. A write
      answers with the whole of it rather than with the control that was
-     touched, so numbering, compaction and validation are decided by the
-     server and there is no client-side state to drift.
+     touched, so numbering and validation are decided by the server and there
+     is no client-side state to drift.
 
      One form wraps the lot, and every control inside it is one a browser can
-     work without HTMX: the boxes and the buttons submit to POST /player/orders
-     with the script-free Save button, which is why each box carries its whole
-     address - entity, stanza and step - in its name. With HTMX loaded, a box
-     posts itself to the URL that names the same box and the page never
-     submits at all. */}}
+     work without HTMX: the selects and the buttons submit to POST
+     /player/orders with the script-free Save button, which is why each select
+     carries its whole address - entity and sequence - in its name. With HTMX
+     loaded, a select posts itself to the URL that names the same order and the
+     page never submits at all. */}}
 {{define "orders-list"}}		<div id="orders" hx-target="#orders" hx-swap="outerHTML" hx-indicator="#orders">
 		{{if .Orders.Message}}<p class="message" role="alert">{{.Orders.Message}}</p>{{end}}
 		{{if .Orders.Saved}}<p class="saved" role="status">Saved at {{.Orders.Saved}}</p>{{end}}
 		<form class="orders-form" action="/player/orders" method="post">
 		{{/* Enter in any field submits a form through its first submit button,
-		     and every other button here removes or adds a stanza. Without this
-		     one, Enter in a step box would delete the first order on the page.
+		     and every other button here removes, inserts or adds an order.
+		     Without this one, Enter in a direction select would delete the
+		     first order on the page.
 		     It saves, which is what Enter means everywhere else on this form,
 		     and it is out of the tab order because the visible controls are
 		     what a keyboard should reach. */}}
@@ -884,18 +887,19 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 			<p class="entity-where">{{.Entity.Kind}} · ({{.Entity.Location.Q}}, {{.Entity.Location.R}})</p>
 			{{if .Stanzas}}
 			<ol class="stanzas">
+			  {{/* An order is one action, so a row is one select: the way
+			       this order goes. The blank option is an order whose
+			       direction has not been chosen, not an order to delete -
+			       Remove does that, and Insert puts a fresh row after this
+			       one so a list can be corrected in the middle. */}}
 			  {{range .Stanzas}}<li class="stanza">
 				<span class="stanza-kind">{{.Label}}</span>
-				{{/* The boxes are the steps this order holds plus one blank on
-				     the end. Choosing a direction in that one appends a step
-				     and the answer comes back with a fresh blank; clearing a
-				     filled one deletes that step and shifts the rest left. */}}
-				{{range .Boxes}}<label class="step"><span class="visually-hidden">{{.Label}}</span>
+				<label class="direction"><span class="visually-hidden">{{.SelectLabel}}</span>
 				<select name="{{.Name}}" hx-post="{{.Post}}" hx-trigger="change">
 				  <option value=""{{if not .Current}} selected{{end}}>—</option>
 				  {{$chosen := .Current}}{{range $directions}}<option value="{{.Value}}"{{if eq .Value $chosen}} selected{{end}}>{{.Label}}</option>{{end}}
 				</select></label>
-				{{end}}
+				<button class="sign-link" type="submit" name="insert" value="{{.InsertValue}}" hx-post="{{.InsertURL}}">Insert after</button>
 				<button class="sign-link" type="submit" name="remove" value="{{.RemoveValue}}" hx-delete="{{.RemoveURL}}">Remove</button>
 				{{if .Error}}<p class="message stanza-error" role="alert">{{.Error}}</p>{{end}}
 			  </li>

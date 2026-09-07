@@ -19,28 +19,31 @@ import (
 
 // The names the orders form posts.
 //
-// A step box carries its whole address in its name - entity, stanza and step -
-// because one control has to serve two pages. With script, the box posts itself
-// to a URL that names the same box and the server sets that one box; without
-// script, the same boxes are submitted together by the page's one Save button,
-// and then the name is the only thing that says which box a value belongs to.
+// A direction select carries its whole address in its name - entity and
+// sequence - because one control has to serve two pages. With script, the
+// select posts itself to a URL that names the same order and the server sets
+// that one order; without script, the same selects are submitted together by
+// the page's one Save button, and then the name is the only thing that says
+// which order a value belongs to.
 //
 // The address is in the URL as well as the name so that a scripted write is
 // still addressed by its URL: HTMX includes the whole enclosing form on a
-// non-GET request, so the request that changes one box carries every other box
-// with it, and the URL is what says which of them was touched.
+// non-GET request, so the request that changes one select carries every other
+// select with it, and the URL is what says which of them was touched.
 const (
-	stepField   = "step"   // step.<entity>.<seq>.<step>
-	kindField   = "kind"   // kind.<entity>
-	addField    = "add"    // the add button's value: <entity>
-	removeField = "remove" // the remove button's value: <entity>.<seq>
+	directionField = "direction" // direction.<entity>.<seq>
+	kindField      = "kind"      // kind.<entity>
+	addField       = "add"       // the add button's value: <entity>
+	insertField    = "insert"    // the insert button's value: <entity>.<seq>
+	removeField    = "remove"    // the remove button's value: <entity>.<seq>
 )
 
 // ordersView is the orders page, ready for the template.
 type ordersView struct {
 	Turn     int
 	Entities []entityOrders
-	// Directions are the options every step box offers, in compass order.
+	// Directions are the options every direction select offers, in compass
+	// order.
 	Directions []orderDirection
 	// Saved is the time the last write landed, or empty on a page that has not
 	// written anything. Feedback rides in the fragment because the fragment is
@@ -70,33 +73,30 @@ type orderKindOption struct {
 	Label string
 }
 
-// orderStanza is one order: its kind, its step boxes, and the control that
-// removes it.
+// orderStanza is one order: its kind, the one select that says which way it
+// goes, and the controls that remove it or put another after it.
+//
+// An order is one action, so a row is one select and one price rather than a
+// list of boxes with nothing to hang a price on.
 type orderStanza struct {
-	Seq         int
-	Kind        string
-	Label       string
-	Boxes       []orderBox
+	Seq   int
+	Kind  string
+	Label string
+	// Name, Post and Current are the direction select: what it posts under,
+	// where a scripted change posts to, and what it currently shows.
+	Name        string
+	Post        string
+	Current     string
+	SelectLabel string
+	InsertURL   string
+	InsertValue string
 	RemoveURL   string
 	RemoveValue string
-	// Error is a failure that belongs to this stanza, shown beside it.
+	// Error is a failure that belongs to this order, shown beside it.
 	Error string
 }
 
-// orderBox is one step box: a select that is either a stored step or the blank
-// one on the end.
-//
-// The count is always steps plus one, so there is no "add a box" control and no
-// fixed number of boxes anywhere in the code.
-type orderBox struct {
-	Step    int
-	Name    string
-	Post    string
-	Current string
-	Label   string
-}
-
-// orderDirection is one option of a step box.
+// orderDirection is one option of a direction select.
 type orderDirection struct {
 	Value string
 	Label string
@@ -105,8 +105,8 @@ type orderDirection struct {
 // orderFeedback is what a write has to say for itself on the way back.
 type orderFeedback struct {
 	saved bool
-	// message is the failure, and entity and seq say which stanza it belongs
-	// to. A failure with no stanza is shown at the top of the page.
+	// message is the failure, and entity and seq say which order it belongs
+	// to. A failure with no order is shown at the top of the page.
 	message string
 	entity  int64
 	seq     int
@@ -125,12 +125,12 @@ func (app *application) orders(w http.ResponseWriter, r *http.Request) {
 	app.renderOrders(w, r, account, faction, orderFeedback{})
 }
 
-// saveOrders is the whole form: every step box, and at most one button.
+// saveOrders is the whole form: every direction select, and at most one button.
 //
 // It is what the script-free page's Save button posts, and it is also where the
-// add control goes, scripted or not. The steps are applied first and the button
-// afterwards, so a player who fills in a box and presses "add order" in one
-// unscripted submission keeps both.
+// add and insert controls go, scripted or not. The directions are applied first
+// and the button afterwards, so a player who picks a direction and presses "add
+// order" in one unscripted submission keeps both.
 func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 	account, faction, ok := app.playerFaction(w, r)
 	if !ok {
@@ -147,18 +147,18 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	stanzas, err := parseStepFields(r.PostForm)
+	directions, err := parseDirectionFields(r.PostForm)
 	if err != nil {
 		app.renderOrders(w, r, account, faction, orderFeedback{
 			message: "Marajanda could not read those orders.", status: http.StatusBadRequest,
 		})
 		return
 	}
-	if err := app.store.SetOrderSteps(r.Context(), account.Email, turn, stanzas); err != nil {
+	if err := app.store.SetOrderDirections(r.Context(), account.Email, turn, directions); err != nil {
 		app.renderOrders(w, r, account, faction, orderWriteFeedback(err, 0, 0))
 		return
 	}
-	switch add, remove := r.PostForm.Get(addField), r.PostForm.Get(removeField); {
+	switch add, insert, remove := r.PostForm.Get(addField), r.PostForm.Get(insertField), r.PostForm.Get(removeField); {
 	case add != "":
 		entity, err := strconv.ParseInt(add, 10, 64)
 		if err != nil {
@@ -167,9 +167,22 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		kind := game.OrderKind(strings.ToLower(strings.TrimSpace(r.PostForm.Get(kindField + "." + add))))
-		if _, err := app.store.AddOrder(r.Context(), account.Email, turn, entity, kind); err != nil {
+		if _, err := app.store.AddOrder(r.Context(), account.Email, turn, entity, formOrderKind(r.PostForm, entity), 0); err != nil {
 			app.renderOrders(w, r, account, faction, orderWriteFeedback(err, entity, 0))
+			return
+		}
+	case insert != "":
+		entity, seq, err := parseStanzaAddress(insert)
+		if err != nil {
+			app.renderOrders(w, r, account, faction, orderFeedback{
+				message: "Marajanda could not read that order.", status: http.StatusBadRequest,
+			})
+			return
+		}
+		// The button names the order the new one goes after, so the position
+		// it takes is the next one.
+		if err := app.store.InsertOrder(r.Context(), account.Email, turn, entity, seq+1, formOrderKind(r.PostForm, entity), 0); err != nil {
+			app.renderOrders(w, r, account, faction, orderWriteFeedback(err, entity, seq))
 			return
 		}
 	case remove != "":
@@ -188,23 +201,18 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 	app.renderOrders(w, r, account, faction, orderFeedback{saved: true})
 }
 
-// setOrderStep sets one step box. The box is addressed by the URL, and its
-// value arrives under the name that addresses it.
+// setOrderDirection sets which way one order goes. The order is addressed by
+// the URL, and the direction arrives under the name that addresses it.
 //
-// HTMX sends the whole enclosing form with the request, so the other boxes are
-// in it too. They are ignored: this route changes the one box it names, and
-// every other box was saved when it changed.
-func (app *application) setOrderStep(w http.ResponseWriter, r *http.Request) {
+// HTMX sends the whole enclosing form with the request, so the other selects
+// are in it too. They are ignored: this route changes the one order it names,
+// and every other order was saved when it changed.
+func (app *application) setOrderDirection(w http.ResponseWriter, r *http.Request) {
 	account, faction, ok := app.playerFaction(w, r)
 	if !ok {
 		return
 	}
 	entity, seq, err := pathStanza(r)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	step, err := strconv.Atoi(r.PathValue("step"))
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -220,21 +228,55 @@ func (app *application) setOrderStep(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	direction, err := parseDirection(r.PostForm.Get(stepFieldName(entity, seq, step)))
+	direction, err := parseDirection(r.PostForm.Get(directionFieldName(entity, seq)))
 	if err != nil {
 		app.renderOrders(w, r, account, faction, orderFeedback{
 			message: err.Error(), entity: entity, seq: seq, status: http.StatusUnprocessableEntity,
 		})
 		return
 	}
-	if err := app.store.SetOrderStep(r.Context(), account.Email, turn, entity, seq, step, direction); err != nil {
+	if err := app.store.SetOrderDirection(r.Context(), account.Email, turn, entity, seq, direction); err != nil {
 		app.renderOrders(w, r, account, faction, orderWriteFeedback(err, entity, seq))
 		return
 	}
 	app.renderOrders(w, r, account, faction, orderFeedback{saved: true})
 }
 
-// removeOrder removes one stanza. The unscripted page reaches the same work
+// insertOrder puts a new order after the one the URL names.
+//
+// A player builds a turn a row at a time, and an order that turns out to be
+// missing from the middle of a list would otherwise mean removing everything
+// after it and typing it again. The kind is the one the entity's add control
+// is showing, which is the only kind control on the page.
+func (app *application) insertOrder(w http.ResponseWriter, r *http.Request) {
+	account, faction, ok := app.playerFaction(w, r)
+	if !ok {
+		return
+	}
+	entity, seq, err := pathStanza(r)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	turn, err := app.store.CurrentTurn(r.Context())
+	if err != nil {
+		http.Error(w, "Marajanda could not load your orders.", http.StatusInternalServerError)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		app.renderOrders(w, r, account, faction, orderFeedback{
+			message: "Marajanda could not read that form.", status: http.StatusBadRequest,
+		})
+		return
+	}
+	if err := app.store.InsertOrder(r.Context(), account.Email, turn, entity, seq+1, formOrderKind(r.PostForm, entity), 0); err != nil {
+		app.renderOrders(w, r, account, faction, orderWriteFeedback(err, entity, seq))
+		return
+	}
+	app.renderOrders(w, r, account, faction, orderFeedback{saved: true})
+}
+
+// removeOrder removes one order. The unscripted page reaches the same work
 // through the remove button on the form, which a browser can submit and a
 // DELETE it cannot.
 func (app *application) removeOrder(w http.ResponseWriter, r *http.Request) {
@@ -410,34 +452,32 @@ func buildOrdersView(turn int, entities []datastore.Entity, orders map[int64][]d
 }
 
 func buildStanza(entityID int64, order datastore.Order, feedback orderFeedback) orderStanza {
+	address := fmt.Sprintf("%d.%d", entityID, order.Seq)
 	stanza := orderStanza{
 		Seq:         order.Seq,
 		Kind:        string(order.Kind),
 		Label:       orderKindLabel(order.Kind),
+		Name:        directionFieldName(entityID, order.Seq),
+		Post:        stanzaPath(entityID, order.Seq),
+		SelectLabel: fmt.Sprintf("%s %d direction", orderKindLabel(order.Kind), order.Seq),
+		InsertURL:   stanzaPath(entityID, order.Seq) + "/insert",
+		InsertValue: address,
 		RemoveURL:   stanzaPath(entityID, order.Seq),
-		RemoveValue: fmt.Sprintf("%d.%d", entityID, order.Seq),
+		RemoveValue: address,
+	}
+	// An order with no direction yet shows the blank option, which is what a
+	// row a player has just added looks like.
+	if order.Direction.IsValid() {
+		stanza.Current = strings.ToLower(order.Direction.String())
 	}
 	if feedback.entity == entityID && feedback.seq == order.Seq {
 		stanza.Error = feedback.message
 	}
-	// The boxes are the stored steps plus one blank on the end, which is the
-	// box that appends. There is no other way to lengthen an order.
-	for step := 1; step <= len(order.Steps)+1; step++ {
-		box := orderBox{
-			Step:  step,
-			Name:  stepFieldName(entityID, order.Seq, step),
-			Post:  fmt.Sprintf("%s/%d", stanzaPath(entityID, order.Seq), step),
-			Label: fmt.Sprintf("%s step %d", orderKindLabel(order.Kind), step),
-		}
-		if step <= len(order.Steps) {
-			box.Current = strings.ToLower(order.Steps[step-1].String())
-		}
-		stanza.Boxes = append(stanza.Boxes, box)
-	}
 	return stanza
 }
 
-// orderDirections are the six points a step box offers, in compass order. The
+// orderDirections are the six points a direction select offers, in compass
+// order. The
 // blank option is in the template, because it is the absence of a direction
 // rather than one of them.
 func orderDirections() []orderDirection {
@@ -465,11 +505,19 @@ func stanzaPath(entityID int64, seq int) string {
 	return fmt.Sprintf("%s/%d/%d", ordersPath, entityID, seq)
 }
 
-func stepFieldName(entityID int64, seq, step int) string {
-	return fmt.Sprintf("%s.%d.%d.%d", stepField, entityID, seq, step)
+func directionFieldName(entityID int64, seq int) string {
+	return fmt.Sprintf("%s.%d.%d", directionField, entityID, seq)
 }
 
-// pathStanza reads the entity and the stanza a request addresses out of its
+// formOrderKind reads the kind an entity's add control is showing. It is the
+// one kind control on the page, and both the add and the insert controls send
+// their new order's kind through it.
+func formOrderKind(form url.Values, entityID int64) game.OrderKind {
+	value := form.Get(fmt.Sprintf("%s.%d", kindField, entityID))
+	return game.OrderKind(strings.ToLower(strings.TrimSpace(value)))
+}
+
+// pathStanza reads the entity and the order a request addresses out of its
 // URL.
 func pathStanza(r *http.Request) (int64, int, error) {
 	entity, err := strconv.ParseInt(r.PathValue("entity"), 10, 64)
@@ -500,8 +548,9 @@ func parseStanzaAddress(value string) (int64, int, error) {
 	return entity, seq, nil
 }
 
-// parseDirection reads one step box's value. The blank option is the absence of
-// a direction, which is the zero value the compass keeps invalid on purpose.
+// parseDirection reads one direction select's value. The blank option is the
+// absence of a direction, which is the zero value the compass keeps invalid on
+// purpose.
 func parseDirection(value string) (compass.Point, error) {
 	if strings.TrimSpace(value) == "" {
 		return 0, nil
@@ -509,74 +558,48 @@ func parseDirection(value string) (compass.Point, error) {
 	return compass.Parse(value)
 }
 
-// parseStepFields reads every step box a form carries into the stanzas they
-// belong to.
+// parseDirectionFields reads every direction select a form carries into the
+// orders they belong to.
 //
-// Blanks are dropped and the rest keep their relative order, which is what
-// compacts a submitted page: "move nw <blank> e" arrives here as nw then e, and
-// is stored as steps 1 and 2.
+// A blank select is kept rather than dropped: it means an order whose direction
+// is not chosen, and a save that dropped it would leave the order pointing
+// where it used to. Emptying a row is not removing it; the remove control does
+// that.
 //
-// The stanzas come back in a fixed order - by entity, then by sequence - so a
+// The orders come back in a fixed order - by entity, then by sequence - so a
 // save writes the same rows in the same order however a browser laid the form
 // out.
-func parseStepFields(form url.Values) ([]datastore.OrderSteps, error) {
-	type box struct {
-		step  int
-		point compass.Point
-	}
-	// A stanza with every box blanked is still in the map, with no steps: a
-	// save that dropped it would leave the order as it was rather than
-	// clearing its last direction.
-	boxes := make(map[[2]int64][]box)
+func parseDirectionFields(form url.Values) ([]datastore.OrderDirection, error) {
+	directions := make([]datastore.OrderDirection, 0, len(form))
 	for name, values := range form {
-		if !strings.HasPrefix(name, stepField+".") {
+		if !strings.HasPrefix(name, directionField+".") {
 			continue
 		}
-		parts := strings.Split(strings.TrimPrefix(name, stepField+"."), ".")
-		if len(parts) != 3 {
-			return nil, fmt.Errorf("step field %q: want %s.<entity>.<seq>.<step>", name, stepField)
+		parts := strings.Split(strings.TrimPrefix(name, directionField+"."), ".")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("direction field %q: want %s.<entity>.<seq>", name, directionField)
 		}
 		entity, err := strconv.ParseInt(parts[0], 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("step field %q: %w", name, err)
+			return nil, fmt.Errorf("direction field %q: %w", name, err)
 		}
 		seq, err := strconv.Atoi(parts[1])
 		if err != nil {
-			return nil, fmt.Errorf("step field %q: %w", name, err)
-		}
-		step, err := strconv.Atoi(parts[2])
-		if err != nil {
-			return nil, fmt.Errorf("step field %q: %w", name, err)
+			return nil, fmt.Errorf("direction field %q: %w", name, err)
 		}
 		point, err := parseDirection(values[0])
 		if err != nil {
-			return nil, fmt.Errorf("step field %q: %w", name, err)
+			return nil, fmt.Errorf("direction field %q: %w", name, err)
 		}
-		key := [2]int64{entity, int64(seq)}
-		if _, ok := boxes[key]; !ok {
-			boxes[key] = nil
-		}
-		if point.IsValid() {
-			boxes[key] = append(boxes[key], box{step: step, point: point})
-		}
+		directions = append(directions, datastore.OrderDirection{EntityID: entity, Seq: seq, Direction: point})
 	}
-
-	stanzas := make([]datastore.OrderSteps, 0, len(boxes))
-	for key, filled := range boxes {
-		sort.Slice(filled, func(i, j int) bool { return filled[i].step < filled[j].step })
-		steps := make([]compass.Point, 0, len(filled))
-		for _, box := range filled {
-			steps = append(steps, box.point)
+	sort.Slice(directions, func(i, j int) bool {
+		if directions[i].EntityID != directions[j].EntityID {
+			return directions[i].EntityID < directions[j].EntityID
 		}
-		stanzas = append(stanzas, datastore.OrderSteps{EntityID: key[0], Seq: int(key[1]), Steps: steps})
-	}
-	sort.Slice(stanzas, func(i, j int) bool {
-		if stanzas[i].EntityID != stanzas[j].EntityID {
-			return stanzas[i].EntityID < stanzas[j].EntityID
-		}
-		return stanzas[i].Seq < stanzas[j].Seq
+		return directions[i].Seq < directions[j].Seq
 	})
-	return stanzas, nil
+	return directions, nil
 }
 
 // orderWriteFeedback turns a store's refusal into something a player can read,
@@ -600,10 +623,10 @@ func orderWriteFeedback(err error, entity int64, seq int) orderFeedback {
 		}
 	case errors.Is(err, datastore.ErrOrderKindRefused):
 		feedback.message = "That order is not one this can be given."
-	case errors.Is(err, datastore.ErrUnknownOrder), errors.Is(err, datastore.ErrUnknownStep):
+	case errors.Is(err, datastore.ErrUnknownOrder):
 		feedback.message = "That order is no longer there."
-	case errors.Is(err, datastore.ErrTooManySteps):
-		feedback.message = datastore.ErrTooManySteps.Error() + "."
+	case errors.Is(err, datastore.ErrTooManyOrders):
+		feedback.message = datastore.ErrTooManyOrders.Error() + "."
 	case errors.Is(err, datastore.ErrUnknownEntity):
 		return orderFeedback{
 			message: "That is not one of your faction's.",

@@ -31,16 +31,15 @@ var (
 	// game.EntityKind.Accepts.
 	ErrOrderKindRefused = errors.New("that entity does not take that order")
 
-	// ErrUnknownOrder reports a stanza the entity does not have.
+	// ErrUnknownOrder reports an order the entity does not have. An insert
+	// addresses the position an order is to take, so for it the position one
+	// past the end is a place and anything beyond that is not.
 	ErrUnknownOrder = errors.New("that order is not one of the entity's")
 
-	// ErrUnknownStep reports a step outside the boxes an order shows: its
-	// stored steps, plus the one blank box on the end.
-	ErrUnknownStep = errors.New("that step is not one of the order's boxes")
-
-	// ErrTooManySteps reports an order longer than storage allows. It is a
-	// sanity limit and not the movement allowance; see MaxOrderSteps.
-	ErrTooManySteps = fmt.Errorf("an order carries at most %d steps", MaxOrderSteps)
+	// ErrTooManyOrders reports an entity given more orders in a turn than
+	// storage allows. It is what keeps a tolerated overspend bounded and not
+	// the movement allowance; see MaxOrdersPerEntity.
+	ErrTooManyOrders = fmt.Errorf("an entity carries at most %d orders in a turn", MaxOrdersPerEntity)
 
 	// ErrFactionInactive reports a write by a faction that has been
 	// deactivated. A deactivated faction cannot give orders; its player can
@@ -48,27 +47,30 @@ var (
 	ErrFactionInactive = errors.New("that faction is not active")
 )
 
-// Order is one stanza of an entity's orders for a turn: an order kind and, for
-// a move, the list of directions it walks.
+// Order is one of an entity's orders for a turn: an order kind and whatever
+// that kind needs to be carried out.
 //
-// Steps are contiguous. A stanza is stored compacted, so the list is the whole
-// order and its position in the list is the step number.
+// An order is one action. A move goes one way, so "move nw ne e" is three
+// orders and not one order carrying three directions.
 type Order struct {
-	Seq   int
-	Kind  game.OrderKind
-	Steps []compass.Point
+	Seq  int
+	Kind game.OrderKind
+	// Direction is the way a move goes. The zero value is not a compass point,
+	// so it is a move a player has added and not yet said the direction of,
+	// and it is what an order of a kind that has no direction carries.
+	Direction compass.Point
 }
 
-// OrderSteps addresses one stanza's steps, for a save that carries a whole
-// page of them.
-type OrderSteps struct {
-	EntityID int64
-	Seq      int
-	Steps    []compass.Point
+// OrderDirection addresses one order's direction, for a save that carries a
+// whole page of them.
+type OrderDirection struct {
+	EntityID  int64
+	Seq       int
+	Direction compass.Point
 }
 
 // OrdersAsOf returns the orders a faction's entities carry on turn, keyed by
-// entity and in stanza order.
+// entity and in sequence order.
 //
 // The turn is the caller's, the way it is for EntitiesAsOf. Past turns are
 // stored and are read by exactly this query; only the current turn is writable.
@@ -85,202 +87,117 @@ func (s *Store) OrdersAsOf(ctx context.Context, email string, turn int) (map[int
 	return readFactionOrders(conn, normalizeEmail(email), turn)
 }
 
-// AddOrder appends a stanza to an entity's orders for the turn and returns its
+// AddOrder appends an order to an entity's list for the turn and returns its
 // sequence number.
+//
+// The direction arrives with the kind, because an order is one action and a
+// move that goes nowhere is not one. The blank direction is still allowed: it
+// is what the add control on the page sends, and it means an order a player
+// has added and not yet filled in.
 //
 // The entity's kind decides which order kinds it accepts, so a kind it does not
 // accept is refused here as well as omitted from the form. A hand-built request
 // cannot do what the form declines to show.
-func (s *Store) AddOrder(ctx context.Context, email string, turn int, entityID int64, kind game.OrderKind) (_ int, err error) {
-	if !kind.Valid() {
-		return 0, fmt.Errorf("add order: %w: %q", ErrOrderKindRefused, kind)
-	}
-	email = normalizeEmail(email)
-
-	conn, release, err := s.take(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer release()
-
-	end, err := sqlitex.ImmediateTransaction(conn)
-	if err != nil {
-		return 0, err
-	}
-	defer end(&err)
-
-	if err := requireActiveFaction(conn, email); err != nil {
-		return 0, err
-	}
-	if err := requireOpenTurn(conn, turn); err != nil {
-		return 0, err
-	}
-	entityKind, err := readEntityKind(conn, email, entityID, turn)
-	if err != nil {
-		return 0, err
-	}
-	if !entityKind.Accepts(kind) {
-		return 0, fmt.Errorf("add order: %w: %s takes no %s", ErrOrderKindRefused, entityKind, kind)
-	}
-	orders, err := readEntityOrders(conn, entityID, turn)
-	if err != nil {
-		return 0, err
-	}
-	seq := len(orders) + 1
-	if err := insertOrder(conn, turn, entityID, Order{Seq: seq, Kind: kind}); err != nil {
+func (s *Store) AddOrder(ctx context.Context, email string, turn int, entityID int64, kind game.OrderKind, direction compass.Point) (_ int, err error) {
+	seq := 0
+	if err := s.writeOrders(ctx, email, turn, func(conn *sqlite.Conn) error {
+		orders, err := readOrderableEntityOrders(conn, "add order", email, turn, entityID, kind)
+		if err != nil {
+			return err
+		}
+		seq = len(orders) + 1
+		return insertOrder(conn, turn, entityID, Order{Seq: seq, Kind: kind, Direction: direction})
+	}); err != nil {
 		return 0, err
 	}
 	return seq, nil
 }
 
-// SetOrderStep sets one step box of one stanza.
+// InsertOrder puts an order at a position in an entity's list, shifting the
+// orders from that position on up by one.
 //
-// step addresses a box the page showed: one of the stored steps, or the blank
-// box on the end, which is step count plus one. An invalid direction - the
-// compass point's zero value - is the blank option, and it clears the box.
-//
-// Clearing a box in the middle compacts the rest, so an order has exactly one
-// stored form. Clearing the trailing blank box changes nothing.
-func (s *Store) SetOrderStep(ctx context.Context, email string, turn int, entityID int64, seq, step int, direction compass.Point) (err error) {
-	email = normalizeEmail(email)
-
-	conn, release, err := s.take(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	end, err := sqlitex.ImmediateTransaction(conn)
-	if err != nil {
-		return err
-	}
-	defer end(&err)
-
-	if err := requireActiveFaction(conn, email); err != nil {
-		return err
-	}
-	if err := requireOpenTurn(conn, turn); err != nil {
-		return err
-	}
-	if err := requireEntity(conn, email, entityID); err != nil {
-		return err
-	}
-	orders, err := readEntityOrders(conn, entityID, turn)
-	if err != nil {
-		return err
-	}
-	index := indexOfOrder(orders, seq)
-	if index < 0 {
-		return fmt.Errorf("set order step: %w: %d", ErrUnknownOrder, seq)
-	}
-	steps := orders[index].Steps
-	switch {
-	case step < 1 || step > len(steps)+1:
-		return fmt.Errorf("set order step: %w: %d", ErrUnknownStep, step)
-	case step == len(steps)+1:
-		// The blank box on the end. A direction appends a step; the blank
-		// option leaves an order that already ends where it ended.
-		if !direction.IsValid() {
-			return nil
-		}
-		steps = append(steps, direction)
-	case !direction.IsValid():
-		steps = append(steps[:step-1:step-1], steps[step:]...)
-	default:
-		steps[step-1] = direction
-	}
-	orders[index].Steps = steps
-	return writeOrderSteps(conn, turn, entityID, orders[index])
-}
-
-// SetOrderSteps replaces the steps of every stanza it is given, in one
-// transaction.
-//
-// It is what the script-free page's one Save button saves: a whole page of
-// boxes, applied together or not at all. Blank boxes are the caller's to drop -
-// what arrives here is the compacted list the stanza is to have.
-func (s *Store) SetOrderSteps(ctx context.Context, email string, turn int, stanzas []OrderSteps) (err error) {
-	if len(stanzas) == 0 {
-		return nil
-	}
-	email = normalizeEmail(email)
-
-	conn, release, err := s.take(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	end, err := sqlitex.ImmediateTransaction(conn)
-	if err != nil {
-		return err
-	}
-	defer end(&err)
-
-	if err := requireActiveFaction(conn, email); err != nil {
-		return err
-	}
-	if err := requireOpenTurn(conn, turn); err != nil {
-		return err
-	}
-	for _, stanza := range stanzas {
-		if err := requireEntity(conn, email, stanza.EntityID); err != nil {
-			return err
-		}
-		orders, err := readEntityOrders(conn, stanza.EntityID, turn)
+// seq is the position the new order takes, from 1 to one past the end. One
+// past the end is an append, which is what the control that inserts after the
+// last order asks for.
+func (s *Store) InsertOrder(ctx context.Context, email string, turn int, entityID int64, seq int, kind game.OrderKind, direction compass.Point) error {
+	return s.writeOrders(ctx, email, turn, func(conn *sqlite.Conn) error {
+		orders, err := readOrderableEntityOrders(conn, "insert order", email, turn, entityID, kind)
 		if err != nil {
 			return err
 		}
-		index := indexOfOrder(orders, stanza.Seq)
-		if index < 0 {
-			return fmt.Errorf("set order steps: %w: %d", ErrUnknownOrder, stanza.Seq)
+		if seq < 1 || seq > len(orders)+1 {
+			return fmt.Errorf("insert order: %w: %d", ErrUnknownOrder, seq)
 		}
-		orders[index].Steps = stanza.Steps
-		if err := writeOrderSteps(conn, turn, stanza.EntityID, orders[index]); err != nil {
-			return err
-		}
-	}
-	return nil
+		inserted := make([]Order, 0, len(orders)+1)
+		inserted = append(inserted, orders[:seq-1]...)
+		inserted = append(inserted, Order{Kind: kind, Direction: direction})
+		inserted = append(inserted, orders[seq-1:]...)
+		return rewriteEntityOrders(conn, turn, entityID, inserted)
+	})
 }
 
-// RemoveOrder deletes a stanza and renumbers the ones after it, so the
+// SetOrderDirection sets which way one order goes.
+//
+// An invalid direction - the compass point's zero value - is the blank option,
+// and it leaves the order in place with nothing said about where it goes.
+// Removing the order is RemoveOrder's work, not the blank option's.
+func (s *Store) SetOrderDirection(ctx context.Context, email string, turn int, entityID int64, seq int, direction compass.Point) error {
+	return s.SetOrderDirections(ctx, email, turn, []OrderDirection{
+		{EntityID: entityID, Seq: seq, Direction: direction},
+	})
+}
+
+// SetOrderDirections sets the direction of every order it is given, in one
+// transaction.
+//
+// It is what the script-free page's one Save button saves: a whole page of
+// selects, applied together or not at all.
+func (s *Store) SetOrderDirections(ctx context.Context, email string, turn int, directions []OrderDirection) error {
+	if len(directions) == 0 {
+		return nil
+	}
+	return s.writeOrders(ctx, email, turn, func(conn *sqlite.Conn) error {
+		for _, wanted := range directions {
+			if err := requireEntity(conn, normalizeEmail(email), wanted.EntityID); err != nil {
+				return err
+			}
+			orders, err := readEntityOrders(conn, wanted.EntityID, turn)
+			if err != nil {
+				return err
+			}
+			index := indexOfOrder(orders, wanted.Seq)
+			if index < 0 {
+				return fmt.Errorf("set order direction: %w: %d", ErrUnknownOrder, wanted.Seq)
+			}
+			orders[index].Direction = wanted.Direction
+			if err := writeOrderDetail(conn, turn, wanted.EntityID, orders[index]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// RemoveOrder deletes an order and renumbers the ones after it, so the
 // sequence stays 1..N with no gap.
 //
 // Only the open turn is touched. Nothing removes an order from a turn that has
 // been advanced past.
-func (s *Store) RemoveOrder(ctx context.Context, email string, turn int, entityID int64, seq int) (err error) {
-	email = normalizeEmail(email)
-
-	conn, release, err := s.take(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	end, err := sqlitex.ImmediateTransaction(conn)
-	if err != nil {
-		return err
-	}
-	defer end(&err)
-
-	if err := requireActiveFaction(conn, email); err != nil {
-		return err
-	}
-	if err := requireOpenTurn(conn, turn); err != nil {
-		return err
-	}
-	if err := requireEntity(conn, email, entityID); err != nil {
-		return err
-	}
-	orders, err := readEntityOrders(conn, entityID, turn)
-	if err != nil {
-		return err
-	}
-	index := indexOfOrder(orders, seq)
-	if index < 0 {
-		return fmt.Errorf("remove order: %w: %d", ErrUnknownOrder, seq)
-	}
-	return rewriteEntityOrders(conn, turn, entityID, append(orders[:index:index], orders[index+1:]...))
+func (s *Store) RemoveOrder(ctx context.Context, email string, turn int, entityID int64, seq int) error {
+	return s.writeOrders(ctx, email, turn, func(conn *sqlite.Conn) error {
+		if err := requireEntity(conn, normalizeEmail(email), entityID); err != nil {
+			return err
+		}
+		orders, err := readEntityOrders(conn, entityID, turn)
+		if err != nil {
+			return err
+		}
+		index := indexOfOrder(orders, seq)
+		if index < 0 {
+			return fmt.Errorf("remove order: %w: %d", ErrUnknownOrder, seq)
+		}
+		return rewriteEntityOrders(conn, turn, entityID, append(orders[:index:index], orders[index+1:]...))
+	})
 }
 
 // AdvanceTurn moves the game's clock on by one and returns the turn it now
@@ -316,6 +233,34 @@ func (s *Store) AdvanceTurn(ctx context.Context) (_ int, err error) {
 		return 0, fmt.Errorf("advance turn: %w", err)
 	}
 	return next, nil
+}
+
+// writeOrders runs one order write inside a transaction, after the two checks
+// every order write starts with.
+//
+// The gates are the store's own invariants rather than checks a caller can
+// arrange to pass, so they belong to the write rather than to each method that
+// makes one.
+func (s *Store) writeOrders(ctx context.Context, email string, turn int, write func(*sqlite.Conn) error) (err error) {
+	conn, release, err := s.take(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	end, err := sqlitex.ImmediateTransaction(conn)
+	if err != nil {
+		return err
+	}
+	defer end(&err)
+
+	if err := requireActiveFaction(conn, normalizeEmail(email)); err != nil {
+		return err
+	}
+	if err := requireOpenTurn(conn, turn); err != nil {
+		return err
+	}
+	return write(conn)
 }
 
 // requireOpenTurn refuses a write aimed at any turn but the one the game is on.
@@ -409,36 +354,54 @@ func readEntityKind(conn *sqlite.Conn, normalizedEmail string, entityID int64, t
 	return kind, nil
 }
 
-// readFactionOrders reads every stanza the faction's entities carry on turn.
+// readOrderableEntityOrders is what the two writes that lengthen a list start
+// with: it confirms the entity is the faction's, that it stood in the world on
+// the turn and that its kind takes the order kind, and reads the list the new
+// order joins.
+func readOrderableEntityOrders(conn *sqlite.Conn, what, email string, turn int, entityID int64, kind game.OrderKind) ([]Order, error) {
+	if !kind.Valid() {
+		return nil, fmt.Errorf("%s: %w: %q", what, ErrOrderKindRefused, kind)
+	}
+	entityKind, err := readEntityKind(conn, normalizeEmail(email), entityID, turn)
+	if err != nil {
+		return nil, err
+	}
+	if !entityKind.Accepts(kind) {
+		return nil, fmt.Errorf("%s: %w: %s takes no %s", what, ErrOrderKindRefused, entityKind, kind)
+	}
+	orders, err := readEntityOrders(conn, entityID, turn)
+	if err != nil {
+		return nil, err
+	}
+	if len(orders) >= MaxOrdersPerEntity {
+		return nil, fmt.Errorf("%s: %w", what, ErrTooManyOrders)
+	}
+	return orders, nil
+}
+
+// readFactionOrders reads every order the faction's entities carry on turn.
 //
-// The join to the steps is outer: a stanza with no steps yet is an order a
-// player has added and not filled in, and it has to come back so the page can
-// draw its blank box.
+// The join to the detail table is outer: an order with no direction yet is one
+// a player has added and not filled in, and it has to come back so the page can
+// draw its blank select.
 func readFactionOrders(conn *sqlite.Conn, normalizedEmail string, turn int) (map[int64][]Order, error) {
 	orders := make(map[int64][]Order)
 	if err := sqlitex.ExecuteTransient(conn, `
-		SELECT orders.entity_id, orders.seq, orders.kind, order_steps.direction
+		SELECT orders.entity_id, orders.seq, orders.kind, move_orders.direction
 		FROM orders
 		JOIN entities ON entities.id = orders.entity_id
-		LEFT JOIN order_steps ON order_steps.turn = orders.turn
-			AND order_steps.entity_id = orders.entity_id AND order_steps.seq = orders.seq
+		LEFT JOIN move_orders ON move_orders.turn = orders.turn
+			AND move_orders.entity_id = orders.entity_id AND move_orders.seq = orders.seq
 		WHERE entities.faction_email = ?1 AND orders.turn = ?2
-		ORDER BY orders.entity_id, orders.seq, order_steps.step;`, &sqlitex.ExecOptions{
+		ORDER BY orders.entity_id, orders.seq;`, &sqlitex.ExecOptions{
 		Args: []any{normalizedEmail, turn},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
-			entityID, seq := stmt.ColumnInt64(0), stmt.ColumnInt(1)
-			stanzas := orders[entityID]
-			if len(stanzas) == 0 || stanzas[len(stanzas)-1].Seq != seq {
-				stanzas = append(stanzas, Order{Seq: seq, Kind: game.OrderKind(stmt.ColumnText(2))})
+			entityID := stmt.ColumnInt64(0)
+			order, err := scanOrder(stmt, 1)
+			if err != nil {
+				return fmt.Errorf("entity %d: %w", entityID, err)
 			}
-			if direction := stmt.ColumnText(3); direction != "" {
-				point, err := compass.Parse(direction)
-				if err != nil {
-					return fmt.Errorf("entity %d order %d: %w", entityID, seq, err)
-				}
-				stanzas[len(stanzas)-1].Steps = append(stanzas[len(stanzas)-1].Steps, point)
-			}
-			orders[entityID] = stanzas
+			orders[entityID] = append(orders[entityID], order)
 			return nil
 		},
 	}); err != nil {
@@ -447,36 +410,45 @@ func readFactionOrders(conn *sqlite.Conn, normalizedEmail string, turn int) (map
 	return orders, nil
 }
 
-// readEntityOrders reads one entity's stanzas for a turn, in sequence order.
+// readEntityOrders reads one entity's orders for a turn, in sequence order.
 // It runs inside the caller's transaction.
 func readEntityOrders(conn *sqlite.Conn, entityID int64, turn int) ([]Order, error) {
 	orders := make([]Order, 0)
 	if err := sqlitex.ExecuteTransient(conn, `
-		SELECT orders.seq, orders.kind, order_steps.direction
+		SELECT orders.seq, orders.kind, move_orders.direction
 		FROM orders
-		LEFT JOIN order_steps ON order_steps.turn = orders.turn
-			AND order_steps.entity_id = orders.entity_id AND order_steps.seq = orders.seq
+		LEFT JOIN move_orders ON move_orders.turn = orders.turn
+			AND move_orders.entity_id = orders.entity_id AND move_orders.seq = orders.seq
 		WHERE orders.turn = ?1 AND orders.entity_id = ?2
-		ORDER BY orders.seq, order_steps.step;`, &sqlitex.ExecOptions{
+		ORDER BY orders.seq;`, &sqlitex.ExecOptions{
 		Args: []any{turn, entityID},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
-			seq := stmt.ColumnInt(0)
-			if len(orders) == 0 || orders[len(orders)-1].Seq != seq {
-				orders = append(orders, Order{Seq: seq, Kind: game.OrderKind(stmt.ColumnText(1))})
+			order, err := scanOrder(stmt, 0)
+			if err != nil {
+				return err
 			}
-			if direction := stmt.ColumnText(2); direction != "" {
-				point, err := compass.Parse(direction)
-				if err != nil {
-					return fmt.Errorf("order %d: %w", seq, err)
-				}
-				orders[len(orders)-1].Steps = append(orders[len(orders)-1].Steps, point)
-			}
+			orders = append(orders, order)
 			return nil
 		},
 	}); err != nil {
 		return nil, fmt.Errorf("look up orders: %w", err)
 	}
 	return orders, nil
+}
+
+// scanOrder reads a sequence, a kind and a direction from three columns
+// starting at first. An empty direction column is the outer join finding no
+// detail row, which is an order with nothing said about where it goes.
+func scanOrder(stmt *sqlite.Stmt, first int) (Order, error) {
+	order := Order{Seq: stmt.ColumnInt(first), Kind: game.OrderKind(stmt.ColumnText(first + 1))}
+	if direction := stmt.ColumnText(first + 2); direction != "" {
+		point, err := compass.Parse(direction)
+		if err != nil {
+			return Order{}, fmt.Errorf("order %d: %w", order.Seq, err)
+		}
+		order.Direction = point
+	}
+	return order, nil
 }
 
 func indexOfOrder(orders []Order, seq int) int {
@@ -488,7 +460,7 @@ func indexOfOrder(orders []Order, seq int) int {
 	return -1
 }
 
-// insertOrder writes one stanza and its steps. It runs inside the caller's
+// insertOrder writes one order and its detail row. It runs inside the caller's
 // transaction.
 func insertOrder(conn *sqlite.Conn, turn int, entityID int64, order Order) error {
 	if err := sqlitex.ExecuteTransient(conn, `
@@ -497,52 +469,49 @@ func insertOrder(conn *sqlite.Conn, turn int, entityID int64, order Order) error
 	}); err != nil {
 		return fmt.Errorf("add order: %w", err)
 	}
-	return writeOrderSteps(conn, turn, entityID, order)
+	return writeOrderDetail(conn, turn, entityID, order)
 }
 
-// writeOrderSteps replaces a stanza's steps with the list it carries,
-// numbering them 1..N.
+// writeOrderDetail replaces what an order's kind stores beyond its kind.
 //
-// Replacing rather than patching is what compacts: the stored steps are
-// whatever the caller's list holds, in its order, with no gap to leave behind.
-// It runs inside the caller's transaction.
-func writeOrderSteps(conn *sqlite.Conn, turn int, entityID int64, order Order) error {
-	if len(order.Steps) > MaxOrderSteps {
-		return fmt.Errorf("set order steps: %w", ErrTooManySteps)
-	}
-	for _, point := range order.Steps {
-		if !point.IsValid() {
-			return fmt.Errorf("set order steps: %w: %s", compass.ErrUnknownPoint, point)
-		}
-	}
+// A move with a direction is one row in move_orders; a move without one is no
+// row at all, which is how an order a player has added and not filled in is
+// stored. It runs inside the caller's transaction.
+func writeOrderDetail(conn *sqlite.Conn, turn int, entityID int64, order Order) error {
 	if err := sqlitex.ExecuteTransient(conn, `
-		DELETE FROM order_steps WHERE turn = ?1 AND entity_id = ?2 AND seq = ?3;`, &sqlitex.ExecOptions{
+		DELETE FROM move_orders WHERE turn = ?1 AND entity_id = ?2 AND seq = ?3;`, &sqlitex.ExecOptions{
 		Args: []any{turn, entityID, order.Seq},
 	}); err != nil {
-		return fmt.Errorf("clear order steps: %w", err)
+		return fmt.Errorf("clear order direction: %w", err)
 	}
-	for index, point := range order.Steps {
-		if err := sqlitex.ExecuteTransient(conn, `
-			INSERT INTO order_steps (turn, entity_id, seq, step, direction)
-			VALUES (?1, ?2, ?3, ?4, ?5);`, &sqlitex.ExecOptions{
-			Args: []any{turn, entityID, order.Seq, index + 1, storedDirection(point)},
-		}); err != nil {
-			return fmt.Errorf("set order steps: %w", err)
-		}
+	if order.Direction == 0 {
+		return nil
+	}
+	if !order.Direction.IsValid() {
+		return fmt.Errorf("set order direction: %w: %s", compass.ErrUnknownPoint, order.Direction)
+	}
+	if err := sqlitex.ExecuteTransient(conn, `
+		INSERT INTO move_orders (turn, entity_id, seq, direction) VALUES (?1, ?2, ?3, ?4);`, &sqlitex.ExecOptions{
+		Args: []any{turn, entityID, order.Seq, storedDirection(order.Direction)},
+	}); err != nil {
+		return fmt.Errorf("set order direction: %w", err)
 	}
 	return nil
 }
 
-// rewriteEntityOrders replaces an entity's stanzas for a turn with the list it
+// rewriteEntityOrders replaces an entity's orders for a turn with the list it
 // is given, renumbering them 1..N.
 //
 // Delete and reinsert rather than an UPDATE that shifts sequence numbers: the
-// steps hang off the sequence number, and a bulk shift would depend on the
-// order SQLite happened to walk the rows in to avoid colliding with a number
-// that has not moved yet. An entity's orders are a handful of rows.
+// detail rows hang off the sequence number, and a bulk shift would depend on
+// the order SQLite happened to walk the rows in to avoid colliding with a
+// number that has not moved yet. An entity's orders are a handful of rows.
 // It runs inside the caller's transaction.
 func rewriteEntityOrders(conn *sqlite.Conn, turn int, entityID int64, orders []Order) error {
-	// The steps go with them: order_steps cascades from orders.
+	if len(orders) > MaxOrdersPerEntity {
+		return fmt.Errorf("write orders: %w", ErrTooManyOrders)
+	}
+	// The detail rows go with them: move_orders cascades from orders.
 	if err := sqlitex.ExecuteTransient(conn, `
 		DELETE FROM orders WHERE turn = ?1 AND entity_id = ?2;`, &sqlitex.ExecOptions{
 		Args: []any{turn, entityID},

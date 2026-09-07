@@ -100,6 +100,12 @@ An [entity](#entity) that is a place rather than a person.
 `hamlet` is the only settlement kind so far, and a faction is founded with one, `HAMLET-1`.
 It is an entity rather than a [unit](#unit) because it has a location, a mutable kind, a name a player may change, and inventory of its own.
 
+## Step
+
+One hex of movement in a turn's results: a `move` [order](#order) that is carried out is a step taken.
+It is not a unit of order entry. An order is one action, so a step is what a move produces rather than something an order carries a list of.
+See [Orders reference](orders.md).
+
 ## Turn
 
 The game's clock.

@@ -160,8 +160,7 @@ func TestAnInactiveFactionGivesNoOrders(t *testing.T) {
 	defer store.Close()
 
 	leader, _ := foundedFaction(t, store)
-	seq := addMove(t, store, leader.ID)
-	setStep(t, store, leader.ID, seq, 1, compass.NE)
+	seq := addMove(t, store, leader.ID, compass.NE)
 
 	turn, err := store.CurrentTurn(t.Context())
 	if err != nil {
@@ -172,15 +171,18 @@ func TestAnInactiveFactionGivesNoOrders(t *testing.T) {
 		write func() error
 	}{
 		{name: "AddOrder", write: func() error {
-			_, err := store.AddOrder(t.Context(), orderPlayer, turn, leader.ID, game.OrderKindMove)
+			_, err := store.AddOrder(t.Context(), orderPlayer, turn, leader.ID, game.OrderKindMove, compass.E)
 			return err
 		}},
-		{name: "SetOrderStep", write: func() error {
-			return store.SetOrderStep(t.Context(), orderPlayer, turn, leader.ID, seq, 1, compass.E)
+		{name: "InsertOrder", write: func() error {
+			return store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, seq, game.OrderKindMove, compass.SE)
 		}},
-		{name: "SetOrderSteps", write: func() error {
-			return store.SetOrderSteps(t.Context(), orderPlayer, turn, []OrderSteps{
-				{EntityID: leader.ID, Seq: seq, Steps: []compass.Point{compass.E}},
+		{name: "SetOrderDirection", write: func() error {
+			return store.SetOrderDirection(t.Context(), orderPlayer, turn, leader.ID, seq, compass.E)
+		}},
+		{name: "SetOrderDirections", write: func() error {
+			return store.SetOrderDirections(t.Context(), orderPlayer, turn, []OrderDirection{
+				{EntityID: leader.ID, Seq: seq, Direction: compass.E},
 			})
 		}},
 		{name: "RemoveOrder", write: func() error {

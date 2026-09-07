@@ -59,7 +59,7 @@ var htmxHeader = map[string]string{"HX-Request": "true"}
 // order, and offers each entity only the kinds its own kind accepts.
 func TestOrdersPageListsTheWholeForce(t *testing.T) {
 	store := ordersStore()
-	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Steps: []compass.Point{compass.NW}}}
+	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Direction: compass.NW}}
 	response := ordersRequest(t, store, http.MethodGet, "/player/orders", "", nil)
 
 	if response.Code != http.StatusOK {
@@ -95,35 +95,41 @@ func TestOrdersPageListsTheWholeForce(t *testing.T) {
 	}
 }
 
-// The boxes are the stored steps plus one blank on the end, and each carries
-// its whole address: in its name, for a save that submits the page, and in the
-// URL it posts to, for a save that does not.
-func TestAStanzaShowsOneMoreBoxThanItHasSteps(t *testing.T) {
+// An order is one action, so it is one select. Each carries its whole address:
+// in its name, for a save that submits the page, and in the URL it posts to,
+// for a save that does not.
+func TestEachOrderIsOneDirectionSelect(t *testing.T) {
 	store := ordersStore()
-	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Steps: []compass.Point{compass.NW, compass.E}}}
+	store.orders[7] = []datastore.Order{
+		{Seq: 1, Kind: game.OrderKindMove, Direction: compass.NW},
+		{Seq: 2, Kind: game.OrderKindMove, Direction: compass.E},
+		{Seq: 3, Kind: game.OrderKindMove},
+	}
 	body := ordersRequest(t, store, http.MethodGet, "/player/orders", "", nil).Body.String()
 
-	for step, selected := range []string{"nw", "e", ""} {
-		name := fmt.Sprintf(`name="step.7.1.%d"`, step+1)
-		post := fmt.Sprintf(`hx-post="/player/orders/7/1/%d"`, step+1)
+	for seq, selected := range []string{"nw", "e", ""} {
+		name := fmt.Sprintf(`name="direction.7.%d"`, seq+1)
+		post := fmt.Sprintf(`hx-post="/player/orders/7/%d"`, seq+1)
 		if !strings.Contains(body, name) || !strings.Contains(body, post) {
-			t.Fatalf("box %d is missing %s or %s", step+1, name, post)
+			t.Fatalf("order %d is missing %s or %s", seq+1, name, post)
 		}
 		if selected == "" {
 			continue
 		}
 		if want := fmt.Sprintf(`<option value="%s" selected>`, selected); !strings.Contains(body, want) {
-			t.Fatalf("box %d does not show %q", step+1, selected)
+			t.Fatalf("order %d does not show %q", seq+1, selected)
 		}
 	}
-	if got, want := strings.Count(body, `name="step.7.1.`), 3; got != want {
-		t.Fatalf("boxes = %d, want %d - two steps and the blank on the end", got, want)
+	// Three orders, three selects. There is no blank box on the end of a row
+	// and no fourth row: the add control is what lengthens the list.
+	if got, want := strings.Count(body, `name="direction.7.`), 3; got != want {
+		t.Fatalf("selects = %d, want %d - one per order", got, want)
 	}
-	// Every box offers the six points in compass order, and the blank that
-	// clears it.
+	// Every select offers the six points in compass order, and the blank that
+	// says nothing has been chosen.
 	for _, want := range []string{`value=""`, `value="ne">NE north-east`, `value="nw">NW north-west`} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("a box is missing the option %q", want)
+			t.Fatalf("a select is missing the option %q", want)
 		}
 	}
 }
@@ -138,6 +144,7 @@ func TestOrdersPageWorksWithoutScript(t *testing.T) {
 	for _, want := range []string{
 		`<form class="orders-form" action="/player/orders" method="post">`,
 		`name="remove" value="7.1"`,
+		`name="insert" value="7.1"`,
 		`name="add" value="7"`,
 		"<noscript>",
 		`type="submit">Save orders</button>`,
@@ -147,8 +154,8 @@ func TestOrdersPageWorksWithoutScript(t *testing.T) {
 		}
 	}
 	// Enter in a field submits a form through its first submit button. That
-	// button saves; without it, Enter in a step box would press the first
-	// Remove on the page.
+	// button saves; without it, Enter in a direction select would press the
+	// first Remove on the page.
 	if index := strings.Index(body, `<button class="visually-hidden" type="submit" tabindex="-1">Save orders</button>`); index < 0 {
 		t.Fatal("the form has no default submit button, so Enter would remove an order")
 	} else if remove := strings.Index(body, `name="remove"`); remove < index {
@@ -158,7 +165,8 @@ func TestOrdersPageWorksWithoutScript(t *testing.T) {
 	// submits the form.
 	for _, want := range []string{
 		`<div id="orders" hx-target="#orders" hx-swap="outerHTML" hx-indicator="#orders">`,
-		`hx-post="/player/orders/7/1/1" hx-trigger="change"`,
+		`hx-post="/player/orders/7/1" hx-trigger="change"`,
+		`hx-post="/player/orders/7/1/insert"`,
 		`hx-delete="/player/orders/7/1"`,
 		`hx-post="/player/orders"`,
 	} {
@@ -169,11 +177,11 @@ func TestOrdersPageWorksWithoutScript(t *testing.T) {
 }
 
 // A write answers HTMX with the whole orders region and nothing around it.
-func TestSettingAStepAnswersWithTheRegionAlone(t *testing.T) {
+func TestSettingADirectionAnswersWithTheRegionAlone(t *testing.T) {
 	store := ordersStore()
 	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove}}
-	response := ordersRequest(t, store, http.MethodPost, "/player/orders/7/1/1",
-		"step.7.1.1=ne", htmxHeader)
+	response := ordersRequest(t, store, http.MethodPost, "/player/orders/7/1",
+		"direction.7.1=ne", htmxHeader)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
@@ -190,49 +198,90 @@ func TestSettingAStepAnswersWithTheRegionAlone(t *testing.T) {
 	if !strings.Contains(body, "Saved at ") {
 		t.Fatalf("fragment says nothing about the save")
 	}
-	// The step landed, and it was written for the turn the page is on.
-	if got := store.orders[7][0].Steps; len(got) != 1 || got[0] != compass.NE {
-		t.Fatalf("steps = %v, want NE", got)
+	// The direction landed, and it was written for the turn the page is on.
+	if got := store.orders[7][0].Direction; got != compass.NE {
+		t.Fatalf("direction = %v, want NE", got)
 	}
 	if store.wroteTurn != 3 {
 		t.Fatalf("wrote turn %d, want 3", store.wroteTurn)
 	}
-	// The answer is the whole region, so the blank box on the end came back
-	// with it.
-	if got, want := strings.Count(body, `name="step.7.1.`), 2; got != want {
-		t.Fatalf("boxes = %d, want %d - the step and a fresh blank", got, want)
+	// The answer is the whole region, and the order is still one row.
+	if got, want := strings.Count(body, `name="direction.7.`), 1; got != want {
+		t.Fatalf("selects = %d, want %d", got, want)
 	}
 }
 
-// HTMX sends the whole enclosing form with every request, so the other boxes
-// arrive too. The route changes the one box its URL names.
-func TestSettingAStepIgnoresTheOtherBoxesInTheForm(t *testing.T) {
+// HTMX sends the whole enclosing form with every request, so the other selects
+// arrive too. The route changes the one order its URL names.
+func TestSettingADirectionIgnoresTheOtherSelectsInTheForm(t *testing.T) {
 	store := ordersStore()
-	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Steps: []compass.Point{compass.NW, compass.E}}}
-	ordersRequest(t, store, http.MethodPost, "/player/orders/7/1/2",
-		"step.7.1.1=sw&step.7.1.2=se&step.7.1.3=", htmxHeader)
+	store.orders[7] = []datastore.Order{
+		{Seq: 1, Kind: game.OrderKindMove, Direction: compass.NW},
+		{Seq: 2, Kind: game.OrderKindMove, Direction: compass.E},
+	}
+	ordersRequest(t, store, http.MethodPost, "/player/orders/7/2",
+		"direction.7.1=sw&direction.7.2=se", htmxHeader)
 
-	steps := store.orders[7][0].Steps
-	if len(steps) != 2 || steps[0] != compass.NW || steps[1] != compass.SE {
-		t.Fatalf("steps = %v, want NW SE - the first box untouched", steps)
+	orders := store.orders[7]
+	if orders[0].Direction != compass.NW || orders[1].Direction != compass.SE {
+		t.Fatalf("orders = %#v, want NW SE - the first left alone", orders)
 	}
 }
 
-// The blank option clears a box, and the region comes back with the rest
-// shifted left.
-func TestClearingAStepIsTheBlankOption(t *testing.T) {
+// The blank option empties a row without removing it. Removing is what the
+// remove control does.
+func TestTheBlankOptionEmptiesARowWithoutRemovingIt(t *testing.T) {
 	store := ordersStore()
-	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Steps: []compass.Point{compass.NW, compass.E}}}
-	ordersRequest(t, store, http.MethodPost, "/player/orders/7/1/1", "step.7.1.1=", htmxHeader)
+	store.orders[7] = []datastore.Order{
+		{Seq: 1, Kind: game.OrderKindMove, Direction: compass.NW},
+		{Seq: 2, Kind: game.OrderKindMove, Direction: compass.E},
+	}
+	body := ordersRequest(t, store, http.MethodPost, "/player/orders/7/1", "direction.7.1=", htmxHeader).Body.String()
 
-	if steps := store.orders[7][0].Steps; len(steps) != 1 || steps[0] != compass.E {
-		t.Fatalf("steps = %v, want E", steps)
+	orders := store.orders[7]
+	if len(orders) != 2 || orders[0].Direction.IsValid() || orders[1].Direction != compass.E {
+		t.Fatalf("orders = %#v, want the first emptied and both still there", orders)
+	}
+	if got, want := strings.Count(body, `name="direction.7.`), 2; got != want {
+		t.Fatalf("selects = %d, want %d - the row is still on the page", got, want)
 	}
 }
 
-// The add control appends a stanza of the kind it names, and the remove control
-// takes one away. Both work from the same form.
-func TestAddingAndRemovingAStanza(t *testing.T) {
+// The insert control puts a new order after the one it names, so a list can be
+// corrected in the middle.
+func TestInsertingAnOrderAfterAnother(t *testing.T) {
+	store := ordersStore()
+	store.orders[7] = []datastore.Order{
+		{Seq: 1, Kind: game.OrderKindMove, Direction: compass.NW},
+		{Seq: 2, Kind: game.OrderKindMove, Direction: compass.E},
+	}
+	response := ordersRequest(t, store, http.MethodPost, "/player/orders/7/1/insert", "kind.7=move", htmxHeader)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	// The button names the order the new one goes after; the position asked
+	// for is the next one.
+	if store.insertedAt != 2 {
+		t.Fatalf("inserted at %d, want 2", store.insertedAt)
+	}
+	orders := store.orders[7]
+	if len(orders) != 3 || orders[1].Direction.IsValid() || orders[2].Direction != compass.E {
+		t.Fatalf("orders = %#v, want a blank move between NW and E", orders)
+	}
+	// The same button works without script, through the form.
+	unscripted := ordersStore()
+	unscripted.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Direction: compass.NW}}
+	ordersRequest(t, unscripted, http.MethodPost, "/player/orders", "insert=7.1&kind.7=move", nil)
+	if unscripted.insertedAt != 2 || len(unscripted.orders[7]) != 2 {
+		t.Fatalf("unscripted insert put %d orders in at %d, want 2 at 2",
+			len(unscripted.orders[7]), unscripted.insertedAt)
+	}
+}
+
+// The add control appends an order of the kind it names, and the remove
+// control takes one away. Both work from the same form.
+func TestAddingAndRemovingAnOrder(t *testing.T) {
 	store := ordersStore()
 	response := ordersRequest(t, store, http.MethodPost, "/player/orders", "add=7&kind.7=move", htmxHeader)
 
@@ -242,9 +291,9 @@ func TestAddingAndRemovingAStanza(t *testing.T) {
 	if got := store.orders[7]; len(got) != 1 || got[0].Kind != game.OrderKindMove || got[0].Seq != 1 {
 		t.Fatalf("orders = %#v, want one move", got)
 	}
-	// A new stanza has no steps, so it shows the one blank box that appends.
-	if got, want := strings.Count(response.Body.String(), `name="step.7.1.`), 1; got != want {
-		t.Fatalf("boxes = %d, want %d", got, want)
+	// A new order has no direction, so its select shows the blank option.
+	if got, want := strings.Count(response.Body.String(), `name="direction.7.1"`), 1; got != want {
+		t.Fatalf("selects = %d, want %d", got, want)
 	}
 
 	removed := ordersRequest(t, store, http.MethodDelete, "/player/orders/7/1", "", htmxHeader)
@@ -256,21 +305,17 @@ func TestAddingAndRemovingAStanza(t *testing.T) {
 	}
 }
 
-// A browser without script submits every box at once. Blanks are dropped on the
-// way in, so the save compacts exactly as a box-at-a-time edit does, and the
-// answer is a redirect rather than a page a refresh would post again.
-func TestSavingTheWholePageCompactsAndRedirects(t *testing.T) {
+// A browser without script submits every select at once, and the answer is a
+// redirect rather than a page a refresh would post again.
+func TestSavingTheWholePageRedirects(t *testing.T) {
 	store := ordersStore()
 	store.orders[7] = []datastore.Order{
-		{Seq: 1, Kind: game.OrderKindMove, Steps: []compass.Point{compass.NW, compass.NE, compass.E}},
-		{Seq: 2, Kind: game.OrderKindMove},
+		{Seq: 1, Kind: game.OrderKindMove, Direction: compass.NW},
+		{Seq: 2, Kind: game.OrderKindMove, Direction: compass.NE},
 	}
 	form := url.Values{
-		"step.7.1.1": {"nw"},
-		"step.7.1.2": {""},
-		"step.7.1.3": {"e"},
-		"step.7.1.4": {""},
-		"step.7.2.1": {""},
+		"direction.7.1": {"e"},
+		"direction.7.2": {""},
 	}
 	response := ordersRequest(t, store, http.MethodPost, "/player/orders", form.Encode(), nil)
 
@@ -278,17 +323,22 @@ func TestSavingTheWholePageCompactsAndRedirects(t *testing.T) {
 		t.Fatalf("save response = %d %q, want %d /player/orders",
 			response.Code, response.Header().Get("Location"), http.StatusSeeOther)
 	}
-	if len(store.savedSteps) != 2 {
-		t.Fatalf("saved %#v, want both stanzas", store.savedSteps)
+	if len(store.savedDirections) != 2 {
+		t.Fatalf("saved %#v, want both orders", store.savedDirections)
 	}
-	first := store.savedSteps[0]
-	if first.EntityID != 7 || first.Seq != 1 || len(first.Steps) != 2 || first.Steps[0] != compass.NW || first.Steps[1] != compass.E {
-		t.Fatalf("first stanza saved as %#v, want NW then E", first)
+	// The rows arrive in a fixed order, by entity then by sequence, however a
+	// browser laid the form out.
+	first, second := store.savedDirections[0], store.savedDirections[1]
+	if first.EntityID != 7 || first.Seq != 1 || first.Direction != compass.E {
+		t.Fatalf("first order saved as %#v, want E", first)
 	}
-	// A stanza whose every box was blanked is still saved, or clearing the
-	// last direction of an order would leave the order as it was.
-	if second := store.savedSteps[1]; second.Seq != 2 || len(second.Steps) != 0 {
-		t.Fatalf("second stanza saved as %#v, want no steps", second)
+	// A blank select is a direction cleared, not a row dropped. A save that
+	// dropped it would leave the order pointing where it used to.
+	if second.Seq != 2 || second.Direction.IsValid() {
+		t.Fatalf("second order saved as %#v, want no direction", second)
+	}
+	if got := store.orders[7]; len(got) != 2 || got[1].Direction.IsValid() {
+		t.Fatalf("orders = %#v, want the second still there and empty", got)
 	}
 }
 
@@ -330,16 +380,16 @@ func TestARefusedWriteIsReadableBothWays(t *testing.T) {
 	}
 }
 
-// A refusal that belongs to a stanza is shown beside that stanza rather than at
-// the top of the page.
-func TestAStanzaRefusalIsShownBesideTheStanza(t *testing.T) {
+// A refusal that belongs to one order is shown beside that order rather than
+// at the top of the page.
+func TestAnOrderRefusalIsShownBesideTheOrder(t *testing.T) {
 	store := ordersStore()
 	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove}}
-	store.orderErr = datastore.ErrUnknownStep
-	body := ordersRequest(t, store, http.MethodPost, "/player/orders/7/1/1", "step.7.1.1=ne", htmxHeader).Body.String()
+	store.orderErr = datastore.ErrUnknownOrder
+	body := ordersRequest(t, store, http.MethodPost, "/player/orders/7/1", "direction.7.1=ne", htmxHeader).Body.String()
 
 	if !strings.Contains(body, `<p class="message stanza-error" role="alert">That order is no longer there.</p>`) {
-		t.Fatalf("the refusal is not beside its stanza: %s", body)
+		t.Fatalf("the refusal is not beside its order: %s", body)
 	}
 	if strings.Contains(body, "Saved at ") {
 		t.Fatal("a refused write reports a save")
@@ -350,7 +400,7 @@ func TestAStanzaRefusalIsShownBesideTheStanza(t *testing.T) {
 func TestAnUnknownDirectionIsRefused(t *testing.T) {
 	store := ordersStore()
 	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove}}
-	response := ordersRequest(t, store, http.MethodPost, "/player/orders/7/1/1", "step.7.1.1=north", htmxHeader)
+	response := ordersRequest(t, store, http.MethodPost, "/player/orders/7/1", "direction.7.1=north", htmxHeader)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
@@ -358,8 +408,8 @@ func TestAnUnknownDirectionIsRefused(t *testing.T) {
 	if !strings.Contains(response.Body.String(), "no hex lies in that direction") {
 		t.Fatalf("the page does not say why north was refused")
 	}
-	if got := store.orders[7][0].Steps; len(got) != 0 {
-		t.Fatalf("steps = %v, want none", got)
+	if got := store.orders[7][0].Direction; got.IsValid() {
+		t.Fatalf("direction = %v, want none", got)
 	}
 }
 

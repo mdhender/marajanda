@@ -28,7 +28,7 @@ func foundedFaction(t *testing.T, store *Store) (leader, hamlet Entity) {
 	return entities[0], entities[1]
 }
 
-// ordersNow reads one entity's stanzas as of the turn the game is on.
+// ordersNow reads one entity's orders as of the turn the game is on.
 func ordersNow(t *testing.T, store *Store, entityID int64) []Order {
 	t.Helper()
 	turn, err := store.CurrentTurn(t.Context())
@@ -42,117 +42,144 @@ func ordersNow(t *testing.T, store *Store, entityID int64) []Order {
 	return orders[entityID]
 }
 
-// steps names a stanza's directions, so a test can say what it wanted in one
-// line and read what it got in another.
-func steps(order Order) string {
+// march names an entity's orders in one string, so a test can say what it
+// wanted in one line and read what it got in another. An order with no
+// direction yet is a dash, because it is a row on the page either way.
+func march(orders []Order) string {
 	names := ""
-	for _, point := range order.Steps {
+	for _, order := range orders {
 		if names != "" {
 			names += " "
 		}
-		names += point.String()
+		if order.Direction.IsValid() {
+			names += order.Direction.String()
+		} else {
+			names += "-"
+		}
 	}
 	return names
 }
 
-func addMove(t *testing.T, store *Store, entityID int64) int {
+func addMove(t *testing.T, store *Store, entityID int64, direction compass.Point) int {
 	t.Helper()
 	turn, err := store.CurrentTurn(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := store.AddOrder(t.Context(), orderPlayer, turn, entityID, game.OrderKindMove)
+	seq, err := store.AddOrder(t.Context(), orderPlayer, turn, entityID, game.OrderKindMove, direction)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return seq
 }
 
-func setStep(t *testing.T, store *Store, entityID int64, seq, step int, direction compass.Point) {
+func setDirection(t *testing.T, store *Store, entityID int64, seq int, direction compass.Point) {
 	t.Helper()
 	turn, err := store.CurrentTurn(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetOrderStep(t.Context(), orderPlayer, turn, entityID, seq, step, direction); err != nil {
+	if err := store.SetOrderDirection(t.Context(), orderPlayer, turn, entityID, seq, direction); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// A stanza is added empty and filled a box at a time. The box on the end is the
-// one that appends, and there is never an "add a box" control to press.
-func TestAnOrderIsBuiltOneBoxAtATime(t *testing.T) {
+// An order is one action. It can be added with its direction, and a row added
+// blank is filled in afterwards; either way one order holds one direction.
+func TestAnOrderCarriesOneDirection(t *testing.T) {
 	eachMemoryMode(t, func(t *testing.T, store *Store) {
 		leader, _ := foundedFaction(t, store)
 
-		seq := addMove(t, store, leader.ID)
+		// The add control on the page sends no direction, so a new row is a
+		// move with nothing yet said about where it goes.
+		seq := addMove(t, store, leader.ID, 0)
 		if seq != 1 {
-			t.Fatalf("first stanza = %d, want 1", seq)
+			t.Fatalf("first order = %d, want 1", seq)
 		}
 		orders := ordersNow(t, store, leader.ID)
-		if len(orders) != 1 || orders[0].Kind != game.OrderKindMove || len(orders[0].Steps) != 0 {
-			t.Fatalf("orders = %#v, want one empty move", orders)
+		if len(orders) != 1 || orders[0].Kind != game.OrderKindMove || orders[0].Direction.IsValid() {
+			t.Fatalf("orders = %#v, want one move with no direction", orders)
 		}
 
-		// Each write addresses the blank box on the end, which is one past
-		// what is stored.
-		for step, point := range []compass.Point{compass.NW, compass.NE, compass.E} {
-			setStep(t, store, leader.ID, seq, step+1, point)
-		}
-		if got := steps(ordersNow(t, store, leader.ID)[0]); got != "NW NE E" {
-			t.Fatalf("steps = %q, want NW NE E", got)
+		// "move nw ne e" is three orders, not one order with three steps.
+		setDirection(t, store, leader.ID, seq, compass.NW)
+		addMove(t, store, leader.ID, compass.NE)
+		addMove(t, store, leader.ID, compass.E)
+		if got := march(ordersNow(t, store, leader.ID)); got != "NW NE E" {
+			t.Fatalf("orders = %q, want NW NE E", got)
 		}
 
-		// A filled box takes a new direction in place.
-		setStep(t, store, leader.ID, seq, 2, compass.SE)
-		if got := steps(ordersNow(t, store, leader.ID)[0]); got != "NW SE E" {
-			t.Fatalf("steps = %q, want NW SE E", got)
+		// A direction is replaced in place, and the blank option leaves the
+		// order standing with nothing said about where it goes. Emptying a row
+		// is not removing it.
+		setDirection(t, store, leader.ID, 2, compass.SE)
+		if got := march(ordersNow(t, store, leader.ID)); got != "NW SE E" {
+			t.Fatalf("orders = %q, want NW SE E", got)
+		}
+		setDirection(t, store, leader.ID, 2, 0)
+		if got := march(ordersNow(t, store, leader.ID)); got != "NW - E" {
+			t.Fatalf("orders = %q, want the second order emptied, not removed", got)
+		}
+		if got := storedMove(t, store, leader.ID, 2); got != "" {
+			t.Fatalf("order 2 still stores %q", got)
 		}
 	})
 }
 
-// Clearing a middle box shifts the later ones left. One order has exactly one
-// stored form, which is what replay depends on.
-func TestClearingAStepCompactsTheRest(t *testing.T) {
+// Inserting an order shifts the ones from that position on up by one, so a
+// list can be corrected in the middle without retyping its tail.
+func TestInsertingAnOrderShiftsTheRestUp(t *testing.T) {
 	eachMemoryMode(t, func(t *testing.T, store *Store) {
 		leader, _ := foundedFaction(t, store)
-		seq := addMove(t, store, leader.ID)
-		for step, point := range []compass.Point{compass.NW, compass.NE, compass.E} {
-			setStep(t, store, leader.ID, seq, step+1, point)
+		addMove(t, store, leader.ID, compass.NW)
+		addMove(t, store, leader.ID, compass.E)
+		turn, err := store.CurrentTurn(t.Context())
+		if err != nil {
+			t.Fatal(err)
 		}
 
-		// The blank option on the second box: "move nw <blank> e" is stored
-		// and re-rendered as "move nw e".
-		setStep(t, store, leader.ID, seq, 2, 0)
-		if got := steps(ordersNow(t, store, leader.ID)[0]); got != "NW E" {
-			t.Fatalf("steps = %q, want NW E", got)
+		if err := store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, 2, game.OrderKindMove, compass.NE); err != nil {
+			t.Fatal(err)
 		}
-		// The stored numbering is contiguous, not a 1 and a 3.
-		if got := storedSteps(t, store, leader.ID, seq); got != "1:nw 2:e" {
-			t.Fatalf("stored steps = %q, want 1:nw 2:e", got)
+		if got := march(ordersNow(t, store, leader.ID)); got != "NW NE E" {
+			t.Fatalf("orders = %q, want NE inserted between NW and E", got)
 		}
 
-		// Blanking the box on the end is not a change at all.
-		if err := storeSetStep(store, t, leader.ID, seq, 3, 0); err != nil {
-			t.Fatalf("clearing the blank box: %v", err)
+		// The numbering is contiguous from 1 and each direction went with the
+		// order it belongs to rather than staying under the number it had.
+		orders := ordersNow(t, store, leader.ID)
+		for index, order := range orders {
+			if order.Seq != index+1 {
+				t.Fatalf("orders = %#v, want sequences 1..%d", orders, len(orders))
+			}
 		}
-		if got := steps(ordersNow(t, store, leader.ID)[0]); got != "NW E" {
-			t.Fatalf("steps = %q, want NW E", got)
+		if got := storedMove(t, store, leader.ID, 3); got != "e" {
+			t.Fatalf("order 3 stores %q, want e", got)
+		}
+
+		// One past the end is a place: it is what "insert after the last
+		// order" asks for.
+		if err := store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, 4, game.OrderKindMove, compass.SW); err != nil {
+			t.Fatal(err)
+		}
+		if got := march(ordersNow(t, store, leader.ID)); got != "NW NE E SW" {
+			t.Fatalf("orders = %q, want SW appended", got)
+		}
+		// Two past the end is not.
+		if err := store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, 6, game.OrderKindMove, compass.W); !errors.Is(err, ErrUnknownOrder) {
+			t.Fatalf("insert at 6 = %v, want %v", err, ErrUnknownOrder)
 		}
 	})
 }
 
-// Removing a stanza renumbers the ones after it, and takes their steps with it
-// rather than leaving them behind under a number that has moved.
+// Removing an order renumbers the ones after it, and takes their directions
+// with them rather than leaving one behind under a number that has moved.
 func TestRemovingAnOrderRenumbersTheRest(t *testing.T) {
 	eachMemoryMode(t, func(t *testing.T, store *Store) {
 		leader, _ := foundedFaction(t, store)
-		for range 3 {
-			addMove(t, store, leader.ID)
+		for _, point := range []compass.Point{compass.NW, compass.E, compass.SW} {
+			addMove(t, store, leader.ID, point)
 		}
-		setStep(t, store, leader.ID, 1, 1, compass.NW)
-		setStep(t, store, leader.ID, 2, 1, compass.E)
-		setStep(t, store, leader.ID, 3, 1, compass.SW)
 
 		turn, err := store.CurrentTurn(t.Context())
 		if err != nil {
@@ -165,15 +192,15 @@ func TestRemovingAnOrderRenumbersTheRest(t *testing.T) {
 		if len(orders) != 2 {
 			t.Fatalf("orders = %#v, want two", orders)
 		}
-		if orders[0].Seq != 1 || steps(orders[0]) != "E" {
-			t.Fatalf("first stanza = %#v, want the old second renumbered to 1", orders[0])
+		if orders[0].Seq != 1 || orders[0].Direction != compass.E {
+			t.Fatalf("first order = %#v, want the old second renumbered to 1", orders[0])
 		}
-		if orders[1].Seq != 2 || steps(orders[1]) != "SW" {
-			t.Fatalf("second stanza = %#v, want the old third renumbered to 2", orders[1])
+		if orders[1].Seq != 2 || orders[1].Direction != compass.SW {
+			t.Fatalf("second order = %#v, want the old third renumbered to 2", orders[1])
 		}
-		// No step is left under a sequence number that no longer exists.
-		if got := storedSteps(t, store, leader.ID, 3); got != "" {
-			t.Fatalf("stanza 3 still holds %q", got)
+		// No direction is left under a sequence number that no longer exists.
+		if got := storedMove(t, store, leader.ID, 3); got != "" {
+			t.Fatalf("order 3 still stores %q", got)
 		}
 	})
 }
@@ -187,12 +214,16 @@ func TestAnEntityRefusesAnOrderItsKindDoesNotAccept(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.AddOrder(t.Context(), orderPlayer, turn, hamlet.ID, game.OrderKindMove); !errors.Is(err, ErrOrderKindRefused) {
+		if _, err := store.AddOrder(t.Context(), orderPlayer, turn, hamlet.ID, game.OrderKindMove, compass.E); !errors.Is(err, ErrOrderKindRefused) {
 			t.Fatalf("hamlet move = %v, want %v", err, ErrOrderKindRefused)
 		}
-		// An order kind the game does not know is refused the same way.
-		if _, err := store.AddOrder(t.Context(), orderPlayer, turn, hamlet.ID, game.OrderKind("besiege")); !errors.Is(err, ErrOrderKindRefused) {
+		// An order kind the game does not know is refused the same way, and so
+		// is an insert of one.
+		if _, err := store.AddOrder(t.Context(), orderPlayer, turn, hamlet.ID, game.OrderKind("besiege"), 0); !errors.Is(err, ErrOrderKindRefused) {
 			t.Fatalf("unknown kind = %v, want %v", err, ErrOrderKindRefused)
+		}
+		if err := store.InsertOrder(t.Context(), orderPlayer, turn, hamlet.ID, 1, game.OrderKindMove, compass.E); !errors.Is(err, ErrOrderKindRefused) {
+			t.Fatalf("hamlet insert = %v, want %v", err, ErrOrderKindRefused)
 		}
 		if orders := ordersNow(t, store, hamlet.ID); len(orders) != 0 {
 			t.Fatalf("the hamlet holds %#v, want nothing", orders)
@@ -220,7 +251,7 @@ func TestOrdersAreRefusedForAnotherFactionsEntity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.AddOrder(t.Context(), orderPlayer, turn, rival[0].ID, game.OrderKindMove); !errors.Is(err, ErrUnknownEntity) {
+		if _, err := store.AddOrder(t.Context(), orderPlayer, turn, rival[0].ID, game.OrderKindMove, compass.E); !errors.Is(err, ErrUnknownEntity) {
 			t.Fatalf("ordering a rival's leader = %v, want %v", err, ErrUnknownEntity)
 		}
 	})
@@ -231,8 +262,7 @@ func TestOrdersAreRefusedForAnotherFactionsEntity(t *testing.T) {
 func TestOnlyTheCurrentTurnIsWritable(t *testing.T) {
 	eachMemoryMode(t, func(t *testing.T, store *Store) {
 		leader, _ := foundedFaction(t, store)
-		seq := addMove(t, store, leader.ID)
-		setStep(t, store, leader.ID, seq, 1, compass.NW)
+		seq := addMove(t, store, leader.ID, compass.NW)
 
 		closed := game.FirstTurn
 		next, err := store.AdvanceTurn(t.Context())
@@ -245,14 +275,19 @@ func TestOnlyTheCurrentTurnIsWritable(t *testing.T) {
 
 		for name, write := range map[string]func() error{
 			"add": func() error {
-				_, err := store.AddOrder(t.Context(), orderPlayer, closed, leader.ID, game.OrderKindMove)
+				_, err := store.AddOrder(t.Context(), orderPlayer, closed, leader.ID, game.OrderKindMove, compass.E)
 				return err
 			},
-			"set a step": func() error {
-				return store.SetOrderStep(t.Context(), orderPlayer, closed, leader.ID, seq, 1, compass.E)
+			"insert": func() error {
+				return store.InsertOrder(t.Context(), orderPlayer, closed, leader.ID, seq, game.OrderKindMove, compass.E)
 			},
-			"save steps": func() error {
-				return store.SetOrderSteps(t.Context(), orderPlayer, closed, []OrderSteps{{EntityID: leader.ID, Seq: seq, Steps: []compass.Point{compass.E}}})
+			"set a direction": func() error {
+				return store.SetOrderDirection(t.Context(), orderPlayer, closed, leader.ID, seq, compass.E)
+			},
+			"save directions": func() error {
+				return store.SetOrderDirections(t.Context(), orderPlayer, closed, []OrderDirection{
+					{EntityID: leader.ID, Seq: seq, Direction: compass.E},
+				})
 			},
 			"remove": func() error {
 				return store.RemoveOrder(t.Context(), orderPlayer, closed, leader.ID, seq)
@@ -264,7 +299,7 @@ func TestOnlyTheCurrentTurnIsWritable(t *testing.T) {
 		}
 
 		// A turn ahead of the clock is refused for the same reason.
-		if _, err := store.AddOrder(t.Context(), orderPlayer, next+1, leader.ID, game.OrderKindMove); !errors.Is(err, ErrTurnClosed) {
+		if _, err := store.AddOrder(t.Context(), orderPlayer, next+1, leader.ID, game.OrderKindMove, 0); !errors.Is(err, ErrTurnClosed) {
 			t.Fatalf("add on turn %d = %v, want %v", next+1, err, ErrTurnClosed)
 		}
 	})
@@ -275,9 +310,8 @@ func TestOnlyTheCurrentTurnIsWritable(t *testing.T) {
 func TestAdvancingTheTurnLeavesThePreviousTurnAlone(t *testing.T) {
 	eachMemoryMode(t, func(t *testing.T, store *Store) {
 		leader, _ := foundedFaction(t, store)
-		seq := addMove(t, store, leader.ID)
-		for step, point := range []compass.Point{compass.NW, compass.E} {
-			setStep(t, store, leader.ID, seq, step+1, point)
+		for _, point := range []compass.Point{compass.NW, compass.E} {
+			addMove(t, store, leader.ID, point)
 		}
 		before, err := store.OrdersAsOf(t.Context(), orderPlayer, game.FirstTurn)
 		if err != nil {
@@ -292,7 +326,7 @@ func TestAdvancingTheTurnLeavesThePreviousTurnAlone(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(after[leader.ID]) != len(before[leader.ID]) || steps(after[leader.ID][0]) != steps(before[leader.ID][0]) {
+		if march(after[leader.ID]) != march(before[leader.ID]) {
 			t.Fatalf("turn %d orders = %#v, want the frozen %#v", game.FirstTurn, after, before)
 		}
 
@@ -307,119 +341,112 @@ func TestAdvancingTheTurnLeavesThePreviousTurnAlone(t *testing.T) {
 		}
 
 		// And the new turn takes its own orders, numbered from one.
-		if got := addMove(t, store, leader.ID); got != 1 {
-			t.Fatalf("first stanza of turn %d = %d, want 1", next, got)
+		if got := addMove(t, store, leader.ID, compass.SW); got != 1 {
+			t.Fatalf("first order of turn %d = %d, want 1", next, got)
 		}
 		if got := len(ordersNow(t, store, leader.ID)); got != 1 {
-			t.Fatalf("turn %d holds %d stanzas, want 1", next, got)
+			t.Fatalf("turn %d holds %d orders, want 1", next, got)
 		}
 	})
 }
 
-// The script-free page saves a whole page of boxes at once. Blanks are dropped
-// on the way in, so a save compacts exactly as a box-at-a-time edit does.
-func TestSavingAWholePageOfStepsCompacts(t *testing.T) {
+// The script-free page saves a whole page of selects at once, and a blank one
+// is a direction cleared rather than a row dropped.
+func TestSavingAWholePageOfDirections(t *testing.T) {
 	eachMemoryMode(t, func(t *testing.T, store *Store) {
 		leader, _ := foundedFaction(t, store)
-		first, second := addMove(t, store, leader.ID), addMove(t, store, leader.ID)
+		first, second := addMove(t, store, leader.ID, 0), addMove(t, store, leader.ID, 0)
 		turn, err := store.CurrentTurn(t.Context())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := store.SetOrderSteps(t.Context(), orderPlayer, turn, []OrderSteps{
-			{EntityID: leader.ID, Seq: first, Steps: []compass.Point{compass.NW, compass.E}},
-			{EntityID: leader.ID, Seq: second, Steps: []compass.Point{compass.SW}},
+		if err := store.SetOrderDirections(t.Context(), orderPlayer, turn, []OrderDirection{
+			{EntityID: leader.ID, Seq: first, Direction: compass.NW},
+			{EntityID: leader.ID, Seq: second, Direction: compass.E},
 		}); err != nil {
 			t.Fatal(err)
 		}
-		orders := ordersNow(t, store, leader.ID)
-		if len(orders) != 2 || steps(orders[0]) != "NW E" || steps(orders[1]) != "SW" {
-			t.Fatalf("orders = %#v, want NW E then SW", orders)
+		if got := march(ordersNow(t, store, leader.ID)); got != "NW E" {
+			t.Fatalf("orders = %q, want NW E", got)
 		}
 
-		// A save is a replacement, so a shorter list leaves nothing behind.
-		if err := store.SetOrderSteps(t.Context(), orderPlayer, turn, []OrderSteps{
-			{EntityID: leader.ID, Seq: first, Steps: []compass.Point{compass.E}},
+		// A blank select empties its own row and leaves every other row alone.
+		if err := store.SetOrderDirections(t.Context(), orderPlayer, turn, []OrderDirection{
+			{EntityID: leader.ID, Seq: first, Direction: 0},
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if got := steps(ordersNow(t, store, leader.ID)[0]); got != "E" {
-			t.Fatalf("steps = %q, want E", got)
+		if got := march(ordersNow(t, store, leader.ID)); got != "- E" {
+			t.Fatalf("orders = %q, want the first emptied and the second untouched", got)
 		}
 	})
 }
 
-// A stanza that is not there, and a box the page never showed, are refused
-// rather than quietly creating one.
+// An order that is not there is refused rather than quietly created, and an
+// entity is not given more orders in a turn than storage allows.
 func TestOrderWritesRefuseWhatThePageNeverShowed(t *testing.T) {
 	eachMemoryMode(t, func(t *testing.T, store *Store) {
 		leader, _ := foundedFaction(t, store)
-		seq := addMove(t, store, leader.ID)
+		seq := addMove(t, store, leader.ID, compass.NW)
 		turn, err := store.CurrentTurn(t.Context())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := store.SetOrderStep(t.Context(), orderPlayer, turn, leader.ID, seq+1, 1, compass.E); !errors.Is(err, ErrUnknownOrder) {
-			t.Fatalf("step on a missing stanza = %v, want %v", err, ErrUnknownOrder)
+		if err := store.SetOrderDirection(t.Context(), orderPlayer, turn, leader.ID, seq+1, compass.E); !errors.Is(err, ErrUnknownOrder) {
+			t.Fatalf("a direction on a missing order = %v, want %v", err, ErrUnknownOrder)
 		}
 		if err := store.RemoveOrder(t.Context(), orderPlayer, turn, leader.ID, seq+1); !errors.Is(err, ErrUnknownOrder) {
-			t.Fatalf("removing a missing stanza = %v, want %v", err, ErrUnknownOrder)
+			t.Fatalf("removing a missing order = %v, want %v", err, ErrUnknownOrder)
 		}
-		// The stanza is empty, so it shows one box. Two is not a box.
-		for _, step := range []int{0, 2, MaxOrderSteps + 1} {
-			if err := store.SetOrderStep(t.Context(), orderPlayer, turn, leader.ID, seq, step, compass.E); !errors.Is(err, ErrUnknownStep) {
-				t.Fatalf("step %d = %v, want %v", step, err, ErrUnknownStep)
-			}
+
+		// The cap is on orders per entity per turn. The one already there
+		// counts towards it.
+		for range MaxOrdersPerEntity - 1 {
+			addMove(t, store, leader.ID, compass.E)
 		}
-		// The storage limit is the storage limit, whatever a save asks for.
-		long := make([]compass.Point, MaxOrderSteps+1)
-		for index := range long {
-			long[index] = compass.E
+		if got := len(ordersNow(t, store, leader.ID)); got != MaxOrdersPerEntity {
+			t.Fatalf("orders = %d, want the cap of %d", got, MaxOrdersPerEntity)
 		}
-		if err := store.SetOrderSteps(t.Context(), orderPlayer, turn, []OrderSteps{{EntityID: leader.ID, Seq: seq, Steps: long}}); !errors.Is(err, ErrTooManySteps) {
-			t.Fatalf("a %d step order = %v, want %v", len(long), err, ErrTooManySteps)
+		if _, err := store.AddOrder(t.Context(), orderPlayer, turn, leader.ID, game.OrderKindMove, compass.E); !errors.Is(err, ErrTooManyOrders) {
+			t.Fatalf("order %d = %v, want %v", MaxOrdersPerEntity+1, err, ErrTooManyOrders)
+		}
+		// An insert is bounded by the same cap: it lengthens the list too.
+		if err := store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, 1, game.OrderKindMove, compass.E); !errors.Is(err, ErrTooManyOrders) {
+			t.Fatalf("insert at the cap = %v, want %v", err, ErrTooManyOrders)
+		}
+		if got := len(ordersNow(t, store, leader.ID)); got != MaxOrdersPerEntity {
+			t.Fatalf("orders = %d, want the cap of %d", got, MaxOrdersPerEntity)
 		}
 	})
 }
 
-// A stanza the store refuses is a stanza the database does not hold. The write
+// An order the store refuses is an order the database does not hold. The write
 // runs in a transaction, so a save that fails part way leaves nothing.
 func TestAFailedSaveWritesNothing(t *testing.T) {
 	eachMemoryMode(t, func(t *testing.T, store *Store) {
 		leader, _ := foundedFaction(t, store)
-		seq := addMove(t, store, leader.ID)
+		seq := addMove(t, store, leader.ID, 0)
 		turn, err := store.CurrentTurn(t.Context())
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = store.SetOrderSteps(t.Context(), orderPlayer, turn, []OrderSteps{
-			{EntityID: leader.ID, Seq: seq, Steps: []compass.Point{compass.NW}},
-			{EntityID: leader.ID, Seq: seq + 1, Steps: []compass.Point{compass.E}},
+		err = store.SetOrderDirections(t.Context(), orderPlayer, turn, []OrderDirection{
+			{EntityID: leader.ID, Seq: seq, Direction: compass.NW},
+			{EntityID: leader.ID, Seq: seq + 1, Direction: compass.E},
 		})
 		if !errors.Is(err, ErrUnknownOrder) {
 			t.Fatalf("save = %v, want %v", err, ErrUnknownOrder)
 		}
-		if got := steps(ordersNow(t, store, leader.ID)[0]); got != "" {
-			t.Fatalf("steps = %q, want the save rolled back", got)
+		if got := march(ordersNow(t, store, leader.ID)); got != "-" {
+			t.Fatalf("orders = %q, want the save rolled back", got)
 		}
 	})
 }
 
-// storeSetStep is SetOrderStep on the current turn, returning the error instead
-// of failing the test with it.
-func storeSetStep(store *Store, t *testing.T, entityID int64, seq, step int, direction compass.Point) error {
-	t.Helper()
-	turn, err := store.CurrentTurn(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return store.SetOrderStep(t.Context(), orderPlayer, turn, entityID, seq, step, direction)
-}
-
-// storedSteps reads a stanza's steps straight out of the table, as
-// "<step>:<direction>" pairs, so a test can see the numbering rather than the
-// list the store rebuilt from it.
-func storedSteps(t *testing.T, store *Store, entityID int64, seq int) string {
+// storedMove reads one order's direction straight out of the detail table,
+// so a test can see what is stored rather than the order the store rebuilt from
+// it. An order with no direction has no row, and comes back empty.
+func storedMove(t *testing.T, store *Store, entityID int64, seq int) string {
 	t.Helper()
 	turn, err := store.CurrentTurn(t.Context())
 	if err != nil {
@@ -433,14 +460,11 @@ func storedSteps(t *testing.T, store *Store, entityID int64, seq int) string {
 
 	stored := ""
 	if err := sqlitex.ExecuteTransient(conn, `
-		SELECT step, direction FROM order_steps
-		WHERE turn = ?1 AND entity_id = ?2 AND seq = ?3 ORDER BY step;`, &sqlitex.ExecOptions{
+		SELECT direction FROM move_orders
+		WHERE turn = ?1 AND entity_id = ?2 AND seq = ?3;`, &sqlitex.ExecOptions{
 		Args: []any{turn, entityID, seq},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
-			if stored != "" {
-				stored += " "
-			}
-			stored += stmt.ColumnText(0) + ":" + stmt.ColumnText(1)
+			stored = stmt.ColumnText(0)
 			return nil
 		},
 	}); err != nil {
