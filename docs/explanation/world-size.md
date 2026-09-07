@@ -44,15 +44,41 @@ most of the ocean drained away.
 | Land share of the map | 58% | The generator's `waterFraction` of `0.42`. |
 | Hex shape | regular hexagon | The map is a hex grid. |
 | Hex scale | 6 or 12 miles across the flats | The two options below. |
-| Aspect ratio | 2.39 : 1 | Chosen. Unexplained. |
+| Shape of the rendered map | 2.39 : 1 | Taste. It is the ratio modern widescreen film is shot at, and it looks right. |
 
-Only the first is a measurement. The land share is a generator constant that
-was picked for playability, not derived from anything; the last has no stated
-reason at all.
+Only the first is a measurement. The land share is a generator constant picked
+for playability rather than derived from anything, and the last is frankly a
+preference — which is a perfectly good reason for it, as long as it is not
+mistaken for a derived quantity later.
 
 That the 58 percent is a choice is the load-bearing assumption. It is what
 converts 57.5 million square miles of land into 99 million square miles of
 world, and a different water fraction moves every number that follows.
+
+## The picture is not the grid
+
+The 2.39 describes the **PNG**, not the hex counts, and the two are not the
+same ratio. In a pointy-top layout neighbouring columns sit `2a` apart while
+neighbouring rows sit only `sqrt(3) * a` apart, so a row of hexes is wider than
+a column of them is tall. `worldmap.Render` lays the image out accordingly:
+
+```text
+width  = sqrt(3) * hexSize * (columns + 0.5)
+height =           hexSize * (1.5 * rows + 0.5)
+```
+
+`hexSize` cancels, which is worth knowing on its own: the shape of the picture
+is a property of the world's dimensions and nothing else, so `--hex-size`
+changes how big the PNG is and never what shape it is.
+
+Dividing the two gives a picture about `1.1547 * columns / rows` wide, so a
+**2.39 : 1 image wants a grid nearer 2.07 : 1**. Applying the 2.39 to the hex
+counts directly — the obvious move, and the wrong one — would render at about
+2.76 : 1 instead, noticeably wider than intended.
+
+Worth noting where the defaults already sit: 511 x 255 renders at 2.3132 : 1.
+The preference is a slightly wider frame than the one we look at today, not a
+departure from it.
 
 ## Working the numbers back to a rectangle
 
@@ -66,15 +92,13 @@ three miles. A regular hexagon with apothem `a` covers `2 * sqrt(3) * a^2`:
 
 Earth's land at 58 percent land coverage needs `57,500,000 / 0.58`, or about
 **99.14 million square miles** of map, whichever scale draws it. Dividing that
-by the two hex areas gives the two hex counts. Doubling the scale quarters the
-count exactly, so the second is a quarter of the first and no accuracy is lost
-between them.
+by the two hex areas gives the two hex counts; doubling the scale quarters the
+count exactly, so no accuracy is lost between them.
 
-Splitting each by the chosen aspect ratio — `width = 2.39 * height` and
-`width * height` equal to the count — gives the two rectangles. Both extents
-have to be odd: the datastore stores dimensions as half-extents and a world is
-`2 * width + 1` by `2 * height + 1`, so 2757 x 1153 and 1379 x 577 are
-expressible where 2758 x 1154 and 1380 x 578 would not be.
+Solving each count against the rendered-shape equation above, and rounding to
+odd extents — the datastore stores half-extents, and a world is
+`2 * width + 1` by `2 * height + 1`, so an even extent is not expressible —
+gives:
 
 | | Six-mile hex | Twelve-mile hex |
 | --- | ---: | ---: |
@@ -82,15 +106,17 @@ expressible where 2758 x 1154 and 1380 x 578 would not be.
 | Apothem | 3 miles | 6 miles |
 | Area of one hex | 31.18 sq mi | 124.71 sq mi |
 | Hexes for 99.14M sq mi | ~3,180,000 | ~795,000 |
-| Rectangle | **2757 x 1153** | **1379 x 577** |
-| Stored half-extents | 1378, 576 | 689, 288 |
-| Total hexes | 3,178,821 | 795,683 |
-| Aspect ratio | 2.3912 : 1 | 2.3899 : 1 |
-| Land hexes at 58% | 1,843,716 | 461,496 |
-| Land area produced | 57.48M sq mi | 57.55M sq mi |
+| Rectangle | **2565 x 1239** | **1283 x 619** |
+| Stored half-extents | 1282, 619 | 641, 309 |
+| Total hexes | 3,178,035 | 794,177 |
+| Grid ratio | 2.0702 : 1 | 2.0727 : 1 |
+| Rendered PNG | 2.3903 : 1 | 2.3930 : 1 |
+| Land hexes at 58% | 1,843,260 | 460,623 |
+| Land area produced | 57.47M sq mi | 57.44M sq mi |
 
-Both land figures sit within a tenth of a percent of the 57.5 million target,
-so neither rectangle would earn anything by being nudged further.
+Both land figures sit within a tenth of a percent of the 57.5 million target
+and both pictures within a fifth of a percent of 2.39, which is closer than
+either input deserves.
 
 ## The same world at two resolutions
 
@@ -99,8 +125,8 @@ at two resolutions, and the miles say so:
 
 | | Six-mile hex | Twelve-mile hex |
 | --- | ---: | ---: |
-| East-west circumference | 16,542 miles | 16,548 miles |
-| North-south extent | 5,991 miles | 5,996 miles |
+| East-west circumference | 15,390 miles | 15,396 miles |
+| North-south extent | 6,438 miles | 6,432 miles |
 
 A leader crossing either world walks the same distance. What changes is how
 many hexes that distance is cut into — and therefore how much terrain detail
@@ -135,13 +161,14 @@ its own slice, and belongs to neither side of the split.
 | --- | ---: | ---: | ---: |
 | Reference world (511 x 255) | 130,305 | 1x | 0.25x |
 | Current maximum (1023 x 511) | 522,753 | 4x | 1x |
-| Twelve-mile option (1379 x 577) | 795,683 | 6.1x | 1.5x |
-| Six-mile option (2757 x 1153) | 3,178,821 | 24.4x | 6.1x |
+| Twelve-mile option (1283 x 619) | 794,177 | 6.1x | 1.5x |
+| Six-mile option (2565 x 1239) | 3,178,035 | 24.4x | 6.1x |
 
 Neither option fits. The twelve-mile world is half again as large as the
 largest world the datastore currently permits; the six-mile world is six times
-it, and would need half-extents of 1378 and 576 against present ceilings of 511
-and 255.
+it. Both also break the ceilings in *both* directions — the twelve-mile world
+wants half-extents of 641 and 309 against present caps of 511 and 255, and the
+six-mile world 1282 and 619.
 
 Those ceilings exist for a specific reason, and it is not storage. The
 datastore's own note says the maxima are set by "what a single core can
@@ -161,20 +188,12 @@ and gives terrain somewhere to vary; the twelve-mile hex costs a quarter as
 much of everything. Nothing decides between them yet, and the movement rules
 have as much say in it as the generator does.
 
-**Where 2.39 : 1 comes from,** and whether it is even the right kind of ratio.
-It is a ratio of hex *counts*, which is not the shape of the ground. In a
-pointy-top layout columns sit `2a` apart and rows sit `1.5 * a * 2/sqrt(3)`
-apart, a ratio of about 1.155 to 1, so both rectangles above are close to
-2.76 : 1 on the ground rather than 2.39 : 1. A world stated in miles and a
-world stated in hexes are not the same shape, and the target does not say which
-one it means.
-
 **Whether the noise still looks right at this size.** Terrain features are
 counted in *periods across the world*, not in cycles per hex, precisely so the
 shape of a world survives a change of size — a bigger world gets bigger
 continents rather than more of them. Six elevation periods across 511 columns
-puts a feature every 85 hexes; across 1379 it puts one every 230, and across
-2757 one every 459. In miles those last two are the same continent, about 2,760
+puts a feature every 85 hexes; across 1283 it puts one every 214, and across
+2565 one every 428. In miles those last two are the same continent, about 2,565
 across, which is the point: resolution does not change the shape, and ground
 extent does. Whether continents that wide are what anyone wants is the question
 tracked in [#20](https://github.com/mdhender/marajanda/issues/20).
