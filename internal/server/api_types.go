@@ -132,21 +132,21 @@ type apiOrders struct {
 }
 
 type apiCreateOrderRequest struct {
-	Turn     int            `json:"turn"`
-	Sequence *int           `json:"sequence,omitempty"`
-	Kind     string         `json:"kind"`
-	Detail   apiOrderDetail `json:"detail"`
+	Turn     int             `json:"turn"`
+	Sequence *int            `json:"sequence,omitempty"`
+	Kind     string          `json:"kind"`
+	Detail   *apiOrderDetail `json:"detail"`
 }
 
 type apiSetOrderDetailRequest struct {
-	Turn   int            `json:"turn"`
-	Detail apiOrderDetail `json:"detail"`
+	Turn   int             `json:"turn"`
+	Detail *apiOrderDetail `json:"detail"`
 }
 
 type apiOrderUpdate struct {
-	EntityID int64          `json:"entityId"`
-	Sequence int            `json:"sequence"`
-	Detail   apiOrderDetail `json:"detail"`
+	EntityID int64           `json:"entityId"`
+	Sequence int             `json:"sequence"`
+	Detail   *apiOrderDetail `json:"detail"`
 }
 
 type apiSetOrderDetailsRequest struct {

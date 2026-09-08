@@ -412,6 +412,35 @@ func TestSavingAWholePageOfDirections(t *testing.T) {
 	})
 }
 
+func TestOrderDetailMustMatchItsKind(t *testing.T) {
+	eachMemoryMode(t, func(t *testing.T, store *Store) {
+		leader, _ := foundedFaction(t, store)
+		move := addMove(t, store, leader.ID, 0)
+		turn, err := store.CurrentTurn(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, 1, game.OrderKindRest, resting(1)); err != nil {
+			t.Fatal(err)
+		}
+		rest, move := 1, move+1
+		for _, test := range []struct {
+			name   string
+			seq    int
+			detail game.OrderDetail
+		}{
+			{name: "count on move", seq: move, detail: game.OrderDetail{Count: 1}},
+			{name: "direction on rest", seq: rest, detail: game.OrderDetail{Direction: compass.NE}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				if err := store.SetOrderDetail(t.Context(), orderPlayer, turn, leader.ID, test.seq, test.detail); !errors.Is(err, ErrOrderDetailRefused) {
+					t.Fatalf("SetOrderDetail = %v, want %v", err, ErrOrderDetailRefused)
+				}
+			})
+		}
+	})
+}
+
 // An order that is not there is refused rather than quietly created, and an
 // entity is not given more orders in a turn than storage allows.
 func TestOrderWritesRefuseWhatThePageNeverShowed(t *testing.T) {

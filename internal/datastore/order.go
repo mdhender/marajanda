@@ -48,6 +48,10 @@ var (
 	// which is what keeps a tolerated overspend bounded.
 	ErrOrderCountRefused = fmt.Errorf("a rest lasts from 1 to %d action points", MaxOrdersPerEntity)
 
+	// ErrOrderDetailRefused reports detail that belongs to a different order
+	// kind. A move carries only a direction and a rest carries only a count.
+	ErrOrderDetailRefused = errors.New("that detail does not belong to the order")
+
 	// ErrFactionInactive reports a write by a faction that has been
 	// deactivated. A deactivated faction cannot give orders; its player can
 	// still sign in and look at their game.
@@ -189,8 +193,14 @@ func (s *Store) SetOrderDetails(ctx context.Context, email string, turn int, upd
 			}
 			switch orders[index].Kind {
 			case game.OrderKindMove:
+				if wanted.Detail.Count != 0 {
+					return fmt.Errorf("set order detail: %w", ErrOrderDetailRefused)
+				}
 				orders[index].Detail.Direction = wanted.Detail.Direction
 			case game.OrderKindRest:
+				if wanted.Detail.Direction != 0 {
+					return fmt.Errorf("set order detail: %w", ErrOrderDetailRefused)
+				}
 				orders[index].Detail.Count = wanted.Detail.Count
 			}
 			if err := writeOrderDetail(conn, turn, wanted.EntityID, orders[index]); err != nil {
@@ -550,6 +560,10 @@ func insertOrder(conn *sqlite.Conn, turn int, entityID int64, order Order) error
 // is not an order anybody has half-written - a rest lasts at least one point.
 // It runs inside the caller's transaction.
 func writeOrderDetail(conn *sqlite.Conn, turn int, entityID int64, order Order) error {
+	if order.Kind == game.OrderKindMove && order.Detail.Count != 0 ||
+		order.Kind == game.OrderKindRest && order.Detail.Direction != 0 {
+		return fmt.Errorf("set order detail: %w", ErrOrderDetailRefused)
+	}
 	for _, table := range []string{"move_orders", "rest_orders"} {
 		if err := sqlitex.ExecuteTransient(conn, `
 			DELETE FROM `+table+` WHERE turn = ?1 AND entity_id = ?2 AND seq = ?3;`, &sqlitex.ExecOptions{
