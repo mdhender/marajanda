@@ -5,9 +5,10 @@
 # https://htmx-app.localhost:8443 and reverse-proxies every path to the Go
 # server on 127.0.0.1:18443, which is where .env.development.local points
 # MARAJANDA_ADDRESS and MARAJANDA_PORT. Reach the app through Caddy rather than
-# through the raw port: the session cookie is set Secure, so a browser drops it
-# over http://127.0.0.1:18443 and every signed-in flow — including the
-# __agents/log-me-in route — appears to silently fail.
+# through the raw port, because Caddy mirrors the production TLS path. The raw
+# port is a working fallback, not a dead end: loopback is a potentially
+# trustworthy origin, so a browser keeps the Secure session cookie over
+# http://127.0.0.1:18443, including through the __agents/log-me-in route.
 
 root = "."
 tmp_dir = "tmp"

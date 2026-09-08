@@ -48,8 +48,11 @@ the daemon loads itself through `internal/dotenv`; air passes no arguments.
 
 The daemon speaks plain HTTP on `127.0.0.1:18443`. A machine-wide Caddy
 (`brew services start caddy`) terminates TLS for `https://htmx-app.localhost:8443`
-and proxies every path to it. **Always browse through Caddy** — the session
-cookie is `Secure`, so any signed-in flow silently fails on the raw port.
+and proxies every path to it. **Browse through Caddy** — it mirrors the
+production TLS path, and Caddy serves no site for plain `localhost:8443`.
+The raw port is a working fallback, not a dead end: loopback is a potentially
+trustworthy origin, so a browser does keep the `Secure` session cookie over
+`http://127.0.0.1:18443`.
 
 To get an authenticated browser session in a non-production build with `ENV`
 not `production`:

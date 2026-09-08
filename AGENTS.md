@@ -44,7 +44,7 @@ In a non-production build with `ENV` other than `production`, start the server w
 
 `https://htmx-app.localhost:8443/__agents/log-me-in/agent%40example.test?returnTo=%2Fplayer%2Fdashboard`
 
-The host matters. The Go server speaks plain HTTP on the address and port in `.env.development.local`, currently `127.0.0.1:18443`, and the local Caddy instance terminates TLS for `htmx-app.localhost:8443` and proxies every path to it. Caddy serves no site for plain `localhost:8443`, and the session cookie is `Secure`, so a browser drops it on the raw HTTP port.
+The host matters. The Go server speaks plain HTTP on the address and port in `.env.development.local`, currently `127.0.0.1:18443`, and the local Caddy instance terminates TLS for `htmx-app.localhost:8443` and proxies every path to it. Browse through Caddy: it mirrors the production TLS path, and Caddy serves no site for plain `localhost:8443`. The raw port is a working fallback, not a dead end: loopback is a potentially trustworthy origin, so a browser does keep the `Secure` session cookie over `http://127.0.0.1:18443`.
 
 The development route creates `agent@example.test` as a player account if needed, starts a normal browser session, and redirects to the player dashboard. Opening the URL with `curl` does not authenticate a separate browser session.
 
