@@ -5,8 +5,8 @@ go 1.26.0
 require (
 	github.com/joho/godotenv v1.5.1
 	github.com/maloquacious/hexg v1.2.0
+	github.com/maloquacious/phrases v1.0.0
 	github.com/maloquacious/semver v0.4.1
-	github.com/mdhender/phrases/v2 v2.0.0
 	github.com/peterbourgon/ff/v4 v4.0.0-beta.1
 	golang.org/x/crypto v0.56.0
 	zombiezen.com/go/sqlite v1.4.2

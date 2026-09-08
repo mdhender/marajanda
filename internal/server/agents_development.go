@@ -14,7 +14,7 @@ import (
 
 	"github.com/mdhender/marajanda/internal/datastore"
 	"github.com/mdhender/marajanda/internal/game"
-	phrases "github.com/mdhender/phrases/v2"
+	"github.com/maloquacious/phrases"
 )
 
 func registerAgentRoutes(mux *http.ServeMux, app *application, environment string) {
