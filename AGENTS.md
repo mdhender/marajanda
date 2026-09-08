@@ -58,5 +58,6 @@ While `version.go` identifies the project as beta:
 
 - Work directly on `main`; do not create or use feature branches.
 - Commit completed changes and push them to `origin/main`. Pushing completed beta work is pre-authorized and does not require separate approval when the commits follow the semantic-versioning rules below.
+- When working on an issue, reference its number in the commit message. Use a closing reference such as `Fixes #123` when the commit completes the issue; otherwise use a non-closing reference such as `Refs #123` to link the work without closing it.
 - Every commit containing a code change must also bump either the minor or patch version in `version.go`, following semantic-versioning rules. Include the version bump in the same commit as the code change.
 - Do not bump the version for documentation-only changes.
