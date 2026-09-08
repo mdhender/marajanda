@@ -93,6 +93,9 @@ func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCrea
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("POST /api/v1/sessions", app.createAPISession)
+	mux.HandleFunc("DELETE /api/v1/session", app.requireAPIAuthentication(app.deleteAPISession))
+	mux.HandleFunc("GET /api/v1/account", app.requireAPIAuthentication(app.getAPIAccount))
 	mux.HandleFunc("GET /assets/{name}", app.asset)
 	mux.HandleFunc("GET /", app.landing)
 	mux.HandleFunc("GET /sign-in", app.signInForm)
@@ -113,7 +116,15 @@ func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCrea
 	mux.HandleFunc("DELETE /player/orders/{entity}/{seq}", app.removeOrder)
 	registerAgentRoutes(mux, app, environment)
 
-	return new(http.CrossOriginProtection).Handler(mux)
+	protection := new(http.CrossOriginProtection)
+	protection.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/") {
+			writeAPIError(w, http.StatusForbidden, apiCodeForbidden, "Cross-origin requests are not allowed.")
+			return
+		}
+		http.Error(w, "cross-origin request detected", http.StatusForbidden)
+	}))
+	return protection.Handler(mux)
 }
 
 func (app *application) landing(w http.ResponseWriter, r *http.Request) {
@@ -193,28 +204,34 @@ func (app *application) signOut(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Path:     "/",
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
-	})
+	expireSessionCookie(w)
 	http.Redirect(w, r, "/sign-in", http.StatusSeeOther)
 }
 
 func (app *application) startSession(ctx context.Context, w http.ResponseWriter, account datastore.Account) error {
-	token, err := newSessionToken()
+	token, err := app.createSession(ctx, account)
 	if err != nil {
 		return err
 	}
+	setSessionCookie(w, token)
+	return nil
+}
+
+func (app *application) createSession(ctx context.Context, account datastore.Account) ([]byte, error) {
+	token, err := newSessionToken()
+	if err != nil {
+		return nil, err
+	}
 	if app.store == nil {
-		return errors.New("session store is not configured")
+		return nil, errors.New("session store is not configured")
 	}
 	if err := app.store.CreateSession(ctx, token, account); err != nil {
-		return err
+		return nil, err
 	}
+	return token, nil
+}
+
+func setSessionCookie(w http.ResponseWriter, token []byte) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    base64.RawURLEncoding.EncodeToString(token),
@@ -223,7 +240,17 @@ func (app *application) startSession(ctx context.Context, w http.ResponseWriter,
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
-	return nil
+}
+
+func expireSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 func (app *application) dashboard(role string) http.HandlerFunc {
