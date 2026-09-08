@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -23,6 +24,112 @@ func apiMutation(t *testing.T, store *testStore, role, method, target, body stri
 	return apiRequest(newHandler(nil, store), method, target, body, map[string]string{
 		"Authorization": "Bearer " + base64.RawURLEncoding.EncodeToString(token),
 	})
+}
+
+func TestAPIAdvanceTurnRequiresAdminAndReturnsTheNewTurn(t *testing.T) {
+	target := "/api/v1/turns/current/advance"
+	store := &testStore{turn: 3}
+	assertAPIError(t, apiRequest(newHandler(nil, store), http.MethodPost, target, "", nil), http.StatusUnauthorized, apiCodeAuthenticationNeeded)
+	assertAPIError(t, apiMutation(t, store, "player", http.MethodPost, target, ""), http.StatusForbidden, apiCodeForbidden)
+	if store.advanced != 0 {
+		t.Fatalf("unauthorized requests advanced the turn %d times", store.advanced)
+	}
+
+	response := apiMutation(t, store, "admin", http.MethodPost, target, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var got apiTurn
+	decodeAPIResponse(t, response, &got)
+	if got.Turn != 4 || store.turn != 4 || store.advanced != 1 {
+		t.Fatalf("response turn = %d, store turn = %d, advances = %d; want 4, 4, 1", got.Turn, store.turn, store.advanced)
+	}
+}
+
+func TestAPIAdvanceTurnReturnsJSONWhenTheStoreRefuses(t *testing.T) {
+	for _, failure := range []error{
+		errors.New("store unavailable"),
+		errors.New("advance turn: end of time"),
+	} {
+		store := &testStore{turn: game.EndOfTimeTurn - 1, turnErr: failure}
+		response := apiMutation(t, store, "admin", http.MethodPost, "/api/v1/turns/current/advance", "")
+		assertAPIError(t, response, http.StatusInternalServerError, apiCodeInternal)
+		if store.advanced != 0 || store.turn != game.EndOfTimeTurn-1 {
+			t.Fatalf("refused advance changed store: turn = %d, advances = %d", store.turn, store.advanced)
+		}
+	}
+}
+
+func TestAPIAndAdminFormAdvanceProduceTheSameStoredEffects(t *testing.T) {
+	type invocation struct {
+		store   *datastore.Store
+		handler http.Handler
+		token   []byte
+	}
+	setup := func() invocation {
+		store, err := datastore.OpenMemory(t.Context(), datastore.Game{
+			Seed1: 98374, Seed2: -98, Width: datastore.MinimumWorldWidth, Height: datastore.MinimumWorldHeight,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { store.Close() })
+		if _, err := store.SaveFaction(t.Context(), "player@marajanda.com", "The Wayfarers", game.RaceHuman); err != nil {
+			t.Fatal(err)
+		}
+		entities, err := store.EntitiesAsOf(t.Context(), "player@marajanda.com", game.FirstTurn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.AddOrder(t.Context(), "player@marajanda.com", game.FirstTurn, entities[0].ID, game.OrderKindRest, game.OrderDetail{Count: 1}); err != nil {
+			t.Fatal(err)
+		}
+		admin, found, err := store.Authenticate(t.Context(), "admin@marajanda.com", "good.luck")
+		if err != nil || !found {
+			t.Fatalf("authenticate admin = %#v, %t, %v", admin, found, err)
+		}
+		token := make([]byte, datastore.SessionTokenBytes)
+		token[0] = 42
+		if err := store.CreateSession(t.Context(), token, admin); err != nil {
+			t.Fatal(err)
+		}
+		return invocation{store: store, handler: newHandler(store.Authenticate, store), token: token}
+	}
+
+	api := setup()
+	response := apiRequest(api.handler, http.MethodPost, "/api/v1/turns/current/advance", "", map[string]string{
+		"Authorization": "Bearer " + base64.RawURLEncoding.EncodeToString(api.token),
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("API advance status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	form := setup()
+	cookie := &http.Cookie{Name: sessionCookieName, Value: base64.RawURLEncoding.EncodeToString(form.token)}
+	response = requestWithCookie(form.handler, http.MethodPost, "/admin/turn", cookie, "")
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("form advance status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	apiResults, err := api.store.ResultsAsOf(t.Context(), "player@marajanda.com", game.FirstTurn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formResults, err := form.store.ResultsAsOf(t.Context(), "player@marajanda.com", game.FirstTurn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiEntities, err := api.store.EntitiesAsOf(t.Context(), "player@marajanda.com", game.FirstTurn+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formEntities, err := form.store.EntitiesAsOf(t.Context(), "player@marajanda.com", game.FirstTurn+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(apiResults, formResults) || !reflect.DeepEqual(apiEntities, formEntities) {
+		t.Fatalf("stored effects differ: API results/entities = %#v/%#v, form = %#v/%#v", apiResults, apiEntities, formResults, formEntities)
+	}
 }
 
 func TestAPIPutFactionConfiguresNormalizesAndReconfigures(t *testing.T) {

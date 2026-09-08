@@ -5,6 +5,7 @@ package datastore
 import (
 	"fmt"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/maloquacious/hexg"
@@ -23,6 +24,64 @@ func advanceTurn(t *testing.T, store *Store) int {
 		t.Fatal(err)
 	}
 	return next
+}
+
+func TestConcurrentAdvancesReturnTheTurnsTheyCommitted(t *testing.T) {
+	eachMemoryMode(t, func(t *testing.T, store *Store) {
+		results := make(chan int, 2)
+		errors := make(chan error, 2)
+		start := make(chan struct{})
+		var ready sync.WaitGroup
+		ready.Add(2)
+		for range 2 {
+			go func() {
+				ready.Done()
+				<-start
+				turn, err := store.AdvanceTurn(t.Context())
+				results <- turn
+				errors <- err
+			}()
+		}
+		ready.Wait()
+		close(start)
+
+		got := []int{<-results, <-results}
+		for range 2 {
+			if err := <-errors; err != nil {
+				t.Fatalf("concurrent AdvanceTurn: %v", err)
+			}
+		}
+		slices.Sort(got)
+		if !slices.Equal(got, []int{game.FirstTurn + 1, game.FirstTurn + 2}) {
+			t.Fatalf("concurrent AdvanceTurn results = %v, want [2 3]", got)
+		}
+		if current, err := store.CurrentTurn(t.Context()); err != nil || current != game.FirstTurn+2 {
+			t.Fatalf("CurrentTurn = %d, %v; want 3", current, err)
+		}
+	})
+}
+
+func TestAdvanceTurnRefusesTheEndOfTime(t *testing.T) {
+	eachMemoryMode(t, func(t *testing.T, store *Store) {
+		conn, release, err := store.take(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sqlitex.ExecuteTransient(conn, `UPDATE game SET current_turn = ?1 WHERE id = 1;`, &sqlitex.ExecOptions{
+			Args: []any{game.EndOfTimeTurn - 1},
+		}); err != nil {
+			release()
+			t.Fatal(err)
+		}
+		release()
+
+		if next, err := store.AdvanceTurn(t.Context()); err == nil || next != 0 {
+			t.Fatalf("AdvanceTurn = %d, %v; want 0 and an error", next, err)
+		}
+		if current, err := store.CurrentTurn(t.Context()); err != nil || current != game.EndOfTimeTurn-1 {
+			t.Fatalf("CurrentTurn = %d, %v; want %d", current, err, game.EndOfTimeTurn-1)
+		}
+	})
 }
 
 // locationAsOf reads where an entity stood on a turn, reporting whether it

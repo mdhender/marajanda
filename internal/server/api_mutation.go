@@ -13,6 +13,15 @@ import (
 	"github.com/mdhender/marajanda/internal/game"
 )
 
+func (app *application) advanceAPITurn(w http.ResponseWriter, r *http.Request) {
+	turn, err := app.store.AdvanceTurn(r.Context())
+	if err != nil {
+		writeAPIInternalError(w)
+		return
+	}
+	_ = writeAPIJSON(w, http.StatusOK, apiTurn{Turn: turn})
+}
+
 func (app *application) putAPIFaction(w http.ResponseWriter, r *http.Request) {
 	if !requireAPIJSONBody(w, r) {
 		return

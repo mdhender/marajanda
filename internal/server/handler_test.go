@@ -690,6 +690,9 @@ func (s *testStore) RemoveOrder(_ context.Context, _ string, turn int, entityID 
 }
 
 func (s *testStore) AdvanceTurn(context.Context) (int, error) {
+	if s.turnErr != nil {
+		return 0, s.turnErr
+	}
 	s.turn++
 	s.advanced++
 	return s.turn, nil

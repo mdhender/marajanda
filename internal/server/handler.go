@@ -106,6 +106,7 @@ func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCrea
 	mux.HandleFunc("POST /api/v1/entities/{entity}/orders", app.requireAPIRole("player", app.postAPIOrder))
 	mux.HandleFunc("PATCH /api/v1/entities/{entity}/orders/{sequence}", app.requireAPIRole("player", app.patchAPIOrder))
 	mux.HandleFunc("DELETE /api/v1/entities/{entity}/orders/{sequence}", app.requireAPIRole("player", app.deleteAPIOrder))
+	mux.HandleFunc("POST /api/v1/turns/current/advance", app.requireAPIRole("admin", app.advanceAPITurn))
 	mux.HandleFunc("GET /assets/{name}", app.asset)
 	mux.HandleFunc("GET /", app.landing)
 	mux.HandleFunc("GET /sign-in", app.signInForm)
