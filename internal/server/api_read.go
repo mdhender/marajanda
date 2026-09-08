@@ -1,0 +1,219 @@
+// Copyright (c) 2026 Michael D Henderson.
+
+package server
+
+import (
+	"net/http"
+	"strings"
+
+	"github.com/maloquacious/hexg"
+	"github.com/mdhender/marajanda/internal/datastore"
+	"github.com/mdhender/marajanda/internal/game"
+)
+
+func (app *application) getAPIGame(w http.ResponseWriter, r *http.Request) {
+	stored, err := app.store.Game(r.Context())
+	if err != nil {
+		writeAPIReadFailure(w)
+		return
+	}
+	turn, err := app.store.CurrentTurn(r.Context())
+	if err != nil {
+		writeAPIReadFailure(w)
+		return
+	}
+	response := apiGame{CurrentTurn: turn, Width: stored.Width, Height: stored.Height}
+	if apiAuthenticationFromContext(r.Context()).Account.Role == "admin" {
+		response.Seeds = []int64{stored.Seed1, stored.Seed2}
+	}
+	_ = writeAPIJSON(w, http.StatusOK, response)
+}
+
+func (app *application) getAPIFaction(w http.ResponseWriter, r *http.Request) {
+	faction, ok := app.apiPlayerFaction(w, r)
+	if !ok {
+		return
+	}
+	_ = writeAPIJSON(w, http.StatusOK, faction)
+}
+
+func (app *application) getAPIEntities(w http.ResponseWriter, r *http.Request) {
+	if _, ok := app.apiPlayerFaction(w, r); !ok {
+		return
+	}
+	turn, err := app.store.CurrentTurn(r.Context())
+	if err != nil {
+		writeAPIReadFailure(w)
+		return
+	}
+	account := apiAuthenticationFromContext(r.Context()).Account
+	entities, err := app.store.EntitiesAsOf(r.Context(), account.Email, turn)
+	if err != nil {
+		writeAPIReadFailure(w)
+		return
+	}
+	response := apiEntities{Turn: turn, Entities: make([]apiEntity, 0, len(entities))}
+	for _, entity := range entities {
+		response.Entities = append(response.Entities, apiEntityFromStore(entity))
+	}
+	_ = writeAPIJSON(w, http.StatusOK, response)
+}
+
+func (app *application) getAPIMap(w http.ResponseWriter, r *http.Request) {
+	authentication := apiAuthenticationFromContext(r.Context())
+	if authentication.Account.Role != "admin" && authentication.Account.Role != "player" {
+		writeAPIError(w, http.StatusForbidden, apiCodeForbidden, "This account cannot use that resource.")
+		return
+	}
+	if authentication.Account.Role == "player" {
+		if _, ok := app.apiPlayerFaction(w, r); !ok {
+			return
+		}
+	}
+	turn, err := app.store.CurrentTurn(r.Context())
+	if err != nil {
+		writeAPIReadFailure(w)
+		return
+	}
+	world, err := app.store.World(r.Context())
+	if err != nil {
+		writeAPIReadFailure(w)
+		return
+	}
+	visible := make(map[hexg.Hex]bool)
+	if authentication.Account.Role == "player" {
+		hexes, err := app.store.VisibleHexes(r.Context(), authentication.Account.Email)
+		if err != nil {
+			writeAPIReadFailure(w)
+			return
+		}
+		visible = make(map[hexg.Hex]bool, len(hexes))
+		for _, coord := range hexes {
+			visible[world.Normalize(coord)] = true
+		}
+	}
+	response := apiMap{Turn: turn, Width: world.Width(), Height: world.Height(), Hexes: make([]apiHex, 0)}
+	for _, hex := range world.Hexes() {
+		if authentication.Account.Role == "player" && !visible[hex.Coord] {
+			continue
+		}
+		response.Hexes = append(response.Hexes, apiHex{
+			Coordinate: apiCoordinateFromHex(hex.Coord),
+			Terrain:    string(hex.Terrain),
+			Elevation:  hex.Elevation,
+		})
+	}
+	_ = writeAPIJSON(w, http.StatusOK, response)
+}
+
+func (app *application) getAPIOrders(w http.ResponseWriter, r *http.Request) {
+	if _, ok := app.apiPlayerFaction(w, r); !ok {
+		return
+	}
+	turn, err := app.store.CurrentTurn(r.Context())
+	if err != nil {
+		writeAPIReadFailure(w)
+		return
+	}
+	account := apiAuthenticationFromContext(r.Context()).Account
+	entities, err := app.store.EntitiesAsOf(r.Context(), account.Email, turn)
+	if err != nil {
+		writeAPIReadFailure(w)
+		return
+	}
+	orders, err := app.store.OrdersAsOf(r.Context(), account.Email, turn)
+	if err != nil {
+		writeAPIReadFailure(w)
+		return
+	}
+	estimates, err := app.store.EstimateOrders(r.Context(), account.Email, turn)
+	if err != nil {
+		writeAPIReadFailure(w)
+		return
+	}
+	response := apiOrders{Turn: turn, Entities: make([]apiEntityOrders, 0, len(entities))}
+	for _, entity := range entities {
+		authored, _ := game.SplitTrailingRest(orders[entity.ID])
+		response.Entities = append(response.Entities, apiEntityOrders{
+			EntityID: entity.ID,
+			Orders:   apiOrdersFromStore(authored),
+			Estimate: apiEstimateFromGame(estimates[entity.ID]),
+		})
+	}
+	_ = writeAPIJSON(w, http.StatusOK, response)
+}
+
+func (app *application) apiPlayerFaction(w http.ResponseWriter, r *http.Request) (apiFaction, bool) {
+	account := apiAuthenticationFromContext(r.Context()).Account
+	faction, found, err := app.store.Faction(r.Context(), account.Email)
+	if err != nil {
+		writeAPIReadFailure(w)
+		return apiFaction{}, false
+	}
+	if !found || !faction.Configured() {
+		writeAPIError(w, http.StatusNotFound, apiCodeFactionNotConfigured, "Configure a faction before using this resource.")
+		return apiFaction{}, false
+	}
+	return apiFaction{Name: faction.Name, Race: string(faction.Race), Active: faction.Active, Configured: true}, true
+}
+
+func writeAPIReadFailure(w http.ResponseWriter) {
+	writeAPIError(w, http.StatusInternalServerError, apiCodeInternal, "The server could not complete the request.")
+}
+
+func apiCoordinateFromHex(coord hexg.Hex) apiCoordinate {
+	return apiCoordinate{Q: coord.Q(), R: coord.R()}
+}
+
+func apiEntityFromStore(entity datastore.Entity) apiEntity {
+	kinds := entity.Kind.OrderKinds()
+	response := apiEntity{
+		ID: entity.ID, Code: entity.Code, Name: entity.Name, Kind: string(entity.Kind),
+		Location: apiCoordinateFromHex(entity.Location), Allowance: entity.Allowance,
+		OrderKinds: make([]string, 0, len(kinds)),
+	}
+	for _, kind := range kinds {
+		response.OrderKinds = append(response.OrderKinds, string(kind))
+	}
+	return response
+}
+
+func apiOrdersFromStore(orders []datastore.Order) []apiOrder {
+	response := make([]apiOrder, 0, len(orders))
+	for _, order := range orders {
+		detail := apiOrderDetail{}
+		if order.Kind == game.OrderKindMove && order.Detail.Direction.IsValid() {
+			direction := strings.ToLower(order.Detail.Direction.String())
+			detail.Direction = &direction
+		} else if order.Kind == game.OrderKindRest {
+			count := order.Detail.Count
+			detail.Count = &count
+		}
+		response = append(response, apiOrder{Sequence: order.Seq, Kind: string(order.Kind), Detail: detail})
+	}
+	return response
+}
+
+func apiEstimateFromGame(estimate game.Estimate) apiOrderEstimate {
+	response := apiOrderEstimate{
+		Allowance: estimate.Allowance, Committed: estimate.Committed, Total: estimate.Total,
+		Residue: estimate.Residue, Overspend: estimate.Overspend,
+		End: apiCoordinateFromHex(estimate.End), Orders: make([]apiOrderCost, 0, len(estimate.Orders)),
+	}
+	if estimate.ExhaustsAt != 0 {
+		exhaustsAt := estimate.ExhaustsAt
+		response.ExhaustsAt = &exhaustsAt
+	}
+	for _, order := range estimate.Orders {
+		cost := apiOrderCost{
+			Sequence: order.Seq, Kind: string(order.Kind), Running: order.Running, Exhausts: order.Exhausts,
+			From: apiCoordinateFromHex(order.From), Target: apiCoordinateFromHex(order.Target), To: apiCoordinateFromHex(order.To),
+		}
+		if order.Priced {
+			value := order.Cost
+			cost.Cost = &value
+		}
+		response.Orders = append(response.Orders, cost)
+	}
+	return response
+}

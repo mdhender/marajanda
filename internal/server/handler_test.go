@@ -531,6 +531,14 @@ type testStore struct {
 	sessionAccount datastore.Account
 	sessions       map[string]bool
 	sessionErr     error
+	gameErr        error
+	factionErr     error
+	turnErr        error
+	entitiesErr    error
+	ordersErr      error
+	estimateErr    error
+	worldErr       error
+	visibleErr     error
 }
 
 func (s *testStore) CreateSession(_ context.Context, token []byte, account datastore.Account) error {
@@ -562,6 +570,9 @@ func (s *testStore) DeleteSession(_ context.Context, token []byte) error {
 
 func (s *testStore) OrdersAsOf(_ context.Context, _ string, turn int) (map[int64][]datastore.Order, error) {
 	s.asOf = turn
+	if s.ordersErr != nil {
+		return nil, s.ordersErr
+	}
 	return s.orders, nil
 }
 
@@ -640,6 +651,9 @@ func (s *testStore) SetOrderDetails(_ context.Context, _ string, turn int, updat
 // the one cost function in internal/game. The fake keeps no knowledge and no
 // world, so every step is onto ground the faction does not know.
 func (s *testStore) EstimateOrders(_ context.Context, _ string, _ int) (map[int64]game.Estimate, error) {
+	if s.estimateErr != nil {
+		return nil, s.estimateErr
+	}
 	world, err := cylinder.New(2*testMapWidth + 1)
 	if err != nil {
 		return nil, err
@@ -682,27 +696,45 @@ func (s *testStore) AdvanceTurn(context.Context) (int, error) {
 }
 
 func (s *testStore) Game(context.Context) (datastore.Game, error) {
+	if s.gameErr != nil {
+		return datastore.Game{}, s.gameErr
+	}
 	return s.game, nil
 }
 
 func (s *testStore) World(context.Context) (game.World, error) {
+	if s.worldErr != nil {
+		return game.World{}, s.worldErr
+	}
 	return s.world, nil
 }
 
 func (s *testStore) Faction(context.Context, string) (datastore.Faction, bool, error) {
+	if s.factionErr != nil {
+		return datastore.Faction{}, false, s.factionErr
+	}
 	return s.faction, s.found, nil
 }
 
 func (s *testStore) CurrentTurn(context.Context) (int, error) {
+	if s.turnErr != nil {
+		return 0, s.turnErr
+	}
 	return s.turn, nil
 }
 
 func (s *testStore) EntitiesAsOf(_ context.Context, _ string, turn int) ([]datastore.Entity, error) {
 	s.asOf = turn
+	if s.entitiesErr != nil {
+		return nil, s.entitiesErr
+	}
 	return s.entities, nil
 }
 
 func (s *testStore) VisibleHexes(context.Context, string) ([]hexg.Hex, error) {
+	if s.visibleErr != nil {
+		return nil, s.visibleErr
+	}
 	return s.visible, nil
 }
 
