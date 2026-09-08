@@ -56,8 +56,15 @@ The sign-in form labels the email identifier as `Account` and renders it as a te
 Successful authentication creates a persisted session from a cryptographically
 random 32-byte token. Only its SHA-256 hash is stored; the browser receives the
 opaque token in a host-only `Secure`, `HttpOnly`, `SameSite=Lax` cookie without
-a persistent expiration. The session survives a server restart and ends when
-the browser discards the cookie, the user signs out, or the account is deleted.
+a persistent expiration. The same opaque token can instead authenticate an API
+request as a bearer credential. The session survives a persistent-server
+restart and has no automatic expiry. Discarding the browser cookie only makes
+that browser forget the credential; the stored session ends when the user signs
+out or explicitly revokes it, or when the account is deleted.
+
+Raw tokens are credentials and must not be logged or exposed. They are returned
+only when an API session is created and in the corresponding cookie. Because
+the datastore holds only a SHA-256 hash, it cannot recover a raw token.
 
 Authenticated admins are directed to `/admin/dashboard`. Authenticated players are directed to `/player/dashboard`. Requests for either dashboard without a valid session are directed to `/sign-in`. The same role and session rules apply to the map pages described in [Map view reference](reference/map-view.md).
 

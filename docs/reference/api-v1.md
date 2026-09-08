@@ -4,10 +4,14 @@ The versioned JSON interface for agents and browser applications. The active
 HTMX interface and this API are two transports over the same datastore and game
 behavior. Neither calls the other.
 
-Implemented by `internal/server`. The session storage described here arrives
-with [#48](https://github.com/mdhender/marajanda/issues/48); the endpoints arrive
-with the remaining sub-issues of
-[#46](https://github.com/mdhender/marajanda/issues/46).
+Implemented by `internal/server`. API v1 and the HTMX interface are both active
+and maintain capability parity. EmberJS is a prospective API client, not part
+of the current application.
+
+The request and response examples below use the seeded test accounts and DTOs
+exercised by the server integration tests. Coordinate and terrain values depend
+on the configured game seeds, so clients must treat those shown as examples
+rather than fixed world data.
 
 ## Base path and media type
 
@@ -60,6 +64,38 @@ Unsafe cookie-authenticated requests remain subject to the server's cross-origin
 protection. Bearer authentication does not establish a CORS policy. The API is
 for same-origin browser deployment and non-browser agents; it sends no
 cross-origin access headers.
+
+For a bearer client, create a session, retain the `token` property from the
+response, and send it on later requests:
+
+```http
+POST /api/v1/sessions HTTP/1.1
+Host: marajanda.example
+Content-Type: application/json
+
+{"email":"player@marajanda.com","passphrase":"good.luck"}
+```
+
+```http
+GET /api/v1/account HTTP/1.1
+Host: marajanda.example
+Authorization: Bearer <token>
+```
+
+A same-origin browser may retain the `Set-Cookie` value from session creation
+instead. It then sends the cookie without also sending `Authorization`:
+
+```http
+GET /api/v1/account HTTP/1.1
+Host: marajanda.example
+Cookie: marajanda_session=<token>
+```
+
+For a persistent database, either credential remains valid after the server is
+stopped and reopened. Restarting does not rotate or expire sessions. Raw tokens
+are credentials: do not log, publish, or persist them where an unauthorized
+reader can recover them. The datastore cannot recover a raw token from its
+stored SHA-256 hash.
 
 ## Errors
 

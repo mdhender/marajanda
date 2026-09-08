@@ -70,6 +70,11 @@ A session row has no timeout. It remains until sign-out revokes it or deletion
 of its account removes it through `ON DELETE CASCADE`. Resolving a session reads
 the current account row and does not filter `is_active`: deactivation prevents
 new authentication but deliberately does not revoke a session already issued.
+Persistent sessions survive closing and reopening the server. The same token
+may be presented as the secure browser cookie or as an API bearer credential;
+the transport does not change its storage or lifetime. Private and named shared
+in-memory stores implement the same operations but, like all their data, retain
+sessions only while that in-memory database exists.
 
 ## Hexes
 

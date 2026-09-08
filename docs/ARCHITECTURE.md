@@ -79,6 +79,20 @@ Command functions assemble dependencies and invoke application behavior. They re
 
 Server and game-engine behavior live in separate packages. Neither belongs in command functions.
 
+The server exposes two active transports over the same typed datastore and game
+behavior. HTML handlers parse forms and render pages or HTMX fragments. API v1
+handlers parse JSON and render explicit DTOs and JSON error envelopes. Neither
+transport invokes the other's HTTP handlers. A workflow shared by both belongs
+in a typed application operation; datastore invariants and game rules remain in
+`internal/datastore` and `internal/game`.
+
+Every authenticated HTML capability has an API v1 counterpart. The executable
+capability matrix in `internal/server/api_parity_test.go` and the consumer
+matrix in [REST API v1 reference](reference/api-v1.md#capability-parity) are the
+change boundary: adding an authenticated capability requires adding or
+explicitly revising its representation in both transports. EmberJS is only a
+prospective same-origin client; the server makes no CORS promise.
+
 Before `github.com/peterbourgon/ff/v4` runs a command, the process loads environment variables through `internal/dotenv`.
 
 ## Command configuration

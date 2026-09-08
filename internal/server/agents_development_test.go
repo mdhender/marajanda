@@ -162,7 +162,10 @@ func TestAgentSignInLeavesAdminsWithoutAFaction(t *testing.T) {
 // sign-in cannot fail on a random draw.
 func TestAgentFactionNameAlwaysValid(t *testing.T) {
 	for range 500 {
-		name := agentFactionName()
+		name, err := agentFactionName()
+		if err != nil {
+			t.Fatalf("generate faction name: %v", err)
+		}
 		normalized, err := game.NormalizeFactionName(name)
 		if err != nil {
 			t.Fatalf("generated %q, which the faction rules reject: %v", name, err)

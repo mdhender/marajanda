@@ -12,9 +12,9 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/maloquacious/phrases"
 	"github.com/mdhender/marajanda/internal/datastore"
 	"github.com/mdhender/marajanda/internal/game"
-	"github.com/maloquacious/phrases"
 )
 
 func registerAgentRoutes(mux *http.ServeMux, app *application, environment string) {
@@ -115,7 +115,11 @@ func (app *application) ensureAgentFaction(ctx context.Context, account datastor
 	if found && faction.Configured() {
 		return account, nil
 	}
-	name, err := game.NormalizeFactionName(agentFactionName())
+	generated, err := agentFactionName()
+	if err != nil {
+		return account, err
+	}
+	name, err := game.NormalizeFactionName(generated)
 	if err != nil {
 		return account, err
 	}
@@ -131,12 +135,16 @@ func (app *application) ensureAgentFaction(ctx context.Context, account datastor
 // Two words of the wordlist run from seven to thirteen characters together, so
 // the result always satisfies the three-to-thirty-two faction rule. Every word
 // is lowercase ASCII, so capitalizing the leading byte is safe.
-func agentFactionName() string {
-	words := strings.Fields(phrases.Generate(2, " "))
+func agentFactionName() (string, error) {
+	phrase, err := phrases.Generate(2, " ")
+	if err != nil {
+		return "", err
+	}
+	words := strings.Fields(phrase)
 	for index, word := range words {
 		words[index] = strings.ToUpper(word[:1]) + word[1:]
 	}
-	return strings.Join(words, " ")
+	return strings.Join(words, " "), nil
 }
 
 func safeReturnPath(value string) string {
