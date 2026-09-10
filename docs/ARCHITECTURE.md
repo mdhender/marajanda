@@ -129,3 +129,9 @@ A server using a persistent database supports graceful shutdown and closes the d
 The server accepts `GET /api/healthz` and returns `204 No Content`.
 
 Three things end a run, and all three arrive at the same graceful shutdown: the caller's context is canceled, the configured non-zero timeout expires, or a development build is asked to stop through `POST /__agents/shut-it-down`. In each case in-flight requests drain, the database closes, and `Run` returns `nil`. The route is built from the same context the other two cancel, so there is one way out of `Run` rather than three.
+
+## Logging
+
+`server.Config` carries a `*slog.Logger`. It is the only logger the web layer writes to: nothing in `internal/server` calls the package-level `slog` functions, and `TestNothingInThePackageUsesTheGlobalLogger` reads the package's own source to keep it that way. A caller that supplies no logger gets one that discards, so an embedded server is silent rather than writing wherever the process happens to point. `cmd/marajanda` supplies a text logger on stderr, which keeps diagnostics out of whatever the command writes to stdout.
+
+Every response that reports an internal failure logs the error behind it. The message a client receives is deliberately vague — one sentence for a page, one code and one sentence for the API — so the error itself is written with the request method and the route pattern the mux matched. The pattern is logged rather than the URL: a path value identifies a player's own entity or order, and a log line is one more place that would have to be looked after. Nothing else from the request is recorded.

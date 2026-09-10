@@ -16,7 +16,7 @@ import (
 func (app *application) advanceAPITurn(w http.ResponseWriter, r *http.Request) {
 	turn, err := app.store.AdvanceTurn(r.Context())
 	if err != nil {
-		writeAPIInternalError(w)
+		app.writeAPIInternalError(w, r, err)
 		return
 	}
 	_ = writeAPIJSON(w, http.StatusOK, apiTurn{Turn: turn})
@@ -47,12 +47,12 @@ func (app *application) putAPIFaction(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusConflict, apiCodeNoOrigin, "No origin is available for that faction.")
 			return
 		}
-		writeAPIInternalError(w)
+		app.writeAPIInternalError(w, r, err)
 		return
 	}
 	faction, found, err := app.store.Faction(r.Context(), account.Email)
 	if err != nil || !found {
-		writeAPIInternalError(w)
+		app.writeAPIInternalError(w, r, err)
 		return
 	}
 	_ = writeAPIJSON(w, http.StatusOK, apiFaction{
@@ -88,7 +88,7 @@ func (app *application) postAPIOrder(w http.ResponseWriter, r *http.Request) {
 		err = app.store.InsertOrder(r.Context(), apiPlayerEmail(r), request.Turn, entityID, sequence, kind, detail)
 	}
 	if err != nil {
-		writeAPIOrderFailure(w, err)
+		app.writeAPIOrderFailure(w, r, err)
 		return
 	}
 	app.writeAPIEntityOrders(w, r, http.StatusCreated, request.Turn, entityID, sequence)
@@ -113,7 +113,7 @@ func (app *application) patchAPIOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := app.store.SetOrderDetail(r.Context(), apiPlayerEmail(r), request.Turn, entityID, sequence, detail); err != nil {
-		writeAPIOrderFailure(w, err)
+		app.writeAPIOrderFailure(w, r, err)
 		return
 	}
 	app.writeAPIEntityOrders(w, r, http.StatusOK, request.Turn, entityID, sequence)
@@ -145,7 +145,7 @@ func (app *application) putAPIOrders(w http.ResponseWriter, r *http.Request) {
 		updates = append(updates, datastore.OrderUpdate{EntityID: update.EntityID, Seq: update.Sequence, Detail: detail})
 	}
 	if err := app.store.SetOrderDetails(r.Context(), apiPlayerEmail(r), request.Turn, updates); err != nil {
-		writeAPIOrderFailure(w, err)
+		app.writeAPIOrderFailure(w, r, err)
 		return
 	}
 	app.writeAPIOrders(w, r, request.Turn)
@@ -161,7 +161,7 @@ func (app *application) deleteAPIOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := app.store.RemoveOrder(r.Context(), apiPlayerEmail(r), turn, entityID, sequence); err != nil {
-		writeAPIOrderFailure(w, err)
+		app.writeAPIOrderFailure(w, r, err)
 		return
 	}
 	app.writeAPIEntityOrders(w, r, http.StatusOK, turn, entityID, sequence)
@@ -175,12 +175,12 @@ func (app *application) requireAPIOrderFaction(w http.ResponseWriter, r *http.Re
 func (app *application) writeAPIEntityOrders(w http.ResponseWriter, r *http.Request, status, turn int, entityID int64, sequence int) {
 	orders, err := app.store.OrdersAsOf(r.Context(), apiPlayerEmail(r), turn)
 	if err != nil {
-		writeAPIInternalError(w)
+		app.writeAPIInternalError(w, r, err)
 		return
 	}
 	estimates, err := app.store.EstimateOrders(r.Context(), apiPlayerEmail(r), turn)
 	if err != nil {
-		writeAPIInternalError(w)
+		app.writeAPIInternalError(w, r, err)
 		return
 	}
 	authored, _ := game.SplitTrailingRest(orders[entityID])
@@ -193,17 +193,17 @@ func (app *application) writeAPIEntityOrders(w http.ResponseWriter, r *http.Requ
 func (app *application) writeAPIOrders(w http.ResponseWriter, r *http.Request, turn int) {
 	entities, err := app.store.EntitiesAsOf(r.Context(), apiPlayerEmail(r), turn)
 	if err != nil {
-		writeAPIInternalError(w)
+		app.writeAPIInternalError(w, r, err)
 		return
 	}
 	orders, err := app.store.OrdersAsOf(r.Context(), apiPlayerEmail(r), turn)
 	if err != nil {
-		writeAPIInternalError(w)
+		app.writeAPIInternalError(w, r, err)
 		return
 	}
 	estimates, err := app.store.EstimateOrders(r.Context(), apiPlayerEmail(r), turn)
 	if err != nil {
-		writeAPIInternalError(w)
+		app.writeAPIInternalError(w, r, err)
 		return
 	}
 	response := apiOrders{Turn: turn, Entities: make([]apiEntityOrders, 0, len(entities))}
@@ -239,7 +239,7 @@ func apiDetailToGame(w http.ResponseWriter, detail apiOrderDetail) (game.OrderDe
 	return game.OrderDetail{}, true
 }
 
-func writeAPIOrderFailure(w http.ResponseWriter, err error) {
+func (app *application) writeAPIOrderFailure(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, datastore.ErrFactionInactive):
 		writeAPIError(w, http.StatusForbidden, apiCodeFactionInactive, "That faction is not active and cannot issue orders.")
@@ -255,7 +255,7 @@ func writeAPIOrderFailure(w http.ResponseWriter, err error) {
 		errors.Is(err, datastore.ErrOrderDetailRefused):
 		writeAPIOrderRefused(w)
 	default:
-		writeAPIInternalError(w)
+		app.writeAPIInternalError(w, r, err)
 	}
 }
 
@@ -275,8 +275,11 @@ func writeAPIInvalidRequest(w http.ResponseWriter) {
 	writeAPIError(w, http.StatusBadRequest, apiCodeInvalidRequest, "The request contains a missing or invalid value.")
 }
 
-func writeAPIInternalError(w http.ResponseWriter) {
-	writeAPIError(w, http.StatusInternalServerError, apiCodeInternal, "The server could not complete the request.")
+// writeAPIInternalError answers a mutation that failed inside the server. It is
+// the write side's name for one internal failure; the error goes to the log,
+// and the client is told the same sentence every internal failure produces.
+func (app *application) writeAPIInternalError(w http.ResponseWriter, r *http.Request, err error) {
+	app.apiInternalError(w, r, err)
 }
 
 func apiPlayerEmail(r *http.Request) string {

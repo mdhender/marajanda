@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -52,6 +53,11 @@ type application struct {
 	// caller supplied one, which is what keeps the development route that
 	// calls it out of a handler that has no server to stop.
 	shutdown func()
+	// logger is where a failure the client is not told about goes. It is
+	// never nil: serverLogger substitutes a discarding one, so a handler
+	// built without a logger is silent rather than writing to the global
+	// default. See logging.go.
+	logger *slog.Logger
 }
 
 type pageData struct {
@@ -79,15 +85,16 @@ type pageData struct {
 }
 
 func newHandler(authenticate authenticateFunc, store applicationStore) http.Handler {
-	return newConfiguredHandler(authenticate, nil, store, "production", nil)
+	return newConfiguredHandler(authenticate, nil, store, "production", nil, nil)
 }
 
-func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCreateFunc, store applicationStore, environment string, shutdown func()) http.Handler {
+func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCreateFunc, store applicationStore, environment string, shutdown func(), logger *slog.Logger) http.Handler {
 	app := &application{
 		authenticate:        authenticate,
 		findOrCreateAccount: findOrCreate,
 		store:               store,
 		shutdown:            shutdown,
+		logger:              serverLogger(logger),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -145,7 +152,7 @@ func (app *application) landing(w http.ResponseWriter, r *http.Request) {
 	}
 	account, ok, err := app.currentAccount(r)
 	if err != nil {
-		http.Error(w, "Marajanda could not load the session.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not load the session.")
 		return
 	}
 	if ok {
@@ -158,7 +165,7 @@ func (app *application) landing(w http.ResponseWriter, r *http.Request) {
 func (app *application) signInForm(w http.ResponseWriter, r *http.Request) {
 	account, ok, err := app.currentAccount(r)
 	if err != nil {
-		http.Error(w, "Marajanda could not load the session.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not load the session.")
 		return
 	}
 	if ok {
@@ -192,7 +199,7 @@ func (app *application) signIn(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		http.Error(w, "Marajanda could not complete the sign-in request.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not complete the sign-in request.")
 		return
 	}
 	if !ok {
@@ -200,7 +207,7 @@ func (app *application) signIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := app.startSession(r.Context(), w, account); err != nil {
-		http.Error(w, "Marajanda could not create the session.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not create the session.")
 		return
 	}
 	http.Redirect(w, r, dashboardPath(account), http.StatusSeeOther)
@@ -210,7 +217,7 @@ func (app *application) signOut(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(sessionCookieName); err == nil {
 		if token, err := decodeSessionToken(cookie.Value); err == nil && app.store != nil {
 			if err := app.store.DeleteSession(r.Context(), token); err != nil {
-				http.Error(w, "Marajanda could not end the session.", http.StatusInternalServerError)
+				app.serverError(w, r, err, "Marajanda could not end the session.")
 				return
 			}
 		}
@@ -234,7 +241,7 @@ func (app *application) createSession(ctx context.Context, account datastore.Acc
 		return nil, err
 	}
 	if app.store == nil {
-		return nil, errors.New("session store is not configured")
+		return nil, errStoreNotConfigured
 	}
 	if err := app.store.CreateSession(ctx, token, account); err != nil {
 		return nil, err
@@ -268,7 +275,7 @@ func (app *application) dashboard(role string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		account, ok, err := app.currentAccount(r)
 		if err != nil {
-			http.Error(w, "Marajanda could not load the session.", http.StatusInternalServerError)
+			app.serverError(w, r, err, "Marajanda could not load the session.")
 			return
 		}
 		if !ok {
@@ -282,31 +289,31 @@ func (app *application) dashboard(role string) http.HandlerFunc {
 		var data pageData
 		if role == "admin" {
 			if app.store == nil {
-				http.Error(w, "Marajanda could not load the game.", http.StatusInternalServerError)
+				app.serverError(w, r, errStoreNotConfigured, "Marajanda could not load the game.")
 				return
 			}
 			game, err := app.store.Game(r.Context())
 			if err != nil {
-				http.Error(w, "Marajanda could not load the game.", http.StatusInternalServerError)
+				app.serverError(w, r, err, "Marajanda could not load the game.")
 				return
 			}
 			// The admin's control moves the clock, so the dashboard has to
 			// name the turn it is moving.
 			turn, err := app.store.CurrentTurn(r.Context())
 			if err != nil {
-				http.Error(w, "Marajanda could not load the game.", http.StatusInternalServerError)
+				app.serverError(w, r, err, "Marajanda could not load the game.")
 				return
 			}
 			data.Game = game
 			data.Turn = turn
 		} else {
 			if app.store == nil {
-				http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
+				app.serverError(w, r, errStoreNotConfigured, "Marajanda could not load your faction.")
 				return
 			}
 			faction, found, err := app.store.Faction(r.Context(), account.Email)
 			if err != nil {
-				http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
+				app.serverError(w, r, err, "Marajanda could not load your faction.")
 				return
 			}
 			if !found || !faction.Configured() {
@@ -319,12 +326,12 @@ func (app *application) dashboard(role string) http.HandlerFunc {
 			// these tables exist to prevent.
 			turn, err := app.store.CurrentTurn(r.Context())
 			if err != nil {
-				http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
+				app.serverError(w, r, err, "Marajanda could not load your faction.")
 				return
 			}
 			entities, err := app.store.EntitiesAsOf(r.Context(), account.Email, turn)
 			if err != nil {
-				http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
+				app.serverError(w, r, err, "Marajanda could not load your faction.")
 				return
 			}
 			data.Faction = faction
@@ -349,7 +356,7 @@ func (app *application) factionForm(w http.ResponseWriter, r *http.Request) {
 	}
 	faction, found, err := app.store.Faction(r.Context(), account.Email)
 	if err != nil {
-		http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not load your faction.")
 		return
 	}
 	if found && faction.Configured() {
@@ -383,7 +390,7 @@ func (app *application) configureFaction(w http.ResponseWriter, r *http.Request)
 	}
 	faction, found, err := app.store.Faction(r.Context(), account.Email)
 	if err != nil {
-		http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not load your faction.")
 		return
 	}
 	if found && faction.Configured() {
@@ -419,7 +426,7 @@ func (app *application) configureFaction(w http.ResponseWriter, r *http.Request)
 				"Marajanda has nowhere left to settle a faction of that people. Try another."))
 			return
 		}
-		http.Error(w, "Marajanda could not save your faction.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not save your faction.")
 		return
 	}
 	http.Redirect(w, r, "/player/dashboard", http.StatusSeeOther)
@@ -436,7 +443,7 @@ func (app *application) requirePlayer(w http.ResponseWriter, r *http.Request) (d
 func (app *application) requireRole(w http.ResponseWriter, r *http.Request, role string) (datastore.Account, bool) {
 	account, ok, err := app.currentAccount(r)
 	if err != nil {
-		http.Error(w, "Marajanda could not load the session.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not load the session.")
 		return datastore.Account{}, false
 	}
 	if !ok {
@@ -448,7 +455,7 @@ func (app *application) requireRole(w http.ResponseWriter, r *http.Request, role
 		return datastore.Account{}, false
 	}
 	if app.store == nil {
-		http.Error(w, "Marajanda could not load the game.", http.StatusInternalServerError)
+		app.serverError(w, r, errStoreNotConfigured, "Marajanda could not load the game.")
 		return datastore.Account{}, false
 	}
 	return account, true

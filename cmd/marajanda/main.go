@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strconv"
@@ -80,6 +81,12 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 			if game != nil {
 				game.Width, game.Height = *worldWidth, *worldHeight
 			}
+			// Diagnostics go to stderr so they stay out of whatever the
+			// command writes to stdout. The server is handed this logger
+			// rather than reading a package-level one, so a caller that
+			// embeds it - a test, or another command - decides where its
+			// output goes and gets silence by default.
+			logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 			return server.Run(ctx, server.Config{
 				Root:        *root,
 				AdminEmail:  *adminEmail,
@@ -90,6 +97,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 				Address:     *address,
 				Port:        *port,
 				Timeout:     *timeout,
+				Logger:      logger,
 			})
 		},
 	}

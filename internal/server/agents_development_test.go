@@ -26,7 +26,7 @@ func TestAgentSignInCreatesNormalSession(t *testing.T) {
 	handler := newConfiguredHandler(nil, func(_ context.Context, email string) (datastore.Account, error) {
 		gotEmail = email
 		return datastore.Account{Email: email, Handle: "reviewer", Role: "player"}, nil
-	}, &testStore{faction: datastore.Faction{Name: "Reviewers", Race: game.RaceHuman, Active: true}, found: true}, "development", nil)
+	}, &testStore{faction: datastore.Faction{Name: "Reviewers", Race: game.RaceHuman, Active: true}, found: true}, "development", nil, nil)
 	response := serveRequest(handler, http.MethodGet, "/__agents/log-me-in/Reviewer@Example.Test?returnTo=%2Fplayer%2Fdashboard")
 
 	if gotEmail != "reviewer@example.test" {
@@ -57,7 +57,7 @@ func TestAgentSignInRejectsUnsafeReturnPaths(t *testing.T) {
 	store := &testStore{faction: datastore.Faction{Name: "Reviewers", Race: game.RaceHuman, Active: true}, found: true}
 	handler := newConfiguredHandler(nil, func(context.Context, string) (datastore.Account, error) {
 		return datastore.Account{Email: "agent@example.test", Handle: "reviewer", Role: "player"}, nil
-	}, store, "development", nil)
+	}, store, "development", nil, nil)
 	for _, value := range []string{
 		"",
 		"dashboard",
@@ -84,7 +84,7 @@ func TestAgentSignInRequiresEmail(t *testing.T) {
 	handler := newConfiguredHandler(nil, func(context.Context, string) (datastore.Account, error) {
 		calls++
 		return datastore.Account{}, nil
-	}, nil, "development", nil)
+	}, nil, "development", nil, nil)
 	response := serveRequest(handler, http.MethodGet, "/__agents/log-me-in/not-an-email")
 	if response.Code != http.StatusBadRequest || calls != 0 {
 		t.Fatalf("response status = %d, account calls = %d; want %d, 0", response.Code, calls, http.StatusBadRequest)
@@ -95,7 +95,7 @@ func TestAgentSignInNotRegisteredInProductionEnvironment(t *testing.T) {
 	handler := newConfiguredHandler(nil, func(context.Context, string) (datastore.Account, error) {
 		t.Fatal("production route called account lookup")
 		return datastore.Account{}, nil
-	}, nil, "production", nil)
+	}, nil, "production", nil, nil)
 	response := serveRequest(handler, http.MethodGet, "/__agents/log-me-in/agent@example.test")
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusNotFound)
@@ -106,7 +106,7 @@ func TestAgentSignInGeneratesFactionWhenMissing(t *testing.T) {
 	store := &testStore{}
 	handler := newConfiguredHandler(nil, func(_ context.Context, email string) (datastore.Account, error) {
 		return datastore.Account{Email: email, Handle: "agent", Role: "player"}, nil
-	}, store, "development", nil)
+	}, store, "development", nil, nil)
 
 	response := serveRequest(handler, http.MethodGet, "/__agents/log-me-in/agent@example.test?returnTo=%2Fplayer%2Fdashboard")
 	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/player/dashboard" {
@@ -135,7 +135,7 @@ func TestAgentSignInKeepsAnExistingFaction(t *testing.T) {
 	store := &testStore{faction: datastore.Faction{Name: "Star Kin", Race: game.RaceHuman, Active: true}, found: true}
 	handler := newConfiguredHandler(nil, func(_ context.Context, email string) (datastore.Account, error) {
 		return datastore.Account{Email: email, Handle: "agent", Role: "player"}, nil
-	}, store, "development", nil)
+	}, store, "development", nil, nil)
 
 	serveRequest(handler, http.MethodGet, "/__agents/log-me-in/agent@example.test?returnTo=%2Fplayer%2Fdashboard")
 
@@ -148,7 +148,7 @@ func TestAgentSignInLeavesAdminsWithoutAFaction(t *testing.T) {
 	store := &testStore{}
 	handler := newConfiguredHandler(nil, func(_ context.Context, email string) (datastore.Account, error) {
 		return datastore.Account{Email: email, Handle: "keeper", Role: "admin"}, nil
-	}, store, "development", nil)
+	}, store, "development", nil, nil)
 
 	serveRequest(handler, http.MethodGet, "/__agents/log-me-in/keeper@example.test?returnTo=%2Fadmin%2Fdashboard")
 
@@ -180,7 +180,7 @@ func TestAgentFactionNameAlwaysValid(t *testing.T) {
 func TestAgentSignInRefusesADeactivatedAccount(t *testing.T) {
 	handler := newConfiguredHandler(nil, func(context.Context, string) (datastore.Account, error) {
 		return datastore.Account{}, fmt.Errorf("%w: %s", datastore.ErrAccountInactive, "agent@example.test")
-	}, &testStore{}, "development", nil)
+	}, &testStore{}, "development", nil, nil)
 
 	response := serveRequest(handler, http.MethodGet, "/__agents/log-me-in/agent@example.test")
 	if response.Code != http.StatusForbidden {
@@ -249,7 +249,7 @@ func TestAgentShutDownRefusesAPlayer(t *testing.T) {
 // route. A route that stops the server is not the place to make an exception.
 func TestAgentShutDownRefusesAnonymousRequests(t *testing.T) {
 	stopped := 0
-	handler := newConfiguredHandler(nil, nil, &testStore{}, "development", func() { stopped++ })
+	handler := newConfiguredHandler(nil, nil, &testStore{}, "development", func() { stopped++ }, nil)
 
 	response := serveRequest(handler, http.MethodPost, "/__agents/shut-it-down")
 	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/sign-in" {
@@ -269,7 +269,7 @@ func TestAgentShutDownRefusesAnonymousRequests(t *testing.T) {
 func TestProductionEnvironmentOmitsAgentShutDown(t *testing.T) {
 	handler := newConfiguredHandler(nil, nil, &testStore{}, "production", func() {
 		t.Fatal("a production environment stopped the server")
-	})
+	}, nil)
 	response := serveRequest(handler, http.MethodPost, "/__agents/shut-it-down")
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusMethodNotAllowed)
@@ -279,7 +279,7 @@ func TestProductionEnvironmentOmitsAgentShutDown(t *testing.T) {
 // A handler built without a way to stop a server does not carry a route that
 // would have to reach for one, so nothing can reach a nil shutdown.
 func TestAgentShutDownIsAbsentWithoutAServerToStop(t *testing.T) {
-	handler := newConfiguredHandler(nil, nil, &testStore{}, "development", nil)
+	handler := newConfiguredHandler(nil, nil, &testStore{}, "development", nil, nil)
 	response := serveRequest(handler, http.MethodPost, "/__agents/shut-it-down")
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusMethodNotAllowed)
@@ -292,7 +292,7 @@ func agentSession(t *testing.T, email, role string, shutdown func()) (http.Handl
 	t.Helper()
 	handler := newConfiguredHandler(nil, func(_ context.Context, email string) (datastore.Account, error) {
 		return datastore.Account{Email: email, Handle: "keeper", Role: role}, nil
-	}, &testStore{faction: datastore.Faction{Name: "Keepers", Race: game.RaceHuman, Active: true}, found: true}, "development", shutdown)
+	}, &testStore{faction: datastore.Faction{Name: "Keepers", Race: game.RaceHuman, Active: true}, found: true}, "development", shutdown, nil)
 
 	signIn := serveRequest(handler, http.MethodGet, "/__agents/log-me-in/"+email)
 	cookies := signIn.Result().Cookies()

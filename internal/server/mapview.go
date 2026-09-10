@@ -170,7 +170,7 @@ func (app *application) playerMap(w http.ResponseWriter, r *http.Request) {
 	}
 	faction, found, err := app.store.Faction(r.Context(), account.Email)
 	if err != nil {
-		http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not load your faction.")
 		return
 	}
 	if !found || !faction.Configured() {
@@ -183,7 +183,7 @@ func (app *application) playerMap(w http.ResponseWriter, r *http.Request) {
 	}
 	visible, err := app.store.VisibleHexes(r.Context(), account.Email)
 	if err != nil {
-		http.Error(w, "Marajanda could not load your map.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not load your map.")
 		return
 	}
 	app.renderMap(w, r, pageData{
@@ -253,7 +253,7 @@ func (app *application) renderMap(w http.ResponseWriter, r *http.Request, data p
 func (app *application) world(w http.ResponseWriter, r *http.Request) (game.World, bool) {
 	world, err := app.store.World(r.Context())
 	if err != nil {
-		http.Error(w, "Marajanda could not load the world.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not load the world.")
 		return game.World{}, false
 	}
 	return world, true

@@ -179,7 +179,7 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 	}
 	turn, err := app.store.CurrentTurn(r.Context())
 	if err != nil {
-		http.Error(w, "Marajanda could not load your orders.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not load your orders.")
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -196,7 +196,7 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := app.store.SetOrderDetails(r.Context(), account.Email, turn, updates); err != nil {
-		app.renderOrders(w, r, account, faction, orderWriteFeedback(err, 0, 0))
+		app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, 0, 0))
 		return
 	}
 	switch add, insert, remove := r.PostForm.Get(addField), r.PostForm.Get(insertField), r.PostForm.Get(removeField); {
@@ -210,7 +210,7 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 		}
 		kind := formOrderKind(r.PostForm, entity)
 		if _, err := app.store.AddOrder(r.Context(), account.Email, turn, entity, kind, newOrderDetail(kind)); err != nil {
-			app.renderOrders(w, r, account, faction, orderWriteFeedback(err, entity, 0))
+			app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, entity, 0))
 			return
 		}
 	case insert != "":
@@ -225,7 +225,7 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 		// it takes is the next one.
 		kind := formOrderKind(r.PostForm, entity)
 		if err := app.store.InsertOrder(r.Context(), account.Email, turn, entity, seq+1, kind, newOrderDetail(kind)); err != nil {
-			app.renderOrders(w, r, account, faction, orderWriteFeedback(err, entity, seq))
+			app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, entity, seq))
 			return
 		}
 	case remove != "":
@@ -237,7 +237,7 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := app.store.RemoveOrder(r.Context(), account.Email, turn, entity, seq); err != nil {
-			app.renderOrders(w, r, account, faction, orderWriteFeedback(err, entity, seq))
+			app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, entity, seq))
 			return
 		}
 	}
@@ -263,7 +263,7 @@ func (app *application) setOrderDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	turn, err := app.store.CurrentTurn(r.Context())
 	if err != nil {
-		http.Error(w, "Marajanda could not load your orders.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not load your orders.")
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -280,7 +280,7 @@ func (app *application) setOrderDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := app.store.SetOrderDetail(r.Context(), account.Email, turn, entity, seq, detail); err != nil {
-		app.renderOrders(w, r, account, faction, orderWriteFeedback(err, entity, seq))
+		app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, entity, seq))
 		return
 	}
 	app.renderOrders(w, r, account, faction, orderFeedback{saved: true})
@@ -304,7 +304,7 @@ func (app *application) insertOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	turn, err := app.store.CurrentTurn(r.Context())
 	if err != nil {
-		http.Error(w, "Marajanda could not load your orders.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not load your orders.")
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -315,7 +315,7 @@ func (app *application) insertOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := formOrderKind(r.PostForm, entity)
 	if err := app.store.InsertOrder(r.Context(), account.Email, turn, entity, seq+1, kind, newOrderDetail(kind)); err != nil {
-		app.renderOrders(w, r, account, faction, orderWriteFeedback(err, entity, seq))
+		app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, entity, seq))
 		return
 	}
 	app.renderOrders(w, r, account, faction, orderFeedback{saved: true})
@@ -336,11 +336,11 @@ func (app *application) removeOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	turn, err := app.store.CurrentTurn(r.Context())
 	if err != nil {
-		http.Error(w, "Marajanda could not load your orders.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not load your orders.")
 		return
 	}
 	if err := app.store.RemoveOrder(r.Context(), account.Email, turn, entity, seq); err != nil {
-		app.renderOrders(w, r, account, faction, orderWriteFeedback(err, entity, seq))
+		app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, entity, seq))
 		return
 	}
 	app.renderOrders(w, r, account, faction, orderFeedback{saved: true})
@@ -362,7 +362,7 @@ func (app *application) advanceTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := app.store.AdvanceTurn(r.Context()); err != nil {
-		http.Error(w, "Marajanda could not advance the turn.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not advance the turn.")
 		return
 	}
 	http.Redirect(w, r, "/admin/dashboard", http.StatusSeeOther)
@@ -377,7 +377,7 @@ func (app *application) playerFaction(w http.ResponseWriter, r *http.Request) (d
 	}
 	faction, found, err := app.store.Faction(r.Context(), account.Email)
 	if err != nil {
-		http.Error(w, "Marajanda could not load your faction.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not load your faction.")
 		return datastore.Account{}, datastore.Faction{}, false
 	}
 	if !found || !faction.Configured() {
@@ -423,17 +423,17 @@ func redirectPlayer(w http.ResponseWriter, r *http.Request, path string) {
 func (app *application) renderOrders(w http.ResponseWriter, r *http.Request, account datastore.Account, faction datastore.Faction, feedback orderFeedback) {
 	turn, err := app.store.CurrentTurn(r.Context())
 	if err != nil {
-		http.Error(w, "Marajanda could not load your orders.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not load your orders.")
 		return
 	}
 	entities, err := app.store.EntitiesAsOf(r.Context(), account.Email, turn)
 	if err != nil {
-		http.Error(w, "Marajanda could not load your force.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not load your force.")
 		return
 	}
 	orders, err := app.store.OrdersAsOf(r.Context(), account.Email, turn)
 	if err != nil {
-		http.Error(w, "Marajanda could not load your orders.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not load your orders.")
 		return
 	}
 	// The pre-processor runs during this render, on every write, over the whole
@@ -442,7 +442,7 @@ func (app *application) renderOrders(w http.ResponseWriter, r *http.Request, acc
 	// wrong; the costs then ride along in markup that is already being sent.
 	estimates, err := app.store.EstimateOrders(r.Context(), account.Email, turn)
 	if err != nil {
-		http.Error(w, "Marajanda could not price your orders.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not price your orders.")
 		return
 	}
 	// One URL, two shapes of answer, so the response says what it varied on -
@@ -751,7 +751,7 @@ func parseDetailFields(form url.Values) ([]datastore.OrderUpdate, error) {
 
 // orderWriteFeedback turns a store's refusal into something a player can read,
 // and into the status an unscripted request is answered with.
-func orderWriteFeedback(err error, entity int64, seq int) orderFeedback {
+func (app *application) orderWriteFeedback(r *http.Request, err error, entity int64, seq int) orderFeedback {
 	feedback := orderFeedback{entity: entity, seq: seq, status: http.StatusUnprocessableEntity}
 	switch {
 	case errors.Is(err, datastore.ErrTurnClosed):
@@ -782,6 +782,13 @@ func orderWriteFeedback(err error, entity int64, seq int) orderFeedback {
 			status:  http.StatusNotFound,
 		}
 	default:
+		// Every other branch names a refusal the player caused and can act on.
+		// This one is the server failing, and it is the only branch whose
+		// message tells the player nothing about what to do differently - so
+		// it is the one that has to reach the log. The page still carries the
+		// sentence, because the row the player is looking at has to say
+		// something.
+		app.logError(r, err, "Marajanda could not save that order.")
 		feedback.message = "Marajanda could not save that order."
 		feedback.status = http.StatusInternalServerError
 	}

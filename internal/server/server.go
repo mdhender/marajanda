@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -34,6 +35,10 @@ type Config struct {
 	Address     string
 	Port        int
 	Timeout     time.Duration
+	// Logger receives failures the server answers for but does not disclose.
+	// A nil logger discards: the server never writes to the package-level
+	// default, so a caller that wants output has to supply one.
+	Logger *slog.Logger
 }
 
 // Run initializes the datastore and serves HTTP until the context is canceled
@@ -90,7 +95,7 @@ func Run(ctx context.Context, cfg Config) (err error) {
 	serveCtx, shutdown := context.WithCancel(serveCtx)
 	defer shutdown()
 
-	httpServer := &http.Server{Handler: newConfiguredHandler(store.Authenticate, store.FindOrCreateDevelopmentAccount, store, cfg.Environment, shutdown)}
+	httpServer := &http.Server{Handler: newConfiguredHandler(store.Authenticate, store.FindOrCreateDevelopmentAccount, store, cfg.Environment, shutdown, cfg.Logger)}
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- httpServer.Serve(listener)

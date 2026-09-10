@@ -14,12 +14,12 @@ import (
 func (app *application) getAPIGame(w http.ResponseWriter, r *http.Request) {
 	stored, err := app.store.Game(r.Context())
 	if err != nil {
-		writeAPIReadFailure(w)
+		app.writeAPIReadFailure(w, r, err)
 		return
 	}
 	turn, err := app.store.CurrentTurn(r.Context())
 	if err != nil {
-		writeAPIReadFailure(w)
+		app.writeAPIReadFailure(w, r, err)
 		return
 	}
 	response := apiGame{CurrentTurn: turn, Width: stored.Width, Height: stored.Height}
@@ -43,13 +43,13 @@ func (app *application) getAPIEntities(w http.ResponseWriter, r *http.Request) {
 	}
 	turn, err := app.store.CurrentTurn(r.Context())
 	if err != nil {
-		writeAPIReadFailure(w)
+		app.writeAPIReadFailure(w, r, err)
 		return
 	}
 	account := apiAuthenticationFromContext(r.Context()).Account
 	entities, err := app.store.EntitiesAsOf(r.Context(), account.Email, turn)
 	if err != nil {
-		writeAPIReadFailure(w)
+		app.writeAPIReadFailure(w, r, err)
 		return
 	}
 	response := apiEntities{Turn: turn, Entities: make([]apiEntity, 0, len(entities))}
@@ -72,19 +72,19 @@ func (app *application) getAPIMap(w http.ResponseWriter, r *http.Request) {
 	}
 	turn, err := app.store.CurrentTurn(r.Context())
 	if err != nil {
-		writeAPIReadFailure(w)
+		app.writeAPIReadFailure(w, r, err)
 		return
 	}
 	world, err := app.store.World(r.Context())
 	if err != nil {
-		writeAPIReadFailure(w)
+		app.writeAPIReadFailure(w, r, err)
 		return
 	}
 	visible := make(map[hexg.Hex]bool)
 	if authentication.Account.Role == "player" {
 		hexes, err := app.store.VisibleHexes(r.Context(), authentication.Account.Email)
 		if err != nil {
-			writeAPIReadFailure(w)
+			app.writeAPIReadFailure(w, r, err)
 			return
 		}
 		visible = make(map[hexg.Hex]bool, len(hexes))
@@ -112,23 +112,23 @@ func (app *application) getAPIOrders(w http.ResponseWriter, r *http.Request) {
 	}
 	turn, err := app.store.CurrentTurn(r.Context())
 	if err != nil {
-		writeAPIReadFailure(w)
+		app.writeAPIReadFailure(w, r, err)
 		return
 	}
 	account := apiAuthenticationFromContext(r.Context()).Account
 	entities, err := app.store.EntitiesAsOf(r.Context(), account.Email, turn)
 	if err != nil {
-		writeAPIReadFailure(w)
+		app.writeAPIReadFailure(w, r, err)
 		return
 	}
 	orders, err := app.store.OrdersAsOf(r.Context(), account.Email, turn)
 	if err != nil {
-		writeAPIReadFailure(w)
+		app.writeAPIReadFailure(w, r, err)
 		return
 	}
 	estimates, err := app.store.EstimateOrders(r.Context(), account.Email, turn)
 	if err != nil {
-		writeAPIReadFailure(w)
+		app.writeAPIReadFailure(w, r, err)
 		return
 	}
 	response := apiOrders{Turn: turn, Entities: make([]apiEntityOrders, 0, len(entities))}
@@ -147,7 +147,7 @@ func (app *application) apiPlayerFaction(w http.ResponseWriter, r *http.Request)
 	account := apiAuthenticationFromContext(r.Context()).Account
 	faction, found, err := app.store.Faction(r.Context(), account.Email)
 	if err != nil {
-		writeAPIReadFailure(w)
+		app.writeAPIReadFailure(w, r, err)
 		return apiFaction{}, false
 	}
 	if !found || !faction.Configured() {
@@ -157,8 +157,11 @@ func (app *application) apiPlayerFaction(w http.ResponseWriter, r *http.Request)
 	return apiFaction{Name: faction.Name, Race: string(faction.Race), Active: faction.Active, Configured: true}, true
 }
 
-func writeAPIReadFailure(w http.ResponseWriter) {
-	writeAPIError(w, http.StatusInternalServerError, apiCodeInternal, "The server could not complete the request.")
+// writeAPIReadFailure answers a read that failed inside the server. It is the
+// read side's name for one internal failure; the error goes to the log, and the
+// client is told the same sentence every internal failure produces.
+func (app *application) writeAPIReadFailure(w http.ResponseWriter, r *http.Request, err error) {
+	app.apiInternalError(w, r, err)
 }
 
 func apiCoordinateFromHex(coord hexg.Hex) apiCoordinate {

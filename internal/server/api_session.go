@@ -42,7 +42,7 @@ func (app *application) createAPISession(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if app.authenticate == nil {
-		writeAPIError(w, http.StatusInternalServerError, apiCodeInternal, "The server could not complete the request.")
+		app.apiInternalError(w, r, errAuthenticateNotConfigured)
 		return
 	}
 	account, ok, err := app.authenticate(r.Context(), request.Email, request.Passphrase)
@@ -51,7 +51,7 @@ func (app *application) createAPISession(w http.ResponseWriter, r *http.Request)
 			writeAPIError(w, http.StatusForbidden, apiCodeAccountInactive, "That account is not active.")
 			return
 		}
-		writeAPIError(w, http.StatusInternalServerError, apiCodeInternal, "The server could not complete the request.")
+		app.apiInternalError(w, r, err)
 		return
 	}
 	if !ok {
@@ -61,12 +61,12 @@ func (app *application) createAPISession(w http.ResponseWriter, r *http.Request)
 
 	responseAccount, err := app.apiAccount(r.Context(), account)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, apiCodeInternal, "The server could not complete the request.")
+		app.apiInternalError(w, r, err)
 		return
 	}
 	token, err := app.createSession(r.Context(), account)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, apiCodeInternal, "The server could not complete the request.")
+		app.apiInternalError(w, r, err)
 		return
 	}
 	setSessionCookie(w, token)
@@ -79,7 +79,7 @@ func (app *application) createAPISession(w http.ResponseWriter, r *http.Request)
 func (app *application) deleteAPISession(w http.ResponseWriter, r *http.Request) {
 	authentication := apiAuthenticationFromContext(r.Context())
 	if err := app.store.DeleteSession(r.Context(), authentication.Token); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, apiCodeInternal, "The server could not complete the request.")
+		app.apiInternalError(w, r, err)
 		return
 	}
 	expireSessionCookie(w)
@@ -89,7 +89,7 @@ func (app *application) deleteAPISession(w http.ResponseWriter, r *http.Request)
 func (app *application) getAPIAccount(w http.ResponseWriter, r *http.Request) {
 	account, err := app.apiAccount(r.Context(), apiAuthenticationFromContext(r.Context()).Account)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, apiCodeInternal, "The server could not complete the request.")
+		app.apiInternalError(w, r, err)
 		return
 	}
 	_ = writeAPIJSON(w, http.StatusOK, account)
@@ -97,7 +97,7 @@ func (app *application) getAPIAccount(w http.ResponseWriter, r *http.Request) {
 
 func (app *application) apiAccount(ctx context.Context, account datastore.Account) (apiAccount, error) {
 	if app.store == nil {
-		return apiAccount{}, errors.New("session store is not configured")
+		return apiAccount{}, errStoreNotConfigured
 	}
 	faction, found, err := app.store.Faction(ctx, account.Email)
 	if err != nil {
@@ -134,7 +134,7 @@ func (app *application) requireAPIAuthentication(next http.HandlerFunc) http.Han
 		}
 		account, found, err := app.store.ResolveSession(r.Context(), token)
 		if err != nil {
-			writeAPIError(w, http.StatusInternalServerError, apiCodeInternal, "The server could not complete the request.")
+			app.apiInternalError(w, r, err)
 			return
 		}
 		if !found {

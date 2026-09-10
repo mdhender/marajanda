@@ -76,16 +76,16 @@ func (app *application) agentSignIn(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "that account is not active", http.StatusForbidden)
 			return
 		}
-		http.Error(w, "Marajanda could not create the development session.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not create the development session.")
 		return
 	}
 	account, err = app.ensureAgentFaction(r.Context(), account)
 	if err != nil {
-		http.Error(w, "Marajanda could not create the development session.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not create the development session.")
 		return
 	}
 	if err := app.startSession(r.Context(), w, account); err != nil {
-		http.Error(w, "Marajanda could not create the development session.", http.StatusInternalServerError)
+		app.serverError(w, r, err, "Marajanda could not create the development session.")
 		return
 	}
 	http.Redirect(w, r, safeReturnPath(r.URL.Query().Get("returnTo")), http.StatusSeeOther)
