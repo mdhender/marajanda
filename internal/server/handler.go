@@ -788,7 +788,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 	  <section class="dashboard orders-page">
 		<p class="eyebrow">Faction command</p>
 		<h1>Orders for turn {{.Turn}}</h1>
-		<p class="lede">Nothing here is typed. Build this turn's orders one row at a time, and they are saved as you make them.</p>
+		<p class="lede">Build this turn's orders one row at a time, and they are saved as you make them.</p>
 		{{/* A player commands one faction, so the picker holds one entry and it
 		     is selected. It is here so the page has a stable shape for the day
 		     something commands more than one. */}}
