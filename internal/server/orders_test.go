@@ -518,9 +518,9 @@ func TestEveryOrderRowCarriesItsEstimatedCost(t *testing.T) {
 	if want := "<span class=\"stanza-cost\">\u2014</span>"; !strings.Contains(body, want) {
 		t.Fatalf("orders page missing the unpriced row %q", want)
 	}
-	// The budget line is the trailing Rest and what the orders above it cost.
+	// The budget line is what the orders cost and what they leave idle.
 	for _, want := range []string{
-		fmt.Sprintf(`<span class="budget-rest">Rest x%d</span>`, game.LeaderAllowance-game.UnknownStepCost),
+		fmt.Sprintf(`<span class="budget-idle">%d idle</span>`, game.LeaderAllowance-game.UnknownStepCost),
 		fmt.Sprintf("%d of %d action points, estimated.", game.UnknownStepCost, game.LeaderAllowance),
 	} {
 		if !strings.Contains(body, want) {
@@ -554,7 +554,7 @@ func TestAnOverspendingListSaysWhatWillExhaust(t *testing.T) {
 	if want := fmt.Sprintf("Over by %d.", 3*game.UnknownStepCost-game.LeaderAllowance); !strings.Contains(body, want) {
 		t.Fatalf("orders page missing %q", want)
 	}
-	if want := `<span class="budget-rest">Rest x0</span>`; !strings.Contains(body, want) {
+	if want := `<span class="budget-idle">0 idle</span>`; !strings.Contains(body, want) {
 		t.Fatalf("orders page missing %q: the line is drawn whatever the count is", want)
 	}
 	if got := strings.Count(body, `class="stanza-exhausts"`); got != 1 {
@@ -590,8 +590,11 @@ func TestARestRowCarriesACount(t *testing.T) {
 }
 
 // The trailing Rest is the residue, not a row a player wrote, so it is drawn on
-// the budget line without the controls a stanza carries.
-func TestTheTrailingRestIsNotAStanza(t *testing.T) {
+// A rest the player put last is an order like any other: it is drawn with its
+// own controls, and it is not the idle points. The idle line reports what the
+// whole list leaves over, which is now the allowance less the move and the
+// rest together.
+func TestARestOnTheEndIsAStanzaLikeAnyOther(t *testing.T) {
 	store := ordersStore()
 	store.orders[7] = []datastore.Order{
 		{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.E}},
@@ -599,13 +602,14 @@ func TestTheTrailingRestIsNotAStanza(t *testing.T) {
 	}
 	body := ordersRequest(t, store, http.MethodGet, "/player/orders", "", nil).Body.String()
 
-	if strings.Contains(body, `name="count.7.2"`) {
-		t.Fatal("the trailing rest was drawn as an editable row")
+	if !strings.Contains(body, `name="count.7.2"`) {
+		t.Fatal("the rest was not drawn as an editable row")
 	}
-	if strings.Contains(body, `value="7.2"`) {
-		t.Fatal("the trailing rest carries insert and remove controls")
+	if !strings.Contains(body, `value="7.2"`) {
+		t.Fatal("the rest carries no insert and remove controls")
 	}
-	if want := fmt.Sprintf(`<span class="budget-rest">Rest x%d</span>`, game.LeaderAllowance-game.UnknownStepCost); !strings.Contains(body, want) {
+	idle := game.LeaderAllowance - game.UnknownStepCost - 3
+	if want := fmt.Sprintf(`<span class="budget-idle">%d idle</span>`, idle); !strings.Contains(body, want) {
 		t.Fatalf("orders page missing the budget line %q", want)
 	}
 }

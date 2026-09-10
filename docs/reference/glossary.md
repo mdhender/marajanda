@@ -93,6 +93,13 @@ main admin controls the single Marajanda faction.
 A faction has a name, a race, and no location of its own: it owns [entities](#entity), and they are what stand on the map.
 See [Product reference](../PRODUCT.md#roles-and-factions).
 
+## Idle action points
+
+The [action points](#action-point) an [entity](#entity)'s [orders](#order) leave unspent, reported by the [pre-processor](#pre-processor) as the [estimate](#estimate)'s residue.
+A number and never an order: nothing rests an entity that was not ordered to, because an entity may be spent to exhaustion on purpose.
+Points still idle when a turn is processed lapse.
+See [Action points reference](action-points.md#idle-action-points).
+
 ## Kind
 
 What an [entity](#entity) is: `leader`, `hamlet`, or `marajanda`.
@@ -155,8 +162,8 @@ See [Terrain reference](terrain.md).
 
 ## Pre-processor
 
-What prices an [entity](#entity)'s [orders](#order) during order entry and keeps its [trailing Rest](#trailing-rest).
-It writes orders on the player's behalf and binds nothing: its numbers are an [estimate](#estimate) rather than a quote.
+What prices an [entity](#entity)'s [orders](#order) during order entry and reports the action points they leave idle.
+It writes no orders and binds nothing: its numbers are an [estimate](#estimate) rather than a quote.
 Its twin is the [executor](#executor).
 See [Action points reference](action-points.md#the-two-engines).
 
@@ -164,7 +171,7 @@ See [Action points reference](action-points.md#the-two-engines).
 
 An [order](#order) kind that spends [action points](#action-point) and moves nothing.
 A leader accepts it, it carries a count rather than a direction, it costs 1 AP per point, and it may be ordered more than once and anywhere in an entity's list.
-A rest at the end of a list is the [trailing Rest](#trailing-rest).
+A rest at the end of a list is an order like any other; it is not the entity's idle points and is not resized to them.
 What it recovers is not yet decided.
 See [Action points reference](action-points.md#rest).
 
@@ -186,12 +193,6 @@ It is an entity rather than a [unit](#unit) because it has a location, a mutable
 One hex of movement in a turn's results: a `move` [order](#order) that is carried out is a step taken.
 It is not a unit of order entry. An order is one action, so a step is what a move produces rather than something an order carries a list of.
 See [Orders reference](orders.md).
-
-## Trailing Rest
-
-The [rest](#rest) an [entity](#entity)'s [order](#order) list ends with, whose count is what the orders before it leave unspent.
-The line is rendered always and the row is stored only when the count is at least one, so the page keeps its shape and nothing stores a `Rest x0`.
-See [Action points reference](action-points.md#the-trailing-rest).
 
 ## Turn
 

@@ -281,18 +281,14 @@ func (s *Store) AdvanceTurn(ctx context.Context) (_ int, err error) {
 //
 // The gates are the store's own invariants rather than checks a caller can
 // arrange to pass, so they belong to the write rather than to each method that
-// makes one. Ownership is one of them here because the trailing Rest is taken
-// off before the write runs: a request naming an entity that is not the
-// faction's must be refused before anything is touched, not by the write it
-// would have reached.
+// makes one. A request naming an entity that is not the faction's is refused
+// before anything is touched, not by the write it would have reached.
 //
-// The trailing Rest comes off before the write and is put back after it. That
-// is what makes the write see the list the player authored - an append lands in
-// front of the residue, a position is the position the page showed - and what
-// makes every write leave a residue that matches the orders that are now
-// stored. Re-pricing the whole list is not an optimization to avoid: inserting
-// or removing an order changes where the entity stands for every order after
-// it, so any scheme that re-priced one row would be wrong.
+// The list is the player's and nothing here adds to it. What the orders leave
+// unspent is a number the pre-processor reports, not an order stored on the
+// end, so a write touches the orders it was asked to touch and no others. That
+// is not only tidier: a stored residue would have to be sized from an estimate,
+// and an estimate is exactly what a durable row must not be sized from.
 func (s *Store) writeOrders(ctx context.Context, email string, turn int, entityIDs []int64, write func(*sqlite.Conn) error) (err error) {
 	conn, release, err := s.take(ctx)
 	if err != nil {
@@ -317,19 +313,8 @@ func (s *Store) writeOrders(ctx context.Context, email string, turn int, entityI
 		if err := requireEntity(conn, normalizedEmail, entityID); err != nil {
 			return err
 		}
-		if err := stripTrailingRest(conn, turn, entityID); err != nil {
-			return err
-		}
 	}
-	if err := write(conn); err != nil {
-		return err
-	}
-	for _, entityID := range entityIDs {
-		if err := syncTrailingRest(conn, normalizedEmail, turn, entityID); err != nil {
-			return err
-		}
-	}
-	return nil
+	return write(conn)
 }
 
 // requireOpenTurn refuses a write aimed at any turn but the one the game is on.

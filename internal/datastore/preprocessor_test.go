@@ -90,79 +90,77 @@ func TestFoundingWritesTheAllowanceOfEveryEntityThatTakesOrders(t *testing.T) {
 	})
 }
 
-// A leader opens the turn with its whole allowance in a trailing Rest, and the
-// Rest decrements as orders are added. The homeland ring buys one cheap step
-// and the ring beyond it costs three.
-func TestTheTrailingRestIsTheResidue(t *testing.T) {
+// Idle points are reported, never stored. The number falls as orders are added
+// and rises as they are removed, and the stored list is only ever what the
+// player wrote. The homeland ring buys one cheap step and the ring beyond it
+// costs three.
+func TestIdlePointsAreReportedRatherThanStored(t *testing.T) {
 	eachMemoryMode(t, func(t *testing.T, store *Store) {
 		leader, _ := foundedFaction(t, store)
 
-		// Nothing has been written yet, so nothing is stored - but the page
-		// still has a residue to draw, and it is the whole allowance.
+		// Nothing has been written, so nothing is stored - and the whole
+		// allowance is idle.
 		if got := storedOrdersNow(t, store, leader.ID); len(got) != 0 {
 			t.Fatalf("a leader that has been given nothing carries %#v", got)
 		}
 		if got := estimateNow(t, store, leader.ID).Residue; got != game.LeaderAllowance {
-			t.Fatalf("residue before any write = %d, want %d", got, game.LeaderAllowance)
+			t.Fatalf("idle points before any write = %d, want %d", got, game.LeaderAllowance)
 		}
 
 		addMove(t, store, leader.ID, compass.NE)
-		if got := trailingRest(t, store, leader.ID); got != game.LeaderAllowance-1 {
-			t.Fatalf("rest after one cheap step = %d, want %d", got, game.LeaderAllowance-1)
+		if got := estimateNow(t, store, leader.ID).Residue; got != game.LeaderAllowance-1 {
+			t.Fatalf("idle after one cheap step = %d, want %d", got, game.LeaderAllowance-1)
 		}
 		addMove(t, store, leader.ID, compass.NE)
-		if got := trailingRest(t, store, leader.ID); got != game.LeaderAllowance-4 {
-			t.Fatalf("rest after a step and an exploration = %d, want %d", got, game.LeaderAllowance-4)
+		if got := estimateNow(t, store, leader.ID).Residue; got != game.LeaderAllowance-4 {
+			t.Fatalf("idle after a step and an exploration = %d, want %d", got, game.LeaderAllowance-4)
 		}
-		// The Rest is a stored order, so the whole list is one step, one
-		// exploration and the residue.
+		// Two moves were written, so two orders are stored. The idle points
+		// are not among them.
 		stored := storedOrdersNow(t, store, leader.ID)
-		if len(stored) != 3 || stored[2].Kind != game.OrderKindRest || stored[2].Seq != 3 {
-			t.Fatalf("stored orders = %#v, want two moves and a rest", stored)
+		if len(stored) != 2 || stored[0].Kind != game.OrderKindMove || stored[1].Kind != game.OrderKindMove {
+			t.Fatalf("stored orders = %#v, want two moves and nothing else", stored)
 		}
 
-		// When the orders reach the allowance the row goes, rather than being
-		// left as a Rest x0 for turn processing to walk.
+		// Orders that reach past the allowance leave nothing idle, and still
+		// nothing is added to or taken from the list.
 		addMove(t, store, leader.ID, compass.NE)
-		if got := trailingRest(t, store, leader.ID); got != 0 {
-			t.Fatalf("rest after overspending = %d, want none", got)
+		if got := estimateNow(t, store, leader.ID).Residue; got != 0 {
+			t.Fatalf("idle after overspending = %d, want none", got)
 		}
 		if got := storedOrdersNow(t, store, leader.ID); len(got) != 3 {
-			t.Fatalf("stored orders = %#v, want three moves and no rest", got)
+			t.Fatalf("stored orders = %#v, want three moves", got)
 		}
 		if estimate := estimateNow(t, store, leader.ID); estimate.Overspend != 1 || estimate.ExhaustsAt != 3 {
 			t.Fatalf("estimate = %#v, want an overspend of 1 crossing at order 3", estimate)
 		}
 
-		// Removing an order puts the residue back.
+		// Removing an order gives the points back.
 		removeOrder(t, store, leader.ID, 3)
-		if got := trailingRest(t, store, leader.ID); got != game.LeaderAllowance-4 {
-			t.Fatalf("rest after removing a step = %d, want %d", got, game.LeaderAllowance-4)
+		if got := estimateNow(t, store, leader.ID).Residue; got != game.LeaderAllowance-4 {
+			t.Fatalf("idle after removing a step = %d, want %d", got, game.LeaderAllowance-4)
 		}
 	})
 }
 
-// An added order goes on the end of what the player wrote, not after the
-// residue. The trailing Rest comes off before every write and goes back after
-// it, so the list a write addresses is the list the page showed.
-func TestAnAddedOrderLandsInFrontOfTheTrailingRest(t *testing.T) {
+// An added order goes on the end of the list, and the list is only ever what
+// the player wrote. Nothing is stored behind the last order for an add to have
+// to step around.
+func TestAnAddedOrderLandsOnTheEndOfTheList(t *testing.T) {
 	eachMemoryMode(t, func(t *testing.T, store *Store) {
 		leader, _ := foundedFaction(t, store)
 
 		if seq := addMove(t, store, leader.ID, compass.NE); seq != 1 {
 			t.Fatalf("first order = %d, want 1", seq)
 		}
-		// The residue is stored as order 2 now, and the next add is still
-		// order 2.
 		if seq := addMove(t, store, leader.ID, compass.E); seq != 2 {
 			t.Fatalf("second order = %d, want 2", seq)
 		}
 		if got := march(ordersNow(t, store, leader.ID)); got != "NE E" {
 			t.Fatalf("orders = %q, want NE E", got)
 		}
-		stored := storedOrdersNow(t, store, leader.ID)
-		if len(stored) != 3 || stored[2].Kind != game.OrderKindRest {
-			t.Fatalf("stored orders = %#v, want the rest last", stored)
+		if stored := storedOrdersNow(t, store, leader.ID); len(stored) != 2 {
+			t.Fatalf("stored orders = %#v, want exactly the two moves", stored)
 		}
 	})
 }
@@ -205,15 +203,54 @@ func TestInsertingAnOrderRepricesEverythingAfterIt(t *testing.T) {
 		if after.Total != 7 || after.ExhaustsAt != 3 {
 			t.Fatalf("estimate = %#v, want 7 points crossing at order 3", after)
 		}
-		if got := trailingRest(t, store, leader.ID); got != 0 {
-			t.Fatalf("rest = %d, want none: 1 + 3 + 3 is over six", got)
+		if after.Residue != 0 {
+			t.Fatalf("idle points = %d, want none: 1 + 3 + 3 is over six", after.Residue)
 		}
 	})
 }
 
-// A rest a player places is an order like any other. One at the end is the
-// residue by definition, so the pre-processor sets its count; one anywhere else
-// is theirs, and is priced and left alone.
+// A Rest appended to the end of a list survives, and it survives at the length
+// it was given.
+//
+// It did not, once: the residue was stored as a trailing Rest, an append landed
+// exactly where that Rest went, and the write that followed replaced it. The
+// order was accepted, discarded, and reported as created. See #56.
+func TestARestAppendedToTheEndIsKept(t *testing.T) {
+	eachMemoryMode(t, func(t *testing.T, store *Store) {
+		leader, _ := foundedFaction(t, store)
+		addMove(t, store, leader.ID, compass.NE)
+
+		seq := addRest(t, store, leader.ID, 2)
+		if seq != 2 {
+			t.Fatalf("appended rest = order %d, want 2", seq)
+		}
+		stored := ordersNow(t, store, leader.ID)
+		if len(stored) != 2 {
+			t.Fatalf("orders = %#v, want the move and the rest", stored)
+		}
+		last := stored[1]
+		if last.Seq != seq || last.Kind != game.OrderKindRest || last.Detail.Count != 2 {
+			t.Fatalf("last order = %#v, want the rest of two that was appended", last)
+		}
+		// Two resting points and one cheap step, and what is left is idle
+		// rather than swallowed by the rest.
+		if got := estimateNow(t, store, leader.ID).Residue; got != game.LeaderAllowance-3 {
+			t.Fatalf("idle points = %d, want %d", got, game.LeaderAllowance-3)
+		}
+
+		// A second append lands after it rather than on top of it.
+		if got := addRest(t, store, leader.ID, 1); got != 3 {
+			t.Fatalf("second appended rest = order %d, want 3", got)
+		}
+		if got := ordersNow(t, store, leader.ID); len(got) != 3 {
+			t.Fatalf("orders = %#v, want three", got)
+		}
+	})
+}
+
+// A rest a player places is an order like any other, wherever it sits. One on
+// the end is not the residue and is not resized: it costs what it says, and
+// what is left over after it is idle.
 func TestAPlayerCanPlaceARest(t *testing.T) {
 	eachMemoryMode(t, func(t *testing.T, store *Store) {
 		leader, _ := foundedFaction(t, store)
@@ -222,17 +259,21 @@ func TestAPlayerCanPlaceARest(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// A rest added on its own is the trailing one, so it holds the whole
-		// allowance rather than the one point the add control asked for.
+		// A rest added on its own is stored at the length the add asked for.
+		// It is the only order there is, so the rest of the allowance is idle.
 		if seq := addRest(t, store, leader.ID, 1); seq != 1 {
 			t.Fatalf("first order = %d, want 1", seq)
 		}
-		if got := trailingRest(t, store, leader.ID); got != game.LeaderAllowance {
-			t.Fatalf("rest = %d, want the whole allowance of %d", got, game.LeaderAllowance)
+		stored := ordersNow(t, store, leader.ID)
+		if len(stored) != 1 || stored[0].Kind != game.OrderKindRest || stored[0].Detail.Count != 1 {
+			t.Fatalf("orders = %#v, want one rest of one point", stored)
+		}
+		if got := estimateNow(t, store, leader.ID).Residue; got != game.LeaderAllowance-1 {
+			t.Fatalf("idle points = %d, want %d", got, game.LeaderAllowance-1)
 		}
 
-		// A rest before a move is the player's. It spends its points where it
-		// was asked for and leaves the move to be paid for afterwards.
+		// A rest before a move spends its points where it was asked for and
+		// leaves the move to be paid for afterwards.
 		if err := store.InsertOrder(t.Context(), orderPlayer, turn, leader.ID, 1, game.OrderKindMove, moving(compass.NE)); err != nil {
 			t.Fatal(err)
 		}
@@ -240,22 +281,23 @@ func TestAPlayerCanPlaceARest(t *testing.T) {
 			t.Fatal(err)
 		}
 		authored := ordersNow(t, store, leader.ID)
-		if len(authored) != 2 || authored[0].Kind != game.OrderKindRest || authored[0].Detail.Count != 2 {
-			t.Fatalf("orders = %#v, want a rest of two then a move", authored)
+		if len(authored) != 3 || authored[0].Kind != game.OrderKindRest || authored[0].Detail.Count != 2 {
+			t.Fatalf("orders = %#v, want a rest of two, a move, then the first rest", authored)
 		}
-		if got := trailingRest(t, store, leader.ID); got != game.LeaderAllowance-3 {
-			t.Fatalf("rest = %d, want %d", got, game.LeaderAllowance-3)
+		// Two resting points, one cheap step, and the rest of one added first.
+		if got := estimateNow(t, store, leader.ID).Residue; got != game.LeaderAllowance-4 {
+			t.Fatalf("idle points = %d, want %d", got, game.LeaderAllowance-4)
 		}
 
-		// A count is set the way a direction is, and the residue follows it.
+		// A count is set the way a direction is, and the idle points follow it.
 		if err := store.SetOrderDetail(t.Context(), orderPlayer, turn, leader.ID, 1, resting(4)); err != nil {
 			t.Fatal(err)
 		}
 		if got := ordersNow(t, store, leader.ID)[0].Detail.Count; got != 4 {
 			t.Fatalf("rest count = %d, want 4", got)
 		}
-		if got := trailingRest(t, store, leader.ID); got != game.LeaderAllowance-5 {
-			t.Fatalf("rest = %d, want %d", got, game.LeaderAllowance-5)
+		if got := estimateNow(t, store, leader.ID).Residue; got != 0 {
+			t.Fatalf("idle points = %d, want none: 4 + 1 + 1 is the whole allowance", got)
 		}
 	})
 }
@@ -304,8 +346,11 @@ func TestEstimateOrdersPricesTheAuthoredOrders(t *testing.T) {
 		if estimate.Allowance != game.LeaderAllowance || estimate.Total != game.KnownStepCost {
 			t.Fatalf("estimate = %#v, want %d of %d spent", estimate, game.KnownStepCost, game.LeaderAllowance)
 		}
-		if estimate.Residue != trailingRest(t, store, leader.ID) {
-			t.Fatal("the residue and the stored trailing rest disagree")
+		if estimate.Residue != game.LeaderAllowance-game.KnownStepCost {
+			t.Fatalf("idle points = %d, want %d", estimate.Residue, game.LeaderAllowance-game.KnownStepCost)
+		}
+		if stored := storedOrdersNow(t, store, leader.ID); len(stored) != 1 {
+			t.Fatalf("stored orders = %#v, want the one move: idle points are not stored", stored)
 		}
 
 		// An entity that takes no orders has no allowance and no plan, and it

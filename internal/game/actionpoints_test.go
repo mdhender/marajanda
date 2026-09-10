@@ -393,26 +393,3 @@ func TestTheZeroSightIsFogged(t *testing.T) {
 		t.Fatal("Marajanda stepped beyond the world")
 	}
 }
-
-// A Rest at the end of a list is the residue. A Rest anywhere else is an order
-// the player placed.
-func TestSplitTrailingRest(t *testing.T) {
-	move := Order{Seq: 1, Kind: OrderKindMove, Detail: OrderDetail{Direction: compass.E}}
-	rest := Order{Seq: 2, Kind: OrderKindRest, Detail: OrderDetail{Count: 2}}
-
-	if authored, trailing := SplitTrailingRest(nil); trailing || len(authored) != 0 {
-		t.Fatal("an empty list has a trailing rest")
-	}
-	if authored, trailing := SplitTrailingRest([]Order{move}); trailing || len(authored) != 1 {
-		t.Fatal("a list ending in a move has a trailing rest")
-	}
-	authored, trailing := SplitTrailingRest([]Order{move, rest})
-	if !trailing || len(authored) != 1 || authored[0].Kind != OrderKindMove {
-		t.Fatalf("split gave %#v and %v, want the move alone and a trailing rest", authored, trailing)
-	}
-	// A rest in the middle belongs to the player, so it stays in the list.
-	middle := []Order{{Seq: 1, Kind: OrderKindRest, Detail: OrderDetail{Count: 1}}, {Seq: 2, Kind: OrderKindMove}}
-	if authored, trailing := SplitTrailingRest(middle); trailing || len(authored) != 2 {
-		t.Fatalf("split took a rest that was not last")
-	}
-}

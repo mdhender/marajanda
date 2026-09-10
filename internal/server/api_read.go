@@ -133,10 +133,9 @@ func (app *application) getAPIOrders(w http.ResponseWriter, r *http.Request) {
 	}
 	response := apiOrders{Turn: turn, Entities: make([]apiEntityOrders, 0, len(entities))}
 	for _, entity := range entities {
-		authored, _ := game.SplitTrailingRest(orders[entity.ID])
 		response.Entities = append(response.Entities, apiEntityOrders{
 			EntityID: entity.ID,
-			Orders:   apiOrdersFromStore(authored),
+			Orders:   apiOrdersFromStore(orders[entity.ID]),
 			Estimate: apiEstimateFromGame(estimates[entity.ID]),
 		})
 	}

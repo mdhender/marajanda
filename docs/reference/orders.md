@@ -83,11 +83,13 @@ for the same reason. What a rest costs and where it may sit is in
 [Action points reference](action-points.md#rest); what it recovers is
 [#36](https://github.com/mdhender/marajanda/issues/36).
 
-A list that ends in a rest ends in the trailing Rest, which the order
-pre-processor keeps equal to the points the orders before it leave unspent. It
-is taken off before every write and put back after it, so an added order lands
-in front of it and a sequence number on the page is the one a write addresses.
-See [Action points reference](action-points.md#the-trailing-rest).
+A list that ends in a rest ends in an order the player wrote, priced and stored
+like any other. What the whole list leaves unspent is the entity's idle action
+points, which the pre-processor reports as a number rather than storing as an
+order: a player may be spending an entity to exhaustion on purpose, and nothing
+rests one that was not ordered to. Every stored order is therefore the player's,
+an append lands on the end, and a sequence number on the page is the one a write
+addresses. See [Action points reference](action-points.md#idle-action-points).
 
 `seq` is constrained to `1 .. 32`. That bound is how many orders an entity may
 carry in a turn: it keeps a tolerated overspend bounded rather than being the
@@ -140,7 +142,7 @@ accounts.
 | Method | Effect |
 | --- | --- |
 | `OrdersAsOf(ctx, email, turn)` | The faction's orders on `turn`, keyed by entity, in sequence order. |
-| `EstimateOrders(ctx, email, turn)` | What each entity's orders cost, keyed by entity. Fogged, and the trailing Rest reported as the residue rather than listed. |
+| `EstimateOrders(ctx, email, turn)` | What each entity's orders cost, keyed by entity. Fogged, with the points the orders leave idle reported as the residue. |
 | `AddOrder(ctx, email, turn, entity, kind, detail)` | Appends an order and returns its sequence number. |
 | `InsertOrder(ctx, email, turn, entity, seq, kind, detail)` | Puts an order at `seq` and shifts the rest up. |
 | `SetOrderDetail(ctx, email, turn, entity, seq, detail)` | Sets what one order carries. An invalid direction clears a move's; a rest's count is bounded. |

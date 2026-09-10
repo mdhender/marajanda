@@ -204,7 +204,7 @@ A direction is not a nullable column on `orders`. Such a column would also have 
 
 A rest is always one row in `rest_orders`, because a rest has no state a player fills in afterwards: it lasts at least one action point, and a `Rest x0` would be an order that costs nothing and does nothing. The bound on the count is the bound on `seq` and carries it for the same reason: it is what keeps a tolerated overspend bounded. What a rest recovers is still [#36](https://github.com/mdhender/marajanda/issues/36).
 
-The last order in an entity's list, when it is a rest, is the trailing Rest the order pre-processor maintains: its count is what the orders before it leave unspent, and the row is deleted rather than written as a zero when they leave nothing. See [Action points reference](reference/action-points.md#the-trailing-rest).
+Every stored order is one the player wrote, including a rest that happens to be last. Nothing maintains a row on their behalf: what an entity's orders leave unspent is a number the pre-processor computes when asked, never a stored order. A durable row sized from an estimate would be wrong the moment the estimate was, and the estimate is fogged by design. See [Action points reference](reference/action-points.md#idle-action-points).
 
 Sequences are contiguous 1..N and every write leaves them that way: removing an order renumbers what follows it, and inserting one shifts what follows it up. An entity's orders therefore have exactly one stored form.
 

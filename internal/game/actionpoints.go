@@ -153,8 +153,10 @@ type Estimate struct {
 	Committed int
 	// Total is what every order costs, whether or not it can be paid for.
 	Total int
-	// Residue is what the allowance leaves unspent, never negative. It is the
-	// count of the trailing Rest.
+	// Residue is what the allowance leaves unspent, never negative - the
+	// entity's idle action points. It is a number the page reports, not an
+	// order: nothing rests an entity that was not ordered to, because an
+	// entity may be spent to exhaustion on purpose.
 	Residue int
 	// Overspend is what the orders cost beyond the allowance, never negative.
 	Overspend int
@@ -258,21 +260,4 @@ func Price(plan Plan) Estimate {
 	estimate.Residue = max(0, plan.Allowance-estimate.Total)
 	estimate.Overspend = max(0, estimate.Total-plan.Allowance)
 	return estimate
-}
-
-// SplitTrailingRest separates an entity's list into the orders a player
-// authored and the count of the Rest that trails them.
-//
-// A Rest at the end of a list is the residue by definition: it is what the
-// entity's unspent action points become, and the pre-processor keeps its count
-// equal to what everything before it leaves over. A Rest anywhere else is an
-// order the player placed, and it is priced and rendered like any other.
-//
-// The second result reports whether there was a trailing Rest at all, which is
-// not the same as a count of zero: nothing stores a Rest x0.
-func SplitTrailingRest(orders []Order) ([]Order, bool) {
-	if len(orders) == 0 || orders[len(orders)-1].Kind != OrderKindRest {
-		return orders, false
-	}
-	return orders[:len(orders)-1], true
 }

@@ -36,7 +36,6 @@ func apiReadStore() *testStore {
 			7: {
 				{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NE}},
 				{Seq: 2, Kind: game.OrderKindRest, Detail: game.OrderDetail{Count: 2}},
-				{Seq: 3, Kind: game.OrderKindRest, Detail: game.OrderDetail{Count: 1}},
 			},
 		},
 		visible: []hexg.Hex{world.Hexes()[1].Coord, world.Hexes()[world.Len()-2].Coord},

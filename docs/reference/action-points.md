@@ -19,7 +19,7 @@ per entity per turn; see [Turn results reference](turn-results.md#the-ledger).
 | Rest | An order kind that spends action points and moves nothing. |
 | Exhaust | The failure of a step an entity cannot afford. |
 | Known | Of a hex: the faction had observed or explored it when the turn opened. |
-| Pre-processor | What prices an entity's orders during order entry and keeps its trailing Rest. Binds nothing. |
+| Pre-processor | What prices an entity's orders during order entry and reports the points they leave idle. Binds nothing. |
 | Executor | What walks an entity's orders when the turn is processed and charges them. Decides what happened. |
 | Estimate | What the pre-processor answers with. Every order is priced as though it lands, and unknown ground at a flat cost. |
 
@@ -137,7 +137,7 @@ nothing stores one.
 A rest may be ordered more than once in a turn, and it may sit anywhere in an
 entity's list. Ordering one before a move is legal: it spends the AP where it
 was asked for and leaves the move to exhaust. A rest at the *end* of a list is
-the trailing Rest, which is the pre-processor's; see below.
+an order like any other; see [Idle action points](#idle-action-points).
 
 What a rest recovers is open. Nothing tracks a condition a rest could restore,
 so a rest today costs its AP, records that it happened, and changes no state.
@@ -151,7 +151,7 @@ Two things price orders, and the distinction is the point.
 
 | | Serves | Writes orders | Binding |
 | --- | --- | --- | --- |
-| Pre-processor | Order entry. Prices the set and keeps the trailing Rest. | Yes, on the player's behalf. | **No** |
+| Pre-processor | Order entry. Prices the set and reports the idle points. | No | **No** |
 | Executor | Turn processing. Walks the orders and charges them. | No | Yes. It decides what happened. |
 
 `game.Price` is the walk and `game.Execute` reads it as a result: what an entity
@@ -210,42 +210,48 @@ re-rendered `#orders` region, so the pre-processor runs during that render and
 the costs ride along in markup already being sent. See
 [Orders reference](orders.md#page).
 
-## The trailing Rest
+## Idle action points
 
-Unspent action points are the player's business. An entity's orders end with a
-`Rest xN` whose count is what everything before it leaves unspent. It starts at
-the entity's whole allowance and decrements as orders are added, so a player
-sees where their six points went and the stored orders are exactly what the
-player agreed to.
+Unspent action points are the player's business, and they stay the player's
+business: nothing spends them on an entity's behalf. What an entity's orders
+leave over are its **idle** points, and the pre-processor reports the number as
+`Estimate.Residue`.
 
-**The line is rendered always; the row is stored only when the count is at least
-one.** The page therefore keeps its shape as a player edits, which is the
-convention the faction picker follows, and the database never holds a `Rest x0`,
-which is the convention [Datastore](../DATASTORE.md#orders) follows. When the
-orders reach the allowance the row is deleted rather than written as a zero.
+They are a number and never an order. An entity may be spent to exhaustion
+deliberately, and a rest written into the list by anything other than the player
+would take that choice away — quietly, and in a row the player never typed. The
+same rule is why the executor writes no orders; this is the pre-processor half
+of it.
 
-A rest at the end of a list *is* the trailing Rest. There is nothing to tell one
-the player placed apart from one the pre-processor wrote, and nothing that needs
-to be: unspent points at the end of a turn are what a trailing Rest means. A
-rest a player wants at a length of their own goes somewhere other than the end.
+**The line is rendered always, whatever the count.** The page therefore keeps
+its shape as a player edits, which is the convention the faction picker follows.
+Zero idle points is a true statement about a number, so the line reads `0 idle`
+rather than naming an order that does not exist.
 
-The Rest comes off before every order write and goes back after it. That is what
-makes an added order land in front of the residue rather than after it, and what
-makes a position on the page the position the write addresses.
+A rest at the end of a list is an order like any other: it costs what it says,
+it is drawn with its own controls, and it is not resized. What the list leaves
+over after it is idle. Nothing has to tell a player's rest apart from anything
+else, because there is nothing else.
+
+Storing the residue was the older design, and it cost more than it paid for.
+The row had to come off before every write and go back after it, so a write to
+one order rewrote another; an append landed exactly where the residue sat and
+was replaced by the write that followed it
+([#56](https://github.com/mdhender/marajanda/issues/56)); and the count was
+sized from an estimate, which is the one thing a durable row must not be sized
+from. A number computed when asked has none of those problems.
 
 A plain read stores nothing. Opening the orders page and leaving it prices the
-turn and writes no rows; the residue is still drawn, and points nobody spends
-simply lapse.
+turn and writes no rows; the idle count is still drawn.
 
 That count is exact only while every step lands. A move that fails partway
 leaves the entity somewhere else, and the true residue may differ from the
 projection.
 
-Turn processing appends nothing. Action points still unspent when an entity's
-orders run out lapse, and the turn result records how much lapsed. That is a
-reporting line, not a rule. A trailing Rest sized to the whole allowance is a
-stored order the player agreed to, so processing charges it and nothing
-lapses.
+Turn processing appends nothing either. Action points still unspent when an
+entity's orders run out lapse, and the turn result records how much lapsed.
+Lapsing is the normal outcome for points nobody ordered spent — a player who
+wants them spent resting says so with a Rest order.
 
 ## Overspend
 
@@ -257,8 +263,8 @@ exhausted. The excess is rejected, not the set.
 
 The page owes the player the running total, the row where the committed cost
 crosses the allowance, and a mark on every row at or after it that will exhaust.
-There is no negative residue to render, because the trailing Rest stops existing
-before the residue could go below zero.
+There are no negative idle points to render: the residue floors at zero, and
+what the orders cost beyond the allowance is reported as the overspend instead.
 
 ## Founding
 

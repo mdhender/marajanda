@@ -109,21 +109,19 @@ func TestProcessingRecordsAStepThatLanded(t *testing.T) {
 		advanceTurn(t, store)
 
 		result := resultFor(t, store, leader.ID, closed)
-		// The ledger accounts for six points: one cheap step onto the homeland
-		// ring, and the trailing Rest the pre-processor sized to what the step
-		// left over. Nothing lapses, because the player agreed to the residue.
-		if result.Allowance != game.LeaderAllowance || result.Spent != game.LeaderAllowance || result.Lapsed != 0 {
-			t.Fatalf("ledger = %d of %d spent, %d lapsed, want the allowance accounted for",
-				result.Spent, result.Allowance, result.Lapsed)
+		// One cheap step onto the homeland ring is all the player ordered, so
+		// it is all that is spent. The points they did not spend lapse: an
+		// entity rests when it is told to and not otherwise.
+		idle := game.LeaderAllowance - game.KnownStepCost
+		if result.Allowance != game.LeaderAllowance || result.Spent != game.KnownStepCost || result.Lapsed != idle {
+			t.Fatalf("ledger = %d of %d spent, %d lapsed, want %d spent and %d lapsed",
+				result.Spent, result.Allowance, result.Lapsed, game.KnownStepCost, idle)
 		}
 		if result.Start != origin || result.End != destination {
 			t.Fatalf("recorded a walk from %v to %v, want %v to %v", result.Start, result.End, origin, destination)
 		}
-		if len(result.Orders) != 2 {
-			t.Fatalf("order results = %#v, want the step and the trailing Rest", result.Orders)
-		}
-		if rest := result.Orders[1]; rest.Kind != game.OrderKindRest || rest.Cost != game.LeaderAllowance-game.KnownStepCost {
-			t.Fatalf("trailing order = %#v, want a Rest of %d", rest, game.LeaderAllowance-game.KnownStepCost)
+		if len(result.Orders) != 1 {
+			t.Fatalf("order results = %#v, want just the step the player ordered", result.Orders)
 		}
 		order := result.Orders[0]
 		if order.Seq != seq || order.Kind != game.OrderKindMove || !order.Carried || order.Reason != "" {
@@ -198,10 +196,13 @@ func TestProcessingRecordsWhyAStepFailed(t *testing.T) {
 		if order.Target != wall {
 			t.Fatalf("the failed step aimed at %v, want %v", order.Target, wall)
 		}
-		// The step was charged in full and moved nothing, and the trailing
-		// Rest the pre-processor sized against it spent the remainder.
-		if result.Spent != game.LeaderAllowance || result.End != stand {
+		// The step was charged in full and moved nothing. It was the only
+		// order, so everything it did not use lapses.
+		if result.Spent != game.UnknownStepCost || result.End != stand {
 			t.Fatalf("ledger = %#v, want the step charged and the entity where it was", result)
+		}
+		if result.Lapsed != game.LeaderAllowance-game.UnknownStepCost {
+			t.Fatalf("lapsed %d, want %d", result.Lapsed, game.LeaderAllowance-game.UnknownStepCost)
 		}
 		// The exploration happened and the entity did not, so the wall is
 		// observed and nothing around it was revealed.

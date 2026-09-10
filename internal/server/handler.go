@@ -642,7 +642,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 	.stanza .stanza-exhausts { color: var(--gold); font: .78rem/1.2 system-ui, sans-serif; text-transform: uppercase; letter-spacing: .06em; }
 	.stanza .stanza-error { flex-basis: 100%; margin: 0; }
 	.order-budget { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem .75rem; margin: 1rem 0 0; padding-top: .75rem; border-top: 1px solid var(--rule, rgba(255,255,255,.12)); }
-	.order-budget .budget-rest { min-width: 5rem; color: var(--gold); font: 700 .78rem/1.2 system-ui, sans-serif; letter-spacing: .1em; text-transform: uppercase; }
+	.order-budget .budget-idle { min-width: 5rem; color: var(--gold); font: 700 .78rem/1.2 system-ui, sans-serif; letter-spacing: .1em; text-transform: uppercase; }
 	.order-budget .budget-spent { color: var(--muted); font: .82rem/1.4 system-ui, sans-serif; }
 	.order-budget .budget-overspend { flex-basis: 100%; margin: 0; }
 	.add-order { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; margin: 1.25rem 0 0; }
@@ -990,16 +990,17 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 			  {{end}}
 			</ol>
 			{{end}}
-			{{/* The trailing Rest is what the orders above leave unspent. The
-			     line is drawn whatever the count is, so the page does not
-			     change shape as a player edits, and the row behind it is
-			     stored only when the count is at least one. The numbers are
-			     estimates: every order is priced as though it lands, and
-			     unknown ground is priced at a flat exploration cost whatever
-			     is actually there. */}}
+			{{/* Idle points are what the orders above leave unspent. They are
+			     a number, not an order: nothing rests an entity that was not
+			     ordered to, because a player may be spending one to
+			     exhaustion on purpose. The line is drawn whatever the count
+			     is, so the page does not change shape as a player edits. The
+			     numbers are estimates: every order is priced as though it
+			     lands, and unknown ground is priced at a flat exploration
+			     cost whatever is actually there. */}}
 			{{with .Budget}}
 			<p class="order-budget">
-			  <span class="budget-rest">Rest x{{.Rest}}</span>
+			  <span class="budget-idle">{{.Idle}} idle</span>
 			  <span class="budget-spent">{{.Spent}} of {{.Allowance}} action points, estimated.</span>
 			  {{if .Overspend}}<span class="message budget-overspend" role="status">Over by {{.Overspend}}. Order {{.ExhaustsAt}} and everything after it will exhaust.</span>{{end}}
 			</p>

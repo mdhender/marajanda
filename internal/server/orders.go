@@ -73,18 +73,20 @@ type entityOrders struct {
 	Budget *orderBudget
 }
 
-// orderBudget is the line below an entity's orders: the trailing Rest, and what
-// the orders above it are estimated to cost.
+// orderBudget is the line below an entity's orders: what they are estimated to
+// cost, and how many action points they leave idle.
 //
 // The line is rendered whatever the numbers are, so the page does not change
-// shape as a player edits. The Rest is stored as an order only when its count
-// is at least one; see docs/reference/action-points.md#the-trailing-rest.
+// shape as a player edits. Idle points are reported and nothing more - a player
+// who wants them spent resting says so with a Rest order, because an entity may
+// be spent to exhaustion on purpose. See docs/reference/action-points.md.
 type orderBudget struct {
 	Allowance int
 	// Spent is what every order costs, whether or not the entity can afford it.
 	Spent int
-	// Rest is the trailing Rest's count: what the orders leave unspent.
-	Rest int
+	// Idle is what the orders leave unspent. It is a number on this line, never
+	// an order in the list above it.
+	Idle int
 	// Overspend is what the orders cost beyond the allowance.
 	Overspend int
 	// ExhaustsAt is the sequence number of the first order the entity cannot
@@ -500,11 +502,10 @@ func buildOrdersView(turn int, entities []datastore.Entity, orders map[int64][]d
 		for _, cost := range estimate.Orders {
 			costs[cost.Seq] = cost
 		}
-		// The trailing Rest is the residue, not a row a player wrote, so it is
-		// drawn on the budget line below rather than as a stanza with controls
-		// on it. A Rest anywhere else is the player's, and is a stanza.
-		authored, _ := game.SplitTrailingRest(orders[entity.ID])
-		for _, order := range authored {
+		// Every stored order is one the player wrote, so every one of them is
+		// a stanza with controls on it. What the list leaves unspent is on the
+		// budget line below, as a number rather than an order.
+		for _, order := range orders[entity.ID] {
 			stanza := buildStanza(entity.ID, order, costs[order.Seq], feedback)
 			attached = attached || stanza.Error != ""
 			section.Stanzas = append(section.Stanzas, stanza)
@@ -514,7 +515,7 @@ func buildOrdersView(turn int, entities []datastore.Entity, orders map[int64][]d
 			section.Budget = &orderBudget{
 				Allowance:  estimate.Allowance,
 				Spent:      estimate.Total,
-				Rest:       estimate.Residue,
+				Idle:       estimate.Residue,
 				Overspend:  estimate.Overspend,
 				ExhaustsAt: estimate.ExhaustsAt,
 			}

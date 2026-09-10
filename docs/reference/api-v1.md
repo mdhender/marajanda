@@ -368,8 +368,9 @@ for the reported current turn.
 `cost` is JSON `null` when an incomplete move cannot be priced.
 `exhaustsAt` is JSON `null` when every order fits. Estimates are fogged exactly
 as on the player orders page; they do not disclose actual unknown terrain.
-The trailing Rest is reported as `residue`, not repeated in `orders`, following
-the existing preprocessor contract.
+`residue` is what the allowance leaves unspent: the entity's idle action
+points. It is a number and never an order, so nothing appears in `orders` that
+the player did not write, and nothing rests an entity that was not ordered to.
 
 ### Append or insert
 
@@ -383,7 +384,7 @@ the existing preprocessor contract.
 }
 ```
 
-Omitting `sequence` appends before the trailing Rest. Supplying `sequence`
+Omitting `sequence` appends to the end of the list. Supplying `sequence`
 inserts the new order at that one-based position and shifts that position and
 the following orders up:
 

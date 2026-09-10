@@ -53,23 +53,11 @@ func storedOrdersNow(t *testing.T, store *Store, entityID int64) []Order {
 	return orders[entityID]
 }
 
-// ordersNow reads the orders one entity's player authored, which is its stored
-// list without the trailing Rest the pre-processor keeps at the end of it.
+// ordersNow reads one entity's stored orders. Every one of them is an order the
+// player authored: nothing is added to the list on their behalf.
 func ordersNow(t *testing.T, store *Store, entityID int64) []Order {
 	t.Helper()
-	authored, _ := game.SplitTrailingRest(storedOrdersNow(t, store, entityID))
-	return authored
-}
-
-// trailingRest is the count of the Rest an entity's list ends with, or zero
-// when it ends with something else. Nothing stores a Rest x0.
-func trailingRest(t *testing.T, store *Store, entityID int64) int {
-	t.Helper()
-	orders := storedOrdersNow(t, store, entityID)
-	if _, trailing := game.SplitTrailingRest(orders); !trailing {
-		return 0
-	}
-	return orders[len(orders)-1].Detail.Count
+	return storedOrdersNow(t, store, entityID)
 }
 
 // march names an entity's orders in one string, so a test can say what it

@@ -99,7 +99,7 @@ world is its own filter.
 Action points the orders did not reach lapse. Processing appends nothing to an
 entity's list, so a leader that was given four points of orders out of six
 spends four and loses two. See
-[Action points reference](action-points.md#the-trailing-rest).
+[Action points reference](action-points.md#idle-action-points).
 
 ## What it writes
 
@@ -128,9 +128,10 @@ nothing to date: the fact did not change.
 
 ## What it does not write
 
-- **Orders.** The executor writes no orders. The orders of the closed turn are
-  the history a replay reads, and nothing rewrites them — not a result, not a
-  trailing Rest. See [Orders reference](orders.md#history).
+- **Orders.** The executor writes no orders, and neither does anything else on
+  a player's behalf: action points an entity was not ordered to spend lapse
+  rather than becoming a rest. The orders of the closed turn are the history a
+  replay reads, and nothing rewrites them. See [Orders reference](orders.md#history).
 - **Allowances.** An allowance is not a balance. Nothing carries into the next
   turn, so no total is written back.
 - **Reports.** What a player is shown reads the result record; nothing renders
