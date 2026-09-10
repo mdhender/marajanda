@@ -829,7 +829,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 			  <p class="label">Your faction</p>
 			  <h2>{{.Faction.Name}}</h2>
 			  <p class="people">{{.Faction.Race}}</p>
-			  {{if .Faction.Active}}<p>Your people await their first command.</p>{{else}}<p>Your people are still here. They are taking no commands.</p>{{end}}
+			  {{if .Faction.Active}}<p>Your people await your command.</p>{{else}}<p>Your people are still here. They are taking no commands.</p>{{end}}
 			</div>
 			<div class="location">
 			  <p class="label">Turn</p>
