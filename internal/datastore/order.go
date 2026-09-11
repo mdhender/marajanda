@@ -56,7 +56,56 @@ var (
 	// deactivated. A deactivated faction cannot give orders; its player can
 	// still sign in and look at their game.
 	ErrFactionInactive = errors.New("that faction is not active")
+
+	// ErrOrdersChanged reports a write that named the order list it expected to
+	// be writing to, and found another. Somebody else wrote in between; the
+	// caller's view is stale and the write did nothing. See ExpectOrders.
+	ErrOrdersChanged = errors.New("the orders changed since they were read")
 )
+
+// OrderWriteOption conditions one order write. It is variadic on every write so
+// that a caller with nothing to say passes nothing: the page, which is the only
+// client of a turn when it is the only client of a turn, is unchanged by the
+// existence of this.
+type OrderWriteOption func(*orderWriteOptions)
+
+type orderWriteOptions struct {
+	expect    string
+	expectSet bool
+}
+
+// ExpectOrders makes a write conditional on the faction's orders for the turn
+// still hashing to etag, which is what OrdersETag returned when the caller read
+// them. A write whose expectation does not hold fails with ErrOrdersChanged and
+// writes nothing.
+//
+// The comparison happens inside the write's own transaction, so this is a real
+// precondition rather than a look before a leap: no other write can land
+// between the check and the write it guards.
+func ExpectOrders(etag string) OrderWriteOption {
+	return func(options *orderWriteOptions) { options.expect, options.expectSet = etag, true }
+}
+
+// OrderExpectation reports the tag a set of write options expects, and whether
+// they expect one at all.
+//
+// The option itself is opaque so that what it carries can change. This is the
+// way to read it, and it exists because *Store is not the only implementation
+// of the order writes: the server takes an interface, and a fake standing in
+// for this store has to honour a precondition rather than drop it, or a handler
+// that forgets to pass the header through passes its tests.
+func OrderExpectation(opts []OrderWriteOption) (string, bool) {
+	options := newOrderWriteOptions(opts)
+	return options.expect, options.expectSet
+}
+
+func newOrderWriteOptions(opts []OrderWriteOption) orderWriteOptions {
+	var options orderWriteOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+	return options
+}
 
 // Order is one of an entity's orders for a turn: an order kind and whatever
 // that kind needs to be carried out.
@@ -112,9 +161,9 @@ func (s *Store) OrdersAsOf(ctx context.Context, email string, turn int) (map[int
 // The entity's kind decides which order kinds it accepts, so a kind it does not
 // accept is refused here as well as omitted from the form. A hand-built request
 // cannot do what the form declines to show.
-func (s *Store) AddOrder(ctx context.Context, email string, turn int, entityID int64, kind game.OrderKind, detail game.OrderDetail) (_ int, err error) {
+func (s *Store) AddOrder(ctx context.Context, email string, turn int, entityID int64, kind game.OrderKind, detail game.OrderDetail, opts ...OrderWriteOption) (_ int, err error) {
 	seq := 0
-	if err := s.writeOrders(ctx, email, turn, []int64{entityID}, func(conn *sqlite.Conn) error {
+	if err := s.writeOrders(ctx, email, turn, []int64{entityID}, opts, func(conn *sqlite.Conn) error {
 		orders, err := readOrderableEntityOrders(conn, "add order", email, turn, entityID, kind)
 		if err != nil {
 			return err
@@ -133,8 +182,8 @@ func (s *Store) AddOrder(ctx context.Context, email string, turn int, entityID i
 // seq is the position the new order takes, from 1 to one past the end. One
 // past the end is an append, which is what the control that inserts after the
 // last order asks for.
-func (s *Store) InsertOrder(ctx context.Context, email string, turn int, entityID int64, seq int, kind game.OrderKind, detail game.OrderDetail) error {
-	return s.writeOrders(ctx, email, turn, []int64{entityID}, func(conn *sqlite.Conn) error {
+func (s *Store) InsertOrder(ctx context.Context, email string, turn int, entityID int64, seq int, kind game.OrderKind, detail game.OrderDetail, opts ...OrderWriteOption) error {
+	return s.writeOrders(ctx, email, turn, []int64{entityID}, opts, func(conn *sqlite.Conn) error {
 		orders, err := readOrderableEntityOrders(conn, "insert order", email, turn, entityID, kind)
 		if err != nil {
 			return err
@@ -156,10 +205,10 @@ func (s *Store) InsertOrder(ctx context.Context, email string, turn int, entityI
 // An invalid direction - the compass point's zero value - is the blank option,
 // and it leaves the order in place with nothing said about where it goes.
 // Removing the order is RemoveOrder's work, not the blank option's.
-func (s *Store) SetOrderDetail(ctx context.Context, email string, turn int, entityID int64, seq int, detail game.OrderDetail) error {
+func (s *Store) SetOrderDetail(ctx context.Context, email string, turn int, entityID int64, seq int, detail game.OrderDetail, opts ...OrderWriteOption) error {
 	return s.SetOrderDetails(ctx, email, turn, []OrderUpdate{
 		{EntityID: entityID, Seq: seq, Detail: detail},
-	})
+	}, opts...)
 }
 
 // SetOrderDetails sets the detail of every order it is given, in one
@@ -171,7 +220,7 @@ func (s *Store) SetOrderDetail(ctx context.Context, email string, turn int, enti
 // The order's stored kind decides which half of the detail is used, so naming a
 // direction for a rest changes nothing about the rest. An order's kind is not
 // editable; a player who wants a different kind removes the order and adds one.
-func (s *Store) SetOrderDetails(ctx context.Context, email string, turn int, updates []OrderUpdate) error {
+func (s *Store) SetOrderDetails(ctx context.Context, email string, turn int, updates []OrderUpdate, opts ...OrderWriteOption) error {
 	if len(updates) == 0 {
 		return nil
 	}
@@ -181,7 +230,7 @@ func (s *Store) SetOrderDetails(ctx context.Context, email string, turn int, upd
 			entities = append(entities, wanted.EntityID)
 		}
 	}
-	return s.writeOrders(ctx, email, turn, entities, func(conn *sqlite.Conn) error {
+	return s.writeOrders(ctx, email, turn, entities, opts, func(conn *sqlite.Conn) error {
 		for _, wanted := range updates {
 			orders, err := readEntityOrders(conn, wanted.EntityID, turn)
 			if err != nil {
@@ -216,8 +265,8 @@ func (s *Store) SetOrderDetails(ctx context.Context, email string, turn int, upd
 //
 // Only the open turn is touched. Nothing removes an order from a turn that has
 // been advanced past.
-func (s *Store) RemoveOrder(ctx context.Context, email string, turn int, entityID int64, seq int) error {
-	return s.writeOrders(ctx, email, turn, []int64{entityID}, func(conn *sqlite.Conn) error {
+func (s *Store) RemoveOrder(ctx context.Context, email string, turn int, entityID int64, seq int, opts ...OrderWriteOption) error {
+	return s.writeOrders(ctx, email, turn, []int64{entityID}, opts, func(conn *sqlite.Conn) error {
 		orders, err := readEntityOrders(conn, entityID, turn)
 		if err != nil {
 			return err
@@ -289,7 +338,7 @@ func (s *Store) AdvanceTurn(ctx context.Context) (_ int, err error) {
 // end, so a write touches the orders it was asked to touch and no others. That
 // is not only tidier: a stored residue would have to be sized from an estimate,
 // and an estimate is exactly what a durable row must not be sized from.
-func (s *Store) writeOrders(ctx context.Context, email string, turn int, entityIDs []int64, write func(*sqlite.Conn) error) (err error) {
+func (s *Store) writeOrders(ctx context.Context, email string, turn int, entityIDs []int64, opts []OrderWriteOption, write func(*sqlite.Conn) error) (err error) {
 	conn, release, err := s.take(ctx)
 	if err != nil {
 		return err
@@ -312,6 +361,18 @@ func (s *Store) writeOrders(ctx context.Context, email string, turn int, entityI
 	for _, entityID := range entityIDs {
 		if err := requireEntity(conn, normalizedEmail, entityID); err != nil {
 			return err
+		}
+	}
+	// The precondition is the last gate before the write and is inside the
+	// same transaction, so the list it compares against is the list the write
+	// is about to change.
+	if options := newOrderWriteOptions(opts); options.expectSet {
+		current, err := ordersETag(conn, normalizedEmail, turn)
+		if err != nil {
+			return err
+		}
+		if current != options.expect {
+			return fmt.Errorf("%w: orders are %s, not the expected %s", ErrOrdersChanged, current, options.expect)
 		}
 	}
 	return write(conn)

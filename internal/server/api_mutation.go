@@ -78,14 +78,18 @@ func (app *application) postAPIOrder(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	expect, ok := apiOrderExpectation(w, r)
+	if !ok {
+		return
+	}
 	kind := game.OrderKind(request.Kind)
 	sequence := 0
 	var err error
 	if request.Sequence == nil {
-		sequence, err = app.store.AddOrder(r.Context(), apiPlayerEmail(r), request.Turn, entityID, kind, detail)
+		sequence, err = app.store.AddOrder(r.Context(), apiPlayerEmail(r), request.Turn, entityID, kind, detail, expect...)
 	} else {
 		sequence = *request.Sequence
-		err = app.store.InsertOrder(r.Context(), apiPlayerEmail(r), request.Turn, entityID, sequence, kind, detail)
+		err = app.store.InsertOrder(r.Context(), apiPlayerEmail(r), request.Turn, entityID, sequence, kind, detail, expect...)
 	}
 	if err != nil {
 		app.writeAPIOrderFailure(w, r, err)
@@ -112,7 +116,11 @@ func (app *application) patchAPIOrder(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := app.store.SetOrderDetail(r.Context(), apiPlayerEmail(r), request.Turn, entityID, sequence, detail); err != nil {
+	expect, ok := apiOrderExpectation(w, r)
+	if !ok {
+		return
+	}
+	if err := app.store.SetOrderDetail(r.Context(), apiPlayerEmail(r), request.Turn, entityID, sequence, detail, expect...); err != nil {
 		app.writeAPIOrderFailure(w, r, err)
 		return
 	}
@@ -144,7 +152,11 @@ func (app *application) putAPIOrders(w http.ResponseWriter, r *http.Request) {
 		}
 		updates = append(updates, datastore.OrderUpdate{EntityID: update.EntityID, Seq: update.Sequence, Detail: detail})
 	}
-	if err := app.store.SetOrderDetails(r.Context(), apiPlayerEmail(r), request.Turn, updates); err != nil {
+	expect, ok := apiOrderExpectation(w, r)
+	if !ok {
+		return
+	}
+	if err := app.store.SetOrderDetails(r.Context(), apiPlayerEmail(r), request.Turn, updates, expect...); err != nil {
 		app.writeAPIOrderFailure(w, r, err)
 		return
 	}
@@ -160,7 +172,11 @@ func (app *application) deleteAPIOrder(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := app.store.RemoveOrder(r.Context(), apiPlayerEmail(r), turn, entityID, sequence); err != nil {
+	expect, ok := apiOrderExpectation(w, r)
+	if !ok {
+		return
+	}
+	if err := app.store.RemoveOrder(r.Context(), apiPlayerEmail(r), turn, entityID, sequence, expect...); err != nil {
 		app.writeAPIOrderFailure(w, r, err)
 		return
 	}
@@ -183,6 +199,7 @@ func (app *application) writeAPIEntityOrders(w http.ResponseWriter, r *http.Requ
 		app.writeAPIInternalError(w, r, err)
 		return
 	}
+	app.setAPIOrdersETag(w, r, turn)
 	_ = writeAPIJSON(w, status, apiOrderMutation{
 		Turn: turn, EntityID: entityID, Sequence: sequence,
 		Orders: apiOrdersFromStore(orders[entityID]), Estimate: apiEstimateFromGame(estimates[entityID]),
@@ -211,6 +228,7 @@ func (app *application) writeAPIOrders(w http.ResponseWriter, r *http.Request, t
 			EntityID: entity.ID, Orders: apiOrdersFromStore(orders[entity.ID]), Estimate: apiEstimateFromGame(estimates[entity.ID]),
 		})
 	}
+	app.setAPIOrdersETag(w, r, turn)
 	_ = writeAPIJSON(w, http.StatusOK, response)
 }
 
@@ -247,6 +265,9 @@ func (app *application) writeAPIOrderFailure(w http.ResponseWriter, r *http.Requ
 		writeAPIError(w, http.StatusNotFound, apiCodeOrderNotFound, "That order or insertion position does not exist.")
 	case errors.Is(err, datastore.ErrTurnClosed):
 		writeAPIError(w, http.StatusConflict, apiCodeTurnClosed, "Only the current turn's orders can be changed.")
+	case errors.Is(err, datastore.ErrOrdersChanged):
+		writeAPIError(w, http.StatusPreconditionFailed, apiCodePreconditionFailed,
+			"The orders changed since they were read; read them again and retry.")
 	case errors.Is(err, datastore.ErrTooManyOrders):
 		writeAPIError(w, http.StatusUnprocessableEntity, apiCodeOrderLimit, "That entity cannot carry another order this turn.")
 	case errors.Is(err, datastore.ErrOrderKindRefused), errors.Is(err, datastore.ErrOrderCountRefused),

@@ -25,6 +25,10 @@ body with another media type is refused with `415 Unsupported Media Type` and
 `Content-Type: application/json`. A `204 No Content` response has no body and
 no content type.
 
+Every orders representation carries an `ETag`, and an order write may carry
+`If-Match` to say which list it believed it was writing to. See
+[Concurrent edits](#concurrent-edits).
+
 Query parameter names are case-sensitive camel case, the same spelling as the
 JSON properties, so a value a client reads out of a response body goes back into
 a URL under the name it already knows. Path segments are lower case. Error codes
@@ -134,6 +138,7 @@ stable matching surface; clients branch on `code` and HTTP status.
 | `404` | `order_not_found` | The addressed order or insertion position does not exist. |
 | `404` | `turn_not_found` | A turn-scoped read names a turn the game has not reached. |
 | `409` | `turn_closed` | An order write names a turn that is no longer current. |
+| `412` | `precondition_failed` | An order write's `If-Match` no longer describes the stored orders. |
 | `409` | `no_origin` | Faction configuration cannot find a valid origin in this world. |
 | `415` | `unsupported_media_type` | A route requiring JSON did not receive `application/json`. |
 | `422` | `order_refused` | The entity refuses the kind or the detail is not valid for the order. |
@@ -571,6 +576,57 @@ and allowances, so it reproduces what was on screen when the orders were
 written - which is the question a client asking about a closed turn is really
 asking. It remains an estimate and not a record of what happened; the executor
 is what decides that, and turn results are a separate resource.
+
+## Concurrent edits
+
+Two clients can hold the same turn's order list - the orders page in one tab and
+a script in another is ordinary for a play-by-mail game - and an append tells
+neither that the other has written. `ETag` and `If-Match` are how a client finds
+out.
+
+Every response carrying an orders representation carries an `ETag`: the reads at
+`GET /api/v1/orders` and `GET /api/v1/turns/{turn}/orders`, and the response to
+every order write. The tag on a write response is the tag of the list that write
+just made, so a client writing several times in a row never has to read between
+them.
+
+The tag is derived from the orders themselves, not stored beside them. It
+identifies the whole representation even though it covers only the orders,
+because an estimate is a function of the orders, the entities and what the
+faction knows, and within one turn the last two do not move: turn processing
+dates everything it writes from turn+1, and a turn the game has left refuses
+writes. The turn is part of what is hashed. Nothing about the encoding is
+promised; treat a tag as opaque and compare it only for equality.
+
+An order write may carry `If-Match`:
+
+| `If-Match` | Meaning |
+| --- | --- |
+| absent | Write against whatever is stored. This is what every client did before the header existed. |
+| one strong entity-tag | Write only if the stored orders still hash to that tag. |
+| `*` | Write if a representation exists at all, which on these routes it does. |
+
+A write whose expectation no longer holds is refused with `412 Precondition
+Failed` and `precondition_failed`, and changes nothing. The recovery is to read
+the orders again, decide what to do about what changed, and retry with the tag
+that read returned.
+
+The comparison happens inside the write's own transaction, so it is a
+precondition and not a look before a leap: no other write can land between the
+check and the write it guards.
+
+A list of tags is refused with `invalid_request`. A write changes one resource,
+so several candidate tags cannot all describe the one it is writing to, and a
+server that picked one would be guessing. A weak tag (`W/"..."`) is refused for
+the reason the header exists: weak comparison admits representations that
+differ, and this comparison decides whether somebody else's orders are about to
+be written over.
+
+Two things this does not yet do. `If-None-Match` on the reads is not honoured,
+so there is no `304`; the tag is here for writing safely, not for saving
+bandwidth. And the header is optional, so a client that sends no expectation can
+still overwrite one that did - which today includes the HTML orders page, whose
+controls carry no tag.
 
 ## Capability parity
 

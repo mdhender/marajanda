@@ -35,15 +35,16 @@ type applicationStore interface {
 	EntitiesAsOf(context.Context, string, int) ([]datastore.Entity, error)
 	OrdersAsOf(context.Context, string, int) (map[int64][]datastore.Order, error)
 	EstimateOrders(context.Context, string, int) (map[int64]game.Estimate, error)
-	AddOrder(context.Context, string, int, int64, game.OrderKind, game.OrderDetail) (int, error)
-	InsertOrder(context.Context, string, int, int64, int, game.OrderKind, game.OrderDetail) error
-	SetOrderDetail(context.Context, string, int, int64, int, game.OrderDetail) error
-	SetOrderDetails(context.Context, string, int, []datastore.OrderUpdate) error
-	RemoveOrder(context.Context, string, int, int64, int) error
+	AddOrder(context.Context, string, int, int64, game.OrderKind, game.OrderDetail, ...datastore.OrderWriteOption) (int, error)
+	InsertOrder(context.Context, string, int, int64, int, game.OrderKind, game.OrderDetail, ...datastore.OrderWriteOption) error
+	SetOrderDetail(context.Context, string, int, int64, int, game.OrderDetail, ...datastore.OrderWriteOption) error
+	SetOrderDetails(context.Context, string, int, []datastore.OrderUpdate, ...datastore.OrderWriteOption) error
+	RemoveOrder(context.Context, string, int, int64, int, ...datastore.OrderWriteOption) error
 	AdvanceTurn(context.Context) (int, error)
 	SaveFaction(context.Context, string, string, game.Race) (datastore.Account, error)
 	VisibleHexes(context.Context, string) ([]hexg.Hex, error)
 	KnowledgeAsOf(context.Context, string, int) (game.KnowledgeSet, error)
+	OrdersETag(context.Context, string, int) (string, error)
 }
 
 type application struct {

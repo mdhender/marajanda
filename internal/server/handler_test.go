@@ -4,11 +4,14 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
 	"testing"
 
@@ -542,6 +545,7 @@ type testStore struct {
 	estimateErr    error
 	worldErr       error
 	visibleErr     error
+	etagErr        error
 }
 
 func (s *testStore) CreateSession(_ context.Context, token []byte, account datastore.Account) error {
@@ -579,8 +583,11 @@ func (s *testStore) OrdersAsOf(_ context.Context, _ string, turn int) (map[int64
 	return s.orders, nil
 }
 
-func (s *testStore) AddOrder(_ context.Context, _ string, turn int, entityID int64, kind game.OrderKind, detail game.OrderDetail) (int, error) {
+func (s *testStore) AddOrder(_ context.Context, _ string, turn int, entityID int64, kind game.OrderKind, detail game.OrderDetail, opts ...datastore.OrderWriteOption) (int, error) {
 	s.wroteTurn = turn
+	if err := s.expectation(turn, opts); err != nil {
+		return 0, err
+	}
 	if s.orderErr != nil {
 		return 0, s.orderErr
 	}
@@ -592,9 +599,12 @@ func (s *testStore) AddOrder(_ context.Context, _ string, turn int, entityID int
 	return seq, nil
 }
 
-func (s *testStore) InsertOrder(_ context.Context, _ string, turn int, entityID int64, seq int, kind game.OrderKind, detail game.OrderDetail) error {
+func (s *testStore) InsertOrder(_ context.Context, _ string, turn int, entityID int64, seq int, kind game.OrderKind, detail game.OrderDetail, opts ...datastore.OrderWriteOption) error {
 	s.wroteTurn = turn
 	s.insertedAt = seq
+	if err := s.expectation(turn, opts); err != nil {
+		return err
+	}
 	if s.orderErr != nil {
 		return s.orderErr
 	}
@@ -616,14 +626,17 @@ func (s *testStore) InsertOrder(_ context.Context, _ string, turn int, entityID 
 	return nil
 }
 
-func (s *testStore) SetOrderDetail(ctx context.Context, email string, turn int, entityID int64, seq int, detail game.OrderDetail) error {
+func (s *testStore) SetOrderDetail(ctx context.Context, email string, turn int, entityID int64, seq int, detail game.OrderDetail, opts ...datastore.OrderWriteOption) error {
 	return s.SetOrderDetails(ctx, email, turn, []datastore.OrderUpdate{
 		{EntityID: entityID, Seq: seq, Detail: detail},
-	})
+	}, opts...)
 }
 
-func (s *testStore) SetOrderDetails(_ context.Context, _ string, turn int, updates []datastore.OrderUpdate) error {
+func (s *testStore) SetOrderDetails(_ context.Context, _ string, turn int, updates []datastore.OrderUpdate, opts ...datastore.OrderWriteOption) error {
 	s.wroteTurn = turn
+	if err := s.expectation(turn, opts); err != nil {
+		return err
+	}
 	if s.orderErr != nil {
 		return s.orderErr
 	}
@@ -674,8 +687,11 @@ func (s *testStore) EstimateOrders(_ context.Context, _ string, _ int) (map[int6
 	return estimates, nil
 }
 
-func (s *testStore) RemoveOrder(_ context.Context, _ string, turn int, entityID int64, seq int) error {
+func (s *testStore) RemoveOrder(_ context.Context, _ string, turn int, entityID int64, seq int, opts ...datastore.OrderWriteOption) error {
 	s.wroteTurn = turn
+	if err := s.expectation(turn, opts); err != nil {
+		return err
+	}
 	if s.orderErr != nil {
 		return s.orderErr
 	}
@@ -688,6 +704,45 @@ func (s *testStore) RemoveOrder(_ context.Context, _ string, turn int, entityID 
 		kept = append(kept, order)
 	}
 	s.orders[entityID] = kept
+	return nil
+}
+
+// OrdersETag tags the fake's own order map the way the real store tags its
+// rows: over the list, in a stable order, so an unchanged list tags alike.
+func (s *testStore) OrdersETag(_ context.Context, _ string, turn int) (string, error) {
+	if s.etagErr != nil {
+		return "", s.etagErr
+	}
+	entityIDs := make([]int64, 0, len(s.orders))
+	for entityID := range s.orders {
+		entityIDs = append(entityIDs, entityID)
+	}
+	sort.Slice(entityIDs, func(i, j int) bool { return entityIDs[i] < entityIDs[j] })
+	digest := sha256.New()
+	fmt.Fprintf(digest, "turn %d\n", turn)
+	for _, entityID := range entityIDs {
+		fmt.Fprintf(digest, "entity %d\n", entityID)
+		for _, order := range s.orders[entityID] {
+			fmt.Fprintf(digest, "order %d %s %s %d\n", order.Seq, order.Kind, order.Detail.Direction, order.Detail.Count)
+		}
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+// expectation enforces what ExpectOrders asked for, so a handler that forgot to
+// pass the header through is caught by a test rather than by a player.
+func (s *testStore) expectation(turn int, opts []datastore.OrderWriteOption) error {
+	if len(opts) == 0 {
+		return nil
+	}
+	current, err := s.OrdersETag(context.Background(), "", turn)
+	if err != nil {
+		return err
+	}
+	expect, ok := datastore.OrderExpectation(opts)
+	if ok && expect != current {
+		return datastore.ErrOrdersChanged
+	}
 	return nil
 }
 

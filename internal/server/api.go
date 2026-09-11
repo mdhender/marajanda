@@ -31,6 +31,7 @@ const (
 	apiCodeOrderNotFound        = "order_not_found"
 	apiCodeTurnClosed           = "turn_closed"
 	apiCodeTurnNotFound         = "turn_not_found"
+	apiCodePreconditionFailed   = "precondition_failed"
 	apiCodeNoOrigin             = "no_origin"
 	apiCodeOrderRefused         = "order_refused"
 	apiCodeOrderLimit           = "order_limit"
