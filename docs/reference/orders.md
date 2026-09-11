@@ -182,7 +182,7 @@ the last row asks for.
 | Route | Role | Response |
 | --- | --- | --- |
 | `GET /player/orders` | `player` | The orders page, or the orders region alone |
-| `POST /player/orders` | `player` | Saves every direction the form carries, then adds, inserts or removes if a button says so |
+| `POST /player/orders` | `player` | Saves every direction the form carries, then adds, inserts, removes or rests the idle points if a button says so |
 | `POST /player/orders/{entity}/{seq}` | `player` | Sets which way one order goes |
 | `POST /player/orders/{entity}/{seq}/insert` | `player` | Puts a new order after that one |
 | `DELETE /player/orders/{entity}/{seq}` | `player` | Removes one order |
@@ -219,6 +219,7 @@ increments `game.current_turn`, both in one transaction. See
 | `add` | The entity to append an order to, set by the add button |
 | `insert` | The `<entity>.<seq>` to insert after, set by an insert button |
 | `remove` | The `<entity>.<seq>` to remove, set by a remove button |
+| `restIdle` | The entity whose idle action points to spend on a rest, set by the rest control |
 
 A row carries one control and its kind decides which: a move says which way it
 goes and a rest says how long it lasts. Either carries its whole address in its
@@ -251,13 +252,17 @@ A row that cannot be priced shows an em dash rather than a zero: a move with no
 direction yet has nowhere to go, so it has no price rather than a price of
 nothing. A row the entity cannot afford is marked, and so is every row after it.
 
-Below the rows is the budget line: the trailing `Rest xN`, what the orders above
-are estimated to cost against the entity's allowance, and — when they overspend
-— by how much and which row the crossing is at. The line is drawn whatever the
-numbers are, so the page keeps its shape as a player edits, and it is left out
-entirely for an entity with no allowance. The word on it is *estimated*, and it
-means two specific things; see
+Below the rows is the budget line: how many action points the orders above leave
+idle, what they are estimated to cost against the entity's allowance, and — when
+they overspend — by how much and which row the crossing is at. The line is drawn
+whatever the numbers are, so the page keeps its shape as a player edits, and it
+is left out entirely for an entity with no allowance. The word on it is
+*estimated*, and it means two specific things; see
 [Action points reference](action-points.md#the-pre-processors-numbers-are-an-estimate).
+
+Under the budget line is the control that spends those idle points resting. It
+is an action and not a mode: it appends one ordinary `Rest` and is finished. See
+[Action points reference](action-points.md#resting-the-idle-points).
 
 A row whose select is blank is an order with nothing chosen, not an order on its
 way out. Emptying a row leaves it in the list; the remove control is what takes

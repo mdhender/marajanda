@@ -666,6 +666,13 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 	.order-budget .budget-idle { min-width: 5rem; color: var(--gold); font: 700 .78rem/1.2 system-ui, sans-serif; letter-spacing: .1em; text-transform: uppercase; }
 	.order-budget .budget-spent { color: var(--muted); font: .82rem/1.4 system-ui, sans-serif; }
 	.order-budget .budget-overspend { flex-basis: 100%; margin: 0; }
+	.rest-idle { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; margin: .75rem 0 0; }
+	/* The button carries a real disabled attribute when there is nothing to
+	   rest, so this only has to look like what it already is. A disabled
+	   control is out of the tab order and refuses a click on its own. */
+	.rest-idle button[disabled] { opacity: .55; cursor: default; }
+	.rest-idle button[disabled]:hover { border-color: var(--line); }
+	.rest-idle .rest-idle-reason { color: var(--muted); font: .82rem/1.4 system-ui, sans-serif; }
 	.add-order { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; margin: 1.25rem 0 0; }
 	.add-order label { display: flex; align-items: center; gap: .5rem; }
 	.add-order select { width: auto; min-width: 8rem; padding: .45rem .6rem; font-size: .85rem; }
@@ -1047,6 +1054,24 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 			  <span class="budget-spent">{{.Spent}} of {{.Allowance}} action points, estimated.</span>
 			  {{if .Overspend}}<span class="message budget-overspend" role="status">Over by {{.Overspend}}. Order {{.ExhaustsAt}} and everything after it will exhaust.</span>{{end}}
 			</p>
+			{{/* Spending the idle points is an action, not a mode: it appends
+			     one ordinary Rest and is finished, so there is nothing to keep
+			     in step afterwards and nothing to tell apart from an order the
+			     player typed. The button posts the entity and never the count -
+			     the number here is what this draw of the page is looking at,
+			     and the server reads the residue again when the write lands.
+			     It is a submit button in the form, so a browser with the script
+			     blocked presses it the same way it presses Add. */}}
+			{{with .RestIdle}}
+			<p class="rest-idle">
+			  <button class="sign-link" type="submit" name="restIdle" value="{{.Value}}" hx-post="/player/orders"{{if .Disabled}} disabled{{end}}>{{.Label}}</button>
+			  {{/* Nothing to rest is a disabled button and a reason beside it
+			       rather than a button that would write Rest x0, and rather
+			       than a control that disappears and moves the line under the
+			       cursor. See issue #58. */}}
+			  {{if .Reason}}<span class="rest-idle-reason">{{.Reason}}</span>{{end}}
+			</p>
+			{{end}}
 			{{end}}
 			{{if .Kinds}}
 			<p class="add-order">

@@ -405,6 +405,12 @@ as on the player orders page; they do not disclose actual unknown terrain.
 points. It is a number and never an order, so nothing appears in `orders` that
 the player did not write, and nothing rests an entity that was not ordered to.
 
+A client that wants those points spent resting appends a rest of that length
+through `POST /api/v1/entities/{entity}/orders`. That is the whole of what the
+orders page's "Rest the remaining N points" control does on the player's behalf,
+so it needs no operation of its own; see
+[Action points reference](action-points.md#resting-the-idle-points).
+
 `warning` is what the pre-processor expects to stop the order, or `null` when it
 expects nothing to. It uses the vocabulary a turn result reports afterwards, so
 "what I was told" and "what happened" read as the same word.

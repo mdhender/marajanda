@@ -249,6 +249,51 @@ func TestARestAppendedToTheEndIsKept(t *testing.T) {
 	})
 }
 
+// Resting the idle points is a read and an append, and the store does both
+// without a special case: a Rest sized from the residue spends exactly it.
+//
+// This is the round trip the orders page's control makes (#64), tested here
+// rather than only against the server's fake store, because what an append does
+// to a list is the store's business and the fake's imitation of it is not
+// evidence. That is the gap #56 got through.
+func TestARestSizedFromTheResidueSpendsIt(t *testing.T) {
+	eachMemoryMode(t, func(t *testing.T, store *Store) {
+		leader, _ := foundedFaction(t, store)
+		addMove(t, store, leader.ID, compass.NE)
+
+		// The founding ring is known, so the first step is a cheap one.
+		idle := estimateNow(t, store, leader.ID).Residue
+		if want := game.LeaderAllowance - game.KnownStepCost; idle != want {
+			t.Fatalf("idle points = %d, want %d before anything rests them", idle, want)
+		}
+		if seq := addRest(t, store, leader.ID, idle); seq != 2 {
+			t.Fatalf("the rest landed at order %d, want 2", seq)
+		}
+
+		after := estimateNow(t, store, leader.ID)
+		if after.Residue != 0 {
+			t.Fatalf("idle points = %d after resting them all, want none", after.Residue)
+		}
+		if after.Total != game.LeaderAllowance || after.Overspend != 0 {
+			t.Fatalf("estimate = %#v, want the whole allowance spent and no overspend", after)
+		}
+
+		// And the control's other half: with nothing left idle there is nothing
+		// to write, and the store is what says so. A Rest x0 is an order that
+		// costs nothing and does nothing, so it is not one.
+		turn, err := store.CurrentTurn(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.AddOrder(t.Context(), orderPlayer, turn, leader.ID, game.OrderKindRest, resting(0)); !errors.Is(err, ErrOrderCountRefused) {
+			t.Fatalf("adding a rest of no points = %v, want %v", err, ErrOrderCountRefused)
+		}
+		if got := ordersNow(t, store, leader.ID); len(got) != 2 {
+			t.Fatalf("orders = %#v, want the refused rest to have written nothing", got)
+		}
+	})
+}
+
 // A rest a player places is an order like any other, wherever it sits. One on
 // the end is not the residue and is not resized: it costs what it says, and
 // what is left over after it is idle.

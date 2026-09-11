@@ -37,6 +37,7 @@ const (
 	addField       = "add"       // the add button's value: <entity>
 	insertField    = "insert"    // the insert button's value: <entity>.<seq>
 	removeField    = "remove"    // the remove button's value: <entity>.<seq>
+	restIdleField  = "restIdle"  // the rest-the-idle-points button's value: <entity>
 )
 
 // ordersView is the orders page, ready for the template.
@@ -98,6 +99,30 @@ type orderBudget struct {
 	// ExhaustsAt is the sequence number of the first order the entity cannot
 	// afford, or zero when it can afford them all.
 	ExhaustsAt int
+	// RestIdle is the control that spends the idle points resting. It is the
+	// convenience issue #64 asks for and nothing more: pressing it appends one
+	// ordinary Rest the player could have typed, and nothing maintains it
+	// afterwards.
+	RestIdle *restIdleControl
+}
+
+// restIdleControl is the button that writes the idle points away as a Rest.
+//
+// It is an action rather than a mode, so there is no state to carry between
+// renders: the label names the number this draw of the page is looking at, and
+// the value names the entity. How many points are actually written is decided
+// when the write arrives, because by then the number may have moved.
+type restIdleControl struct {
+	// Value is what the button posts: the entity, and nothing about the count.
+	Value string
+	// Label is what the button says, which names the current number so it
+	// answers "how many have I got left" on the way past.
+	Label string
+	// Disabled reports that there is nothing for the button to do, and Reason
+	// says what. A disabled button is drawn rather than left out so the line
+	// keeps its shape, which is the convention the budget line already follows.
+	Disabled bool
+	Reason   string
 }
 
 // orderKindOption is one choice in an entity's "add order" control.
@@ -277,7 +302,7 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 		}
 		expect = nil
 	}
-	switch add, insert, remove := r.PostForm.Get(addField), r.PostForm.Get(insertField), r.PostForm.Get(removeField); {
+	switch add, insert, remove, restIdle := r.PostForm.Get(addField), r.PostForm.Get(insertField), r.PostForm.Get(removeField), r.PostForm.Get(restIdleField); {
 	case add != "":
 		entity, err := strconv.ParseInt(add, 10, 64)
 		if err != nil {
@@ -328,6 +353,52 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, entity, seq))
+			return
+		}
+	case restIdle != "":
+		entity, err := strconv.ParseInt(restIdle, 10, 64)
+		if err != nil {
+			app.renderOrders(w, r, account, faction, orderFeedback{
+				message: "Marajanda could not read that entity.", status: http.StatusBadRequest,
+			})
+			return
+		}
+		// The button posts the entity and never the count. What the orders
+		// leave idle is read here, after whatever details this submission has
+		// just saved, so the Rest is sized from the list as it now stands and
+		// not from a number a page has been holding since before its last edit.
+		// The label on the button is a label.
+		estimates, err := app.store.EstimateOrders(r.Context(), account.Email, turn)
+		if err != nil {
+			app.serverError(w, r, err, "Marajanda could not price your orders.")
+			return
+		}
+		residue := estimates[entity].Residue
+		// An ordinary Rest, appended like any other. Nothing marks it as the
+		// page's work and nothing will resize it: a player who changes their
+		// plan edits or removes it exactly as they would one they typed.
+		//
+		// A residue of nothing is deliberately not refused ahead of the write.
+		// The estimate above was priced from the stored list, which under a
+		// conflict is somebody else's - so a page holding a stale list has to
+		// be told that, rather than told about idle points computed from orders
+		// it has never seen. The store answers the guard first; Rest x0 it
+		// refuses on its own account, and the branch below is that refusal in
+		// the words this control owes.
+		if _, err := app.store.AddOrder(r.Context(), account.Email, turn, entity, game.OrderKindRest, game.OrderDetail{Count: residue}, expect...); err != nil {
+			switch {
+			case errors.Is(err, datastore.ErrOrdersChanged):
+				app.renderOrdersConflict(w, r, account, faction)
+			case residue < 1:
+				// The button is drawn disabled when there is nothing to rest,
+				// so a request that gets this far is one the page did not make.
+				app.renderOrders(w, r, account, faction, orderFeedback{
+					message: "Those orders have no idle action points to rest.",
+					status:  http.StatusUnprocessableEntity,
+				})
+			default:
+				app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, entity, 0))
+			}
 			return
 		}
 	}
@@ -626,6 +697,7 @@ func buildOrdersView(turn int, email string, entities []datastore.Entity, orders
 				Idle:       estimate.Residue,
 				Overspend:  estimate.Overspend,
 				ExhaustsAt: estimate.ExhaustsAt,
+				RestIdle:   buildRestIdleControl(entity, estimate),
 			}
 		}
 		view.Entities = append(view.Entities, section)
@@ -637,6 +709,45 @@ func buildOrdersView(turn int, email string, entities []datastore.Entity, orders
 		view.Message = feedback.message
 	}
 	return view
+}
+
+// buildRestIdleControl is the button that spends an entity's idle points on a
+// Rest, or nil for an entity that cannot be told to rest at all.
+//
+// The label names the number rather than a mode, because the button is not one:
+// it appends a Rest and is finished, and the player presses it again if their
+// plan changes. Naming the number also answers "how many have I got left" on
+// the way past, which is the same number the line beside it reports.
+//
+// Nothing to rest is drawn disabled with the reason next to it rather than left
+// out. A button that wrote Rest x0 would be a lie about an order, and a control
+// that vanished would move the line under the cursor; see issue #58.
+func buildRestIdleControl(entity datastore.Entity, estimate game.Estimate) *restIdleControl {
+	if !entity.Kind.Accepts(game.OrderKindRest) {
+		return nil
+	}
+	control := &restIdleControl{Value: strconv.FormatInt(entity.ID, 10)}
+	switch {
+	case estimate.Residue > 0:
+		control.Label = fmt.Sprintf("Rest the remaining %s", actionPoints(estimate.Residue))
+	case estimate.Overspend > 0:
+		control.Label = "Rest the idle points"
+		control.Disabled = true
+		control.Reason = fmt.Sprintf("These orders already cost %s more than the allowance.", actionPoints(estimate.Overspend))
+	default:
+		control.Label = "Rest the idle points"
+		control.Disabled = true
+		control.Reason = "These orders spend every point."
+	}
+	return control
+}
+
+// actionPoints writes a count of action points the way a sentence needs it.
+func actionPoints(points int) string {
+	if points == 1 {
+		return "1 point"
+	}
+	return fmt.Sprintf("%d points", points)
 }
 
 func buildStanza(entityID int64, order datastore.Order, cost game.OrderCost, feedback orderFeedback) orderStanza {

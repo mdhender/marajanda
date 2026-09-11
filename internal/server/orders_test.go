@@ -657,6 +657,159 @@ func TestSettingARestCount(t *testing.T) {
 	}
 }
 
+// restIdleButton is the markup the rest-the-idle-points control renders as,
+// up to the attribute that says it is off.
+const restIdleButton = `name="restIdle" value="7" hx-post="/player/orders"`
+
+// The idle points can be spent in one press, and what lands is an ordinary
+// Rest: a stanza with its own controls, sized to what the list left over.
+func TestTheIdlePointsCanBeRestedInOnePress(t *testing.T) {
+	store := ordersStore()
+	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.E}}}
+	idle := game.LeaderAllowance - game.UnknownStepCost
+
+	body := ordersRequest(t, store, http.MethodGet, ordersPath, "", nil).Body.String()
+	if want := fmt.Sprintf(`%s>Rest the remaining %d points`, restIdleButton, idle); !strings.Contains(body, want) {
+		t.Fatalf("orders page missing the enabled control %q", want)
+	}
+
+	response := ordersRequest(t, store, http.MethodPost, ordersPath, "restIdle=7", htmxHeader)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	orders := store.orders[7]
+	if len(orders) != 2 {
+		t.Fatalf("orders = %#v, want the move and one rest", orders)
+	}
+	rest := orders[1]
+	if rest.Kind != game.OrderKindRest || rest.Detail.Count != idle || rest.Seq != 2 {
+		t.Fatalf("appended order = %#v, want a rest of %d points at the end", rest, idle)
+	}
+	// It is an order like any other from here on: drawn with its own count box
+	// and its own remove control, and nothing will resize it.
+	drawn := response.Body.String()
+	if !strings.Contains(drawn, `name="count.7.2"`) || !strings.Contains(drawn, `value="7.2"`) {
+		t.Fatalf("the appended rest is not an ordinary stanza: %s", drawn)
+	}
+}
+
+// The button names a number and posts an entity. What is written is the residue
+// the list has when the write lands, not the one the page was drawn with, so a
+// page held open while the orders moved cannot write a stale count.
+func TestTheRestedPointsAreCountedWhenTheButtonIsPressed(t *testing.T) {
+	store := ordersStore()
+	// Drawn with nothing ordered, so the button says the whole allowance.
+	body := ordersRequest(t, store, http.MethodGet, ordersPath, "", nil).Body.String()
+	if want := fmt.Sprintf("Rest the remaining %d points", game.LeaderAllowance); !strings.Contains(body, want) {
+		t.Fatalf("orders page missing %q", want)
+	}
+
+	// Then the list moves on underneath it, and the button is pressed anyway.
+	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.E}}}
+	ordersRequest(t, store, http.MethodPost, ordersPath, "restIdle=7", htmxHeader)
+
+	want := game.LeaderAllowance - game.UnknownStepCost
+	if got := store.orders[7][1].Detail.Count; got != want {
+		t.Fatalf("rested %d points, want %d: the count came from the page and not from the list", got, want)
+	}
+}
+
+// A list that already ends in a rest gets a second one. The button never edits
+// an order the player wrote - that ambiguity is what #56 was about - so the two
+// rests stand side by side and either can be removed on its own.
+func TestRestingIdlePointsAppendsASecondRest(t *testing.T) {
+	store := ordersStore()
+	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindRest, Detail: game.OrderDetail{Count: 2}}}
+	ordersRequest(t, store, http.MethodPost, ordersPath, "restIdle=7", htmxHeader)
+
+	orders := store.orders[7]
+	if len(orders) != 2 {
+		t.Fatalf("orders = %#v, want two rests", orders)
+	}
+	if orders[0].Detail.Count != 2 {
+		t.Fatalf("the player's rest was rewritten: %#v", orders[0])
+	}
+	if want := game.LeaderAllowance - 2; orders[1].Kind != game.OrderKindRest || orders[1].Detail.Count != want {
+		t.Fatalf("appended order = %#v, want a rest of %d points", orders[1], want)
+	}
+}
+
+// Nothing to rest is a disabled control and a reason, not a button that would
+// write Rest x0 and not a control that disappears. The attribute is the real
+// one, so the button is out of the tab order and refuses a press on its own.
+func TestTheRestIdleButtonIsDisabledWhenThereIsNothingToRest(t *testing.T) {
+	move := datastore.Order{Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.E}}
+	for name, test := range map[string]struct {
+		orders []datastore.Order
+		reason string
+	}{
+		"every point spent": {
+			orders: []datastore.Order{
+				{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.E}},
+				{Seq: 2, Kind: game.OrderKindRest, Detail: game.OrderDetail{Count: 3}},
+			},
+			reason: "These orders spend every point.",
+		},
+		"already overspent": {
+			// Three steps onto ground the faction does not know is nine points
+			// of a six point allowance.
+			orders: []datastore.Order{
+				{Seq: 1, Kind: move.Kind, Detail: move.Detail},
+				{Seq: 2, Kind: move.Kind, Detail: move.Detail},
+				{Seq: 3, Kind: move.Kind, Detail: move.Detail},
+			},
+			reason: "These orders already cost 3 points more than the allowance.",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := ordersStore()
+			store.orders[7] = test.orders
+			body := ordersRequest(t, store, http.MethodGet, ordersPath, "", nil).Body.String()
+
+			if want := restIdleButton + " disabled>"; !strings.Contains(body, want) {
+				t.Fatalf("the control is not really disabled, only styled: %s", body)
+			}
+			if !strings.Contains(body, test.reason) {
+				t.Fatalf("the control gives no reason, want %q", test.reason)
+			}
+		})
+	}
+}
+
+// The disabled attribute is what the page says, and the server is what decides.
+// A request built by hand, or made by a page drawn before the last point was
+// spent, is refused rather than writing a rest that lasts no time.
+func TestRestingWhenThereIsNothingIdleIsRefused(t *testing.T) {
+	store := ordersStore()
+	store.orders[7] = []datastore.Order{
+		{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.E}},
+		{Seq: 2, Kind: game.OrderKindRest, Detail: game.OrderDetail{Count: 3}},
+	}
+	response := ordersRequest(t, store, http.MethodPost, ordersPath, "restIdle=7", nil)
+
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnprocessableEntity)
+	}
+	if !strings.Contains(response.Body.String(), "no idle action points to rest") {
+		t.Fatalf("the refusal says nothing a player can act on: %s", response.Body.String())
+	}
+	if len(store.orders[7]) != 2 {
+		t.Fatalf("a refused press still wrote: %#v", store.orders[7])
+	}
+}
+
+// An entity that cannot be told to rest is offered no control to rest with. The
+// hamlet takes no orders at all, so its section carries neither.
+func TestAnEntityThatTakesNoOrdersIsOfferedNoRestControl(t *testing.T) {
+	body := ordersRequest(t, ordersStore(), http.MethodGet, ordersPath, "", nil).Body.String()
+	if strings.Contains(body, `value="9" hx-post="/player/orders"`) {
+		t.Fatalf("the hamlet was offered a control: %s", body)
+	}
+	if strings.Count(body, `name="restIdle"`) != 1 {
+		t.Fatalf("want one rest control, for the leader alone: %s", body)
+	}
+}
+
 // The estimate is never asked for from the request. A player who hand-builds
 // one cannot ask for the accurate answer, because there is nothing in the
 // request that says which answer to give.
@@ -755,6 +908,7 @@ func TestOrdersPageWriteControlsAllCarryTheTag(t *testing.T) {
 		"remove":     {http.MethodDelete, ordersPath + "/7/1", url.Values{}},
 		"save":       {http.MethodPost, ordersPath, url.Values{"direction.7.1": {"e"}}},
 		"add":        {http.MethodPost, ordersPath, url.Values{"add": {"7"}, "kind.7": {"move"}}},
+		"rest idle":  {http.MethodPost, ordersPath, url.Values{"restIdle": {"7"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			store := ordersStore()

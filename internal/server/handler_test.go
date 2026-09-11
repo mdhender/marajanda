@@ -587,12 +587,31 @@ func (s *testStore) AddOrder(_ context.Context, _ string, turn int, entityID int
 	if s.orderErr != nil {
 		return 0, s.orderErr
 	}
+	if err := restCountBound(kind, detail); err != nil {
+		return 0, err
+	}
 	if s.orders == nil {
 		s.orders = make(map[int64][]datastore.Order)
 	}
 	seq := len(s.orders[entityID]) + 1
 	s.orders[entityID] = append(s.orders[entityID], datastore.Order{Seq: seq, Kind: kind, Detail: detail})
 	return seq, nil
+}
+
+// restCountBound is the real store's rule that a rest lasts from one action
+// point to the order limit, which the fake has to hold too.
+//
+// A fake that took a Rest x0 would let a handler write an order the schema
+// refuses, and the test would prove the handler sends what the fake expects
+// and nothing about what happens. That is the gap #56 got through.
+func restCountBound(kind game.OrderKind, detail game.OrderDetail) error {
+	if kind != game.OrderKindRest {
+		return nil
+	}
+	if detail.Count < 1 || detail.Count > datastore.MaxOrdersPerEntity {
+		return fmt.Errorf("%w: %d", datastore.ErrOrderCountRefused, detail.Count)
+	}
+	return nil
 }
 
 func (s *testStore) InsertOrder(_ context.Context, _ string, turn int, entityID int64, seq int, kind game.OrderKind, detail game.OrderDetail, opts ...datastore.OrderWriteOption) error {
@@ -603,6 +622,9 @@ func (s *testStore) InsertOrder(_ context.Context, _ string, turn int, entityID 
 	}
 	if s.orderErr != nil {
 		return s.orderErr
+	}
+	if err := restCountBound(kind, detail); err != nil {
+		return err
 	}
 	if s.orders == nil {
 		s.orders = make(map[int64][]datastore.Order)

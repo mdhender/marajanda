@@ -286,6 +286,42 @@ entity's orders run out lapse, and the turn result records how much lapsed.
 Lapsing is the normal outcome for points nobody ordered spent — a player who
 wants them spent resting says so with a Rest order.
 
+### Resting the idle points
+
+Saying so by hand, every turn, and counting the points correctly is work the
+page can do. Each entity's budget line carries a control that writes the rest:
+
+> **Rest the remaining 4 points**
+
+It is an action and not a mode. One press appends one `Rest`, and nothing is
+maintained afterwards — no preference is stored, no later write resizes it, and
+a player who changes their plan presses it again. Naming the number means the
+control also answers "how many have I got left" on the way past.
+
+What it writes is an ordinary authored order. It is stored like one, drawn with
+its own count box and remove control, and indistinguishable from one a player
+typed, because it is one. A list that already ends in a rest gets a second one
+rather than having the first grown: the button never edits an order the player
+wrote, which is the ambiguity [#56](https://github.com/mdhender/marajanda/issues/56)
+was about.
+
+The number on the button is a label. The button posts the entity and never the
+count, and the residue is read again when the write lands, so a page held open
+while the orders moved cannot write a count nobody's plan justifies.
+
+Nothing to rest is a disabled control with the reason beside it — zero idle
+points reads "These orders spend every point", and a plan already past its
+allowance reads how far past. The control is drawn disabled rather than left
+out, so the line keeps its shape ([#58](https://github.com/mdhender/marajanda/issues/58)),
+and the attribute is the real `disabled` rather than a styling of one. The page
+saying so is a courtesy: the store refuses `Rest x0` on its own account, so a
+request built by hand is refused too.
+
+This needs nothing of the API, which is already expressive enough: a client
+reads `residue` from `GET /api/v1/orders` and appends a rest of that length
+through `POST /api/v1/entities/{entity}/orders`, which is what the control does
+on the player's behalf. See [#64](https://github.com/mdhender/marajanda/issues/64).
+
 ## Overspend
 
 Overspending is allowed during entry as a courtesy and bounded by

@@ -118,8 +118,10 @@ Dependency direction is one-way: `cmd/marajanda` → `internal/server` →
   exclusion set comes from `accounts` (deferred FK from `accounts` to `hexes`
   now asserts an origin is a real hex of the world). `preprocessor.go` assembles
   a `game.Plan` from the stored knowledge, location, allowance and orders;
-  every order write strips the trailing `Rest` before it and re-prices the whole
-  list after it, which is why `writeOrders` takes the entities it touches.
+  what the orders leave unspent is reported as the estimate's residue and never
+  stored, so an order write touches the orders it was asked to touch and no
+  others. `writeOrders` still takes the entities it touches, because the checks
+  and the concurrency guard it brackets every write with are per entity.
   `result.go` records what a processed turn did on three grains - a ledger per
   entity, an outcome per order, an observation per hex revealed - beside the
   orders rather than on them.

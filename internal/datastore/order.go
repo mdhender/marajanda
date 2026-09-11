@@ -153,10 +153,11 @@ func (s *Store) OrdersAsOf(ctx context.Context, email string, turn int) (map[int
 // the add control on the page sends, and it means an order a player has added
 // and not yet filled in. A rest has no blank; it lasts at least one point.
 //
-// The end of the list is the end of what the player has authored. A trailing
-// Rest is not an order the new one goes after: it is the residue, it is taken
-// off before the write and put back after it, so an added order always lands in
-// front of it. See docs/reference/action-points.md#the-trailing-rest.
+// The end of the list is the end of what the player has authored, and that is
+// the whole of it: nothing is stored behind the last order for an append to
+// have to step around. What the orders leave unspent is a number the
+// pre-processor reports, so an added order lands on the end and stays there.
+// See docs/reference/action-points.md#idle-action-points.
 //
 // The entity's kind decides which order kinds it accepts, so a kind it does not
 // accept is refused here as well as omitted from the form. A hand-built request
