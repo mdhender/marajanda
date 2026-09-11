@@ -517,6 +517,11 @@ type testStore struct {
 	// rendering what it wrote; the rules that decide what is stored are tested
 	// against the real store.
 	orders map[int64][]datastore.Order
+	// results are the recorded turn results the fake answers with, keyed by
+	// the turn they were recorded on, and resultsAsOf is the turn the last
+	// read asked for.
+	results     map[int][]datastore.TurnResult
+	resultsAsOf int
 	// orderErr is what the next order write fails with instead of doing
 	// anything, and wroteTurn is the turn the last one carried.
 	orderErr  error
@@ -539,6 +544,7 @@ type testStore struct {
 	turnErr        error
 	entitiesErr    error
 	ordersErr      error
+	resultsErr     error
 	estimateErr    error
 	worldErr       error
 	visibleErr     error
@@ -577,6 +583,14 @@ func (s *testStore) OrdersAsOf(_ context.Context, _ string, turn int) (map[int64
 		return nil, s.ordersErr
 	}
 	return s.orders, nil
+}
+
+func (s *testStore) ResultsAsOf(_ context.Context, _ string, turn int) ([]datastore.TurnResult, error) {
+	s.resultsAsOf = turn
+	if s.resultsErr != nil {
+		return nil, s.resultsErr
+	}
+	return s.results[turn], nil
 }
 
 func (s *testStore) AddOrder(_ context.Context, _ string, turn int, entityID int64, kind game.OrderKind, detail game.OrderDetail, opts ...datastore.OrderWriteOption) (int, error) {

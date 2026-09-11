@@ -155,12 +155,63 @@ event, not before it.
 
 ## What is not recorded
 
-- **Reports.** What a player is shown is downstream of this record and is not
-  built yet.
+- **Reports.** What a player is shown is downstream of this record rather than
+  part of it; see [Reading a result](#reading-a-result).
 - **Sightings of contents.** An observation records the hex and its state.
   What was standing in it is [#38](https://github.com/mdhender/marajanda/issues/38).
 - **Retention.** Results grow every turn for every entity, unlike orders, which
   exist only where a player acted. Nothing compacts or deletes them.
+
+## Reading a result
+
+The record is read back through two transports over one store method, and
+neither of them derives anything.
+
+| Route | Role | Response |
+| --- | --- | --- |
+| `GET /player/results` | `player` | The report page, or the results region alone |
+| `GET /api/v1/results` | `player` | The latest processed turn, as JSON |
+| `GET /api/v1/turns/{turn}/results` | `player` | One turn, as JSON |
+
+`GET /player/results` reads the turn named by `asOfTurn`, defaulting to the
+latest processed one. A well-formed turn the game has no report for answers
+`404` and something that is not a turn answers `400`; both still draw the latest
+report, because a mistyped link is not a reason to show a player nothing. The
+page is reachable by a deactivated faction: the flag stops a faction acting, not
+a person reading what their people already did. The JSON shape and the unscoped
+read's turn are [REST API v1 reference](api-v1.md#turn-results).
+
+### Which turn a report opens on
+
+The turn worth opening on is the one just processed, which is `current - 1`
+rather than `current`: the current turn is the one being ordered, and nothing
+has happened in it yet. A game on its first turn has no report at all and says
+so.
+
+### What the presentation adds
+
+The record keeps words and the page owes sentences. Nothing below is a rule; it
+is how the recorded values are written out.
+
+| Recorded | Written as |
+| --- | --- |
+| `terrain` | It could not enter that hex. |
+| `exhaust` | It had run out of action points. |
+| `unknown` | The order never said which way to go. |
+| `blocked` | Nothing produces it, so it is reported with the word the turn recorded until the rule that earns it arrives. |
+
+Observations are counted on the order that revealed them - "revealed 7 hexes: 1
+explored, 6 observed" - with the coordinates behind a disclosure. The count
+names both states rather than totalling them, because the difference between
+observing a hex and standing in it is a game concept; see
+[Knowledge reference](knowledge.md#the-two-states). Drawing the newly revealed
+hexes on the map view instead is [#69](https://github.com/mdhender/marajanda/issues/69).
+
+An entity whose kind takes no orders has a ledger of zeroes. It is reported -
+a player reads their whole force in one place - and says that it takes no orders
+rather than printing the zeroes. An entity that could have been given orders and
+was not reports its whole allowance as lapsed, which is the line a player asks
+about.
 
 ## Storage
 

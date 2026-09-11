@@ -168,6 +168,33 @@ func TestAPIAndHTMLCapabilityParity(t *testing.T) {
 		t.Fatalf("HTML dashboards do not expose advanced turn: admin %d, player %d", adminDashboard.Code, playerDashboard.Code)
 	}
 
+	// The turn that just closed is the one both transports report without being
+	// told which. The page and the API read the same record: the ledger the JSON
+	// carries is the ledger the page prints.
+	resultsResponse := apiRequest(handler, http.MethodGet, "/api/v1/results", "", playerHeaders)
+	var results apiResults
+	decodeAPIResponse(t, resultsResponse, &results)
+	if resultsResponse.Code != http.StatusOK || results.Turn != game.FirstTurn || len(results.Entities) == 0 {
+		t.Fatalf("results = %#v; status = %d", results, resultsResponse.Code)
+	}
+	var leaderResult apiEntityResult
+	for _, entity := range results.Entities {
+		if entity.EntityID == leader.ID {
+			leaderResult = entity
+		}
+	}
+	if leaderResult.EntityID != leader.ID || leaderResult.Ledger.Allowance != leader.Allowance {
+		t.Fatalf("leader result = %#v, want the allowance %d it was given", leaderResult, leader.Allowance)
+	}
+	resultsPage := requestWithCookie(handler, http.MethodGet, "/player/results", playerCookie, "")
+	resultsBody := resultsPage.Body.String()
+	if resultsPage.Code != http.StatusOK || !strings.Contains(resultsBody, "<strong>Turn 1</strong>") {
+		t.Fatalf("results page = %d %s", resultsPage.Code, resultsBody)
+	}
+	if !strings.Contains(resultsBody, fmt.Sprintf("<dt>Spent</dt><dd>%d AP</dd>", leaderResult.Ledger.Spent)) {
+		t.Fatalf("results page does not print the ledger the API reports (%#v): %s", leaderResult.Ledger, resultsBody)
+	}
+
 	revoked := apiRequest(handler, http.MethodDelete, "/api/v1/session", "", playerHeaders)
 	if revoked.Code != http.StatusNoContent {
 		t.Fatalf("revoke = %d %s", revoked.Code, revoked.Body.String())
@@ -240,6 +267,7 @@ func TestAuthenticatedRouteCapabilityMatrix(t *testing.T) {
 		{name: "admin map", documentation: "| Read the whole world |", ui: []string{"GET /admin/map", "GET /admin/map.png"}, api: []string{"GET /api/v1/map", "GET /api/v1/turns/{turn}/map"}},
 		{name: "player map", documentation: "| Read visible terrain |", ui: []string{"GET /player/map"}, api: []string{"GET /api/v1/map", "GET /api/v1/turns/{turn}/map"}},
 		{name: "order reads", documentation: "| Read and estimate orders |", ui: []string{"GET /player/orders"}, api: []string{"GET /api/v1/orders", "GET /api/v1/turns/{turn}/orders"}},
+		{name: "turn results", documentation: "| Read what a processed turn did |", ui: []string{"GET /player/results"}, api: []string{"GET /api/v1/results", "GET /api/v1/turns/{turn}/results"}},
 		{name: "order writes", documentation: "| Add, insert, edit, batch-save, and remove orders |", ui: []string{"POST /player/orders", "POST /player/orders/{entity}/{seq}", "POST /player/orders/{entity}/{seq}/insert", "DELETE /player/orders/{entity}/{seq}"}, api: []string{"POST /api/v1/entities/{entity}/orders", "PUT /api/v1/entities/{entity}/orders", "PATCH /api/v1/entities/{entity}/orders/{sequence}", "PUT /api/v1/orders", "DELETE /api/v1/entities/{entity}/orders/{sequence}"}},
 		{name: "turn advance", documentation: "| Advance the turn |", ui: []string{"POST /admin/turn"}, api: []string{"POST /api/v1/turns/current/advance"}},
 	}

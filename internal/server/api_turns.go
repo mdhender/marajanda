@@ -31,6 +31,14 @@ func (app *application) getAPITurnOrders(w http.ResponseWriter, r *http.Request)
 	app.writeAPIOrdersAsOf(w, r, turn)
 }
 
+func (app *application) getAPITurnResults(w http.ResponseWriter, r *http.Request) {
+	turn, ok := app.apiTurnFromPath(w, r)
+	if !ok {
+		return
+	}
+	app.writeAPIResultsAsOf(w, r, turn)
+}
+
 func (app *application) getAPITurnMap(w http.ResponseWriter, r *http.Request) {
 	turn, ok := app.apiTurnFromPath(w, r)
 	if !ok {

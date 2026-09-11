@@ -136,6 +136,55 @@ type apiOrders struct {
 	Entities []apiEntityOrders `json:"entities"`
 }
 
+// The turn report. One entity's recorded turn on the three grains the record
+// keeps it on: the ledger of its action points, an outcome per order, and an
+// observation per hex an order revealed. See docs/reference/turn-results.md.
+
+type apiResultLedger struct {
+	Allowance int           `json:"allowance"`
+	Spent     int           `json:"spent"`
+	Lapsed    int           `json:"lapsed"`
+	Start     apiCoordinate `json:"start"`
+	End       apiCoordinate `json:"end"`
+}
+
+type apiOrderOutcome struct {
+	Sequence int    `json:"sequence"`
+	Kind     string `json:"kind"`
+	// Cost is what the entity was charged, which is not what the order would
+	// have cost: an order it could not afford charges nothing, and a step that
+	// failed on terrain is charged in full.
+	Cost    int  `json:"cost"`
+	Carried bool `json:"carried"`
+	// Reason is why the order did not happen, from the recorded vocabulary, and
+	// null for an order that was carried out.
+	Reason *string       `json:"reason"`
+	From   apiCoordinate `json:"from"`
+	Target apiCoordinate `json:"target"`
+	To     apiCoordinate `json:"to"`
+}
+
+type apiObservation struct {
+	// Sequence is the order that revealed the hex.
+	Sequence   int           `json:"sequence"`
+	Coordinate apiCoordinate `json:"coordinate"`
+	State      string        `json:"state"`
+}
+
+type apiEntityResult struct {
+	EntityID     int64             `json:"entityId"`
+	Ledger       apiResultLedger   `json:"ledger"`
+	Orders       []apiOrderOutcome `json:"orders"`
+	Observations []apiObservation  `json:"observations"`
+}
+
+type apiResults struct {
+	// Turn is the turn reported. It is game.StartOfTimeTurn - zero - on the
+	// unscoped read of a game that has processed no turn yet.
+	Turn     int               `json:"turn"`
+	Entities []apiEntityResult `json:"entities"`
+}
+
 type apiCreateOrderRequest struct {
 	Turn     int             `json:"turn"`
 	Sequence *int            `json:"sequence,omitempty"`

@@ -34,6 +34,7 @@ type applicationStore interface {
 	Faction(context.Context, string) (datastore.Faction, bool, error)
 	EntitiesAsOf(context.Context, string, int) ([]datastore.Entity, error)
 	OrdersAsOf(context.Context, string, int) (map[int64][]datastore.Order, error)
+	ResultsAsOf(context.Context, string, int) ([]datastore.TurnResult, error)
 	EstimateOrders(context.Context, string, int) (map[int64]game.Estimate, error)
 	AddOrder(context.Context, string, int, int64, game.OrderKind, game.OrderDetail, ...datastore.OrderWriteOption) (int, error)
 	InsertOrder(context.Context, string, int, int64, int, game.OrderKind, game.OrderDetail, ...datastore.OrderWriteOption) error
@@ -77,10 +78,13 @@ type pageData struct {
 	// Orders is the orders page. It is read as of Turn as well, and only the
 	// current turn's is writable.
 	Orders ordersView
-	Name   string
-	Race   game.Race
-	Races  []game.Race
-	Map    mapView
+	// Results is the turn report. It carries its own turn, which is a
+	// processed one and so is never the turn above it.
+	Results resultsView
+	Name    string
+	Race    game.Race
+	Races   []game.Race
+	Map     mapView
 	// Scripts are what the page loads, in the order they load: HTMX, then the
 	// project's own. They are filled in by render rather than by every handler,
 	// the way Version is.
@@ -112,6 +116,7 @@ func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCrea
 	mux.HandleFunc("GET /api/v1/entities", app.requireAPIRole("player", app.getAPIEntities))
 	mux.HandleFunc("GET /api/v1/map", app.requireAPIAuthentication(app.getAPIMap))
 	mux.HandleFunc("GET /api/v1/orders", app.requireAPIRole("player", app.getAPIOrders))
+	mux.HandleFunc("GET /api/v1/results", app.requireAPIRole("player", app.getAPIResults))
 	mux.HandleFunc("PUT /api/v1/orders", app.requireAPIRole("player", app.putAPIOrders))
 	mux.HandleFunc("POST /api/v1/entities/{entity}/orders", app.requireAPIRole("player", app.postAPIOrder))
 	mux.HandleFunc("PUT /api/v1/entities/{entity}/orders", app.requireAPIRole("player", app.putAPIEntityOrders))
@@ -121,6 +126,7 @@ func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCrea
 	mux.HandleFunc("GET /api/v1/turns/{turn}/entities", app.requireAPIRole("player", app.getAPITurnEntities))
 	mux.HandleFunc("GET /api/v1/turns/{turn}/orders", app.requireAPIRole("player", app.getAPITurnOrders))
 	mux.HandleFunc("GET /api/v1/turns/{turn}/map", app.requireAPIAuthentication(app.getAPITurnMap))
+	mux.HandleFunc("GET /api/v1/turns/{turn}/results", app.requireAPIRole("player", app.getAPITurnResults))
 	mux.HandleFunc("GET /assets/{name}", app.asset)
 	mux.HandleFunc("GET /", app.landing)
 	mux.HandleFunc("GET /sign-in", app.signInForm)
@@ -134,6 +140,7 @@ func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCrea
 	mux.HandleFunc("GET /player/map", app.playerMap)
 	mux.HandleFunc("GET /player/faction", app.factionForm)
 	mux.HandleFunc("POST /player/faction", app.configureFaction)
+	mux.HandleFunc("GET /player/results", app.results)
 	mux.HandleFunc("GET /player/orders", app.orders)
 	mux.HandleFunc("POST /player/orders", app.saveOrders)
 	mux.HandleFunc("POST /player/orders/{entity}/{seq}", app.setOrderDetail)
@@ -690,6 +697,39 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 	   save replaces. */
 	#orders { transition: opacity .12s ease-in; }
 	#orders.htmx-request { opacity: .45; }
+	.results-page { max-width: 60rem; }
+	.results-turns { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin-top: 2.5rem; }
+	.results-turns strong { font: 400 1.15rem/1.3 Georgia, 'Times New Roman', serif; letter-spacing: .02em; }
+	/* The end of the range keeps a slot rather than losing one, so the current
+	   turn does not slide sideways as a player walks back through the reports. */
+	.results-turns .results-turn-end { color: var(--muted); border-style: dashed; cursor: default; }
+	.results-turns .results-turn-end:hover { border-color: var(--line); }
+	.entity-results { margin-top: 2rem; padding: 1.25rem 1.5rem; background: rgba(13,23,28,.88); border: 1px solid var(--line); }
+	.entity-results h2 { margin: 0; font: 400 1.15rem/1.3 Georgia, 'Times New Roman', serif; }
+	.entity-results h2 b { color: var(--gold); font-weight: 700; letter-spacing: .08em; }
+	.entity-results .entity-summary { margin: .35rem 0 0; color: var(--muted); font: .82rem/1.5 system-ui, sans-serif; }
+	.ledger { display: grid; grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); gap: .75rem 1.25rem; margin: 1.25rem 0 0; padding-top: .9rem; border-top: 1px solid var(--line); }
+	.ledger dt { color: var(--muted); font: .72rem/1.2 system-ui, sans-serif; letter-spacing: .12em; text-transform: uppercase; }
+	.ledger dd { margin: .25rem 0 0; font-variant-numeric: tabular-nums; }
+	.ledger .ledger-aside { color: var(--muted); }
+	.outcomes { display: grid; gap: .75rem; margin: 1.25rem 0 0; padding: 0; list-style: none; }
+	.outcome { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem .75rem; }
+	.outcome .outcome-kind { min-width: 5rem; color: var(--gold); font: 700 .78rem/1.2 system-ui, sans-serif; letter-spacing: .1em; text-transform: uppercase; }
+	.outcome .outcome-where { color: var(--muted); font: .82rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+	.outcome .outcome-cost { min-width: 3.5rem; color: var(--muted); font: .82rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
+	.outcome .outcome-verdict { font: .82rem/1.4 system-ui, sans-serif; }
+	/* A failure is the line a player came to read, so it is marked and its
+	   sentence is given the whole width rather than squeezed in beside a price. */
+	.outcome-failed .outcome-verdict { color: var(--ember); }
+	.outcome .outcome-reason { flex-basis: 100%; color: var(--gold); font: .82rem/1.4 system-ui, sans-serif; }
+	.outcome .revealed { flex-basis: 100%; color: var(--muted); font: .82rem/1.5 system-ui, sans-serif; }
+	.outcome .revealed summary { cursor: pointer; }
+	.outcome .revealed ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: .2rem .75rem; margin: .5rem 0 0; padding: 0; list-style: none; }
+	.outcome .revealed li { display: flex; gap: .5rem; }
+	.outcome .revealed .observed-coord { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+	.outcome .revealed .observed-state { text-transform: capitalize; }
+	#results-region { transition: opacity .12s ease-in; }
+	#results-region.htmx-request { opacity: .45; }
 	.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     .map-page { max-width: none; }
     /* The map scrolls inside its frame rather than being scaled down to fit it.
@@ -753,7 +793,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     <header>
       <a class="brand" href="/">Marajanda</a>
       {{if eq .View "landing"}}<a class="sign-link" href="/sign-in">Sign in</a>{{end}}
-      {{if or (eq .View "admin") (eq .View "player") (eq .View "faction") (eq .View "admin-map") (eq .View "player-map") (eq .View "orders")}}<form class="sign-out-form" action="/sign-out" method="post"><button class="sign-link" type="submit">Sign out</button></form>{{end}}
+      {{if or (eq .View "admin") (eq .View "player") (eq .View "faction") (eq .View "admin-map") (eq .View "player-map") (eq .View "orders") (eq .View "results")}}<form class="sign-out-form" action="/sign-out" method="post"><button class="sign-link" type="submit">Sign out</button></form>{{end}}
     </header>
     <main>
       {{if eq .View "landing"}}
@@ -832,6 +872,14 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		{{template "orders-list" .}}
 		<p class="map-actions"><a class="sign-link" href="/player/dashboard">Back to dashboard</a></p>
 	  </section>
+	  {{else if eq .View "results"}}
+	  <section class="dashboard results-page">
+		<p class="eyebrow">Faction command</p>
+		<h1>{{.Faction.Name}}</h1>
+		<p class="lede">The account of a turn already processed: what each order cost, what it did, and what it revealed.</p>
+		{{template "results-region" .}}
+		<p class="map-actions"><a class="sign-link" href="/player/dashboard">Back to dashboard</a><a class="sign-link" href="/player/map">View your map</a>{{if .Faction.Active}}<a class="sign-link" href="/player/orders">Give orders</a>{{end}}</p>
+	  </section>
 	  {{else}}
       <section class="dashboard">
         <p class="eyebrow">{{if eq .View "admin"}}Steward of Marajanda{{else}}Faction command{{end}}</p>
@@ -894,7 +942,10 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		       flag stops a faction acting, it does not lock a person out of
 		       looking at their own game. */}}
 		  {{if not .Faction.Active}}<p class="message" role="status">This faction is not active. It cannot be given orders until an administrator restores it.</p>{{end}}
-		  <p class="map-actions"><a class="sign-link" href="/player/map">View your map</a>{{if .Faction.Active}}<a class="sign-link" href="/player/orders">Give orders</a>{{end}}</p>
+		  {{/* A game on its first turn has processed nothing, so there is no
+		       report to send a player to yet. The link arrives with the first
+		       thing it has to say. */}}
+		  <p class="map-actions"><a class="sign-link" href="/player/map">View your map</a>{{if gt .Turn 1}}<a class="sign-link" href="/player/results">Read the last turn</a>{{end}}{{if .Faction.Active}}<a class="sign-link" href="/player/orders">Give orders</a>{{end}}</p>
 		  {{end}}
         </div>
       </section>
@@ -1105,5 +1156,59 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		<noscript><p class="save-orders"><button class="primary" type="submit">Save orders</button></p></noscript>
 		</fieldset>
 		</form>
+		</div>{{end}}
+
+{{/* The results region is the part of the report a turn link changes: the turn
+     it names, the links either side of it, and every section below them.
+     Everything around it - the faction heading, the page links, the sign-out
+     form - is the same turn to turn, so HTMX asks for this block alone.
+
+     The turn links keep their href, so walking back through the reports is
+     ordinary navigation with the script blocked. The hexes an order revealed
+     are in a details element for the same reason: a disclosure that needs no
+     script is a disclosure that works without one. */}}
+{{define "results-region"}}		<div id="results-region" hx-target="#results-region" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#results-region">
+		{{if .Results.Message}}<p class="message" role="status">{{.Results.Message}}</p>{{end}}
+		{{if .Results.Turn}}
+		<nav class="results-turns" aria-label="Turn reports">
+		  {{if .Results.Older}}<a class="sign-link" href="{{.Results.Older.URL}}">&#8592; {{.Results.Older.Label}}</a>{{else}}<span class="sign-link results-turn-end">The first turn</span>{{end}}
+		  <strong>Turn {{.Results.Turn}}</strong>
+		  {{if .Results.Newer}}<a class="sign-link" href="{{.Results.Newer.URL}}">{{.Results.Newer.Label}} &#8594;</a>{{else}}<span class="sign-link results-turn-end">The latest turn</span>{{end}}
+		</nav>
+		{{range .Results.Entities}}
+		<article class="entity-results">
+		  <h2><b>{{.Entity.Code}}</b>{{if ne .Entity.Name .Entity.Code}} {{.Entity.Name}}{{end}}</h2>
+		  <p class="entity-summary">{{.Summary}}</p>
+		  {{/* An entity that takes no orders has a ledger of zeroes, and a row
+		       of zeroes says nothing its one sentence has not said already. */}}
+		  {{if .TakesOrders}}
+		  <dl class="ledger">
+			<div><dt>Allowance</dt><dd>{{.Ledger.Allowance}} AP</dd></div>
+			<div><dt>Spent</dt><dd>{{.Ledger.Spent}} AP</dd></div>
+			<div><dt>Lapsed</dt><dd>{{.Ledger.Lapsed}} AP</dd></div>
+			<div><dt>Started</dt><dd>{{.Ledger.Start}}</dd></div>
+			<div><dt>Ended</dt><dd>{{.Ledger.End}}{{if not .Ledger.Moved}} <span class="ledger-aside">where it started</span>{{end}}</dd></div>
+		  </dl>
+		  {{if .Orders}}
+		  <ol class="outcomes">
+			{{range .Orders}}<li class="outcome{{if not .Carried}} outcome-failed{{end}}">
+			  <span class="outcome-kind">{{.Label}}</span>
+			  <span class="outcome-where">{{.From}}{{if .Aimed}} &#8594; {{.Target}}{{end}}</span>
+			  <span class="outcome-cost">{{.Cost}}</span>
+			  <span class="outcome-verdict">{{if .Carried}}Carried out{{else}}Did not happen{{end}}</span>
+			  {{if .Reason}}<span class="outcome-reason">{{.Reason}}</span>{{end}}
+			  {{if .Revealed}}<details class="revealed"><summary>{{.Revealed}}</summary>
+				<ul>{{range .Observations}}<li><span class="observed-coord">{{.Coord}}</span><span class="observed-state">{{.State}}</span></li>
+				{{end}}</ul>
+			  </details>{{end}}
+			</li>
+			{{end}}
+		  </ol>
+		  {{end}}
+		  {{end}}
+		</article>
+		{{end}}
+		{{if not .Results.Entities}}<p class="no-orders">Nothing of your faction has a report for this turn.</p>{{end}}
+		{{end}}
 		</div>{{end}}
 `))

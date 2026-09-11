@@ -160,6 +160,7 @@ An unexpected error never includes its internal error text in `message`.
 | `GET /api/v1/entities` | Player | `200` | Read the player's entities as of the reported turn. |
 | `GET /api/v1/map` | Either | `200` | Read all hexes as admin or visible hexes as player. |
 | `GET /api/v1/orders` | Player | `200` | Read and estimate current orders. |
+| `GET /api/v1/results` | Player | `200` | Read what the latest processed turn did. |
 | `POST /api/v1/entities/{entity}/orders` | Player | `201` | Append or insert an order. |
 | `PUT /api/v1/entities/{entity}/orders` | Player | `200` | Declare an entity's whole order list. |
 | `PATCH /api/v1/entities/{entity}/orders/{sequence}` | Player | `200` | Set one order's detail. |
@@ -169,6 +170,7 @@ An unexpected error never includes its internal error text in `message`.
 | `GET /api/v1/turns/{turn}/entities` | Player | `200` | Read the player's entities as of a turn. |
 | `GET /api/v1/turns/{turn}/orders` | Player | `200` | Read and estimate orders as of a turn. |
 | `GET /api/v1/turns/{turn}/map` | Either | `200` | Read the map as of a turn. |
+| `GET /api/v1/turns/{turn}/results` | Player | `200` | Read what a turn did. |
 
 Path values `entity`, `sequence`, and the delete query value `turn` are positive
 decimal integers. Invalid syntax is `invalid_request`. An absent `turn` on the
@@ -568,6 +570,92 @@ and renumbers those after it. Success returns the affected entity's complete
 orders and refreshed estimate; `sequence` in that response is the removed
 sequence.
 
+## Turn results
+
+`GET /api/v1/results` returns the account of one processed turn: what every
+entity of the faction was allowed, what its orders were charged, what each order
+did, and what each order revealed. The vocabulary is the one
+[Turn results reference](turn-results.md) fixes, and the three grains it records
+on stay three in the response.
+
+```json
+{
+  "turn": 3,
+  "entities": [
+    {
+      "entityId": 1,
+      "ledger": {
+        "allowance": 6,
+        "spent": 4,
+        "lapsed": 2,
+        "start": {"q": 2, "r": -1},
+        "end": {"q": 4, "r": -1}
+      },
+      "orders": [
+        {
+          "sequence": 1,
+          "kind": "move",
+          "cost": 1,
+          "carried": true,
+          "reason": null,
+          "from": {"q": 2, "r": -1},
+          "target": {"q": 3, "r": -1},
+          "to": {"q": 3, "r": -1}
+        },
+        {
+          "sequence": 2,
+          "kind": "move",
+          "cost": 1,
+          "carried": false,
+          "reason": "terrain",
+          "from": {"q": 3, "r": -1},
+          "target": {"q": 4, "r": -2},
+          "to": {"q": 3, "r": -1}
+        }
+      ],
+      "observations": [
+        {"sequence": 1, "coordinate": {"q": 3, "r": -1}, "state": "explored"},
+        {"sequence": 2, "coordinate": {"q": 4, "r": -2}, "state": "observed"}
+      ]
+    }
+  ]
+}
+```
+
+`cost` is what the entity was charged, not what the order would have cost: an
+order it could not afford charges nothing, and a step that failed on terrain is
+charged in full. `reason` is `null` for a carried order and otherwise one of
+`terrain`, `exhaust`, `blocked`, or `unknown`. `from`, `target`, and `to` are all
+three recorded because a step that fails does not move the entity, so the order
+after it resolves from the hex it did not leave.
+
+`observations` are of the entity and carry the `sequence` of the order that
+revealed each hex, rather than being nested inside that order. The record keeps
+the grains apart, a client that wants them nested groups by `sequence`, and one
+hex may be revealed twice in a turn - observed by one step and explored by a
+later one - with both sightings kept.
+
+Results are read, never derived again. A past turn returns the same bytes
+however far the game moves on.
+
+### Which turn the unscoped read answers
+
+`GET /api/v1/results` answers with the **latest processed turn**, which is the
+turn before the current one. It is the one read in this API where unscoped does
+not mean current, and the resource is what makes it so: results are written by
+turn processing, so the current turn has none until it is closed.
+
+| Game state | `GET /api/v1/results` |
+| --- | --- |
+| At least one turn processed | `200` with that turn's report and its `turn` |
+| No turn processed yet | `200` with `"turn": 0` and an empty `entities` |
+
+Turn `0` is the "before the game's first turn" sentinel, so a client reads "no
+turn has been reported" from the turn rather than from an empty list it has to
+interpret. `GET /api/v1/turns/current/results` is still there for a client that
+means today, and answers with today: an empty collection until the turn is
+processed.
+
 ## Advance the turn
 
 `POST /api/v1/turns/current/advance` takes no body. It processes the orders of
@@ -580,9 +668,9 @@ admin form. Success returns the new turn:
 
 ## Past turns
 
-`GET /api/v1/turns/{turn}/entities`, `GET /api/v1/turns/{turn}/orders`, and
-`GET /api/v1/turns/{turn}/map` are the unscoped reads of the same names with the
-turn named in the path. Each returns the representation that read returns, and
+`GET /api/v1/turns/{turn}/entities`, `GET /api/v1/turns/{turn}/orders`,
+`GET /api/v1/turns/{turn}/map`, and `GET /api/v1/turns/{turn}/results` are the
+unscoped reads of the same names with the turn named in the path. Each returns the representation that read returns, and
 `turn` in the body is the turn asked for. `/api/v1/entities` is
 `/api/v1/turns/{current}/entities`; the unscoped route is the convenience, not
 the other way round.
@@ -613,7 +701,12 @@ while the turn was open. It is priced against that turn's knowledge, locations
 and allowances, so it reproduces what was on screen when the orders were
 written - which is the question a client asking about a closed turn is really
 asking. It remains an estimate and not a record of what happened; the executor
-is what decides that, and turn results are a separate resource.
+is what decides that, and [Turn results](#turn-results) is where it is read.
+
+Results are the exception to "unscoped means current": `/api/v1/results` is
+`/api/v1/turns/{current-1}/results`, because the current turn has no results
+until it is processed. See
+[Which turn the unscoped read answers](#which-turn-the-unscoped-read-answers).
 
 ## Concurrent edits
 
@@ -687,6 +780,7 @@ unconditionally, as every client did before it existed.
 | Read the whole world | admin map and image | admin map representation, as of a turn |
 | Read visible terrain | player map | player map representation, as of a turn |
 | Read and estimate orders | `/player/orders` | orders, orders as of a turn |
+| Read what a processed turn did | `/player/results` | results, results as of a turn |
 | Add, insert, edit, batch-save, and remove orders | `/player/orders...` | order mutations, whole-list declare |
 | Advance the turn | `/admin/turn` | turn advance |
 
