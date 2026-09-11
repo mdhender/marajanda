@@ -135,6 +135,10 @@ type orderStanza struct {
 	// where the running total crosses the allowance and on every order after
 	// it.
 	Exhausts bool
+	// Warning is what the pre-processor expects to stop this order, in the
+	// words a player reads rather than the vocabulary the result records. It
+	// is empty when it expects nothing to.
+	Warning string
 	// Error is a failure that belongs to this order, shown beside it.
 	Error string
 }
@@ -544,6 +548,7 @@ func buildStanza(entityID int64, order datastore.Order, cost game.OrderCost, fee
 		RemoveValue: address,
 		Cost:        orderCostLabel(cost),
 		Exhausts:    cost.Exhausts,
+		Warning:     orderWarningLabel(cost.Warning),
 	}
 	if order.Kind == game.OrderKindRest {
 		stanza.IsRest = true
@@ -571,6 +576,23 @@ func buildStanza(entityID int64, order datastore.Order, cost game.OrderCost, fee
 // An order that could not be priced shows an em dash rather than a zero. A move
 // a player has added and not yet said the direction of has nowhere to go, so it
 // has no price; saying it costs nothing would be a different claim.
+// orderWarningLabel is what a costing's warning says to a player.
+//
+// The result table records a word and the page owes a sentence. It is hedged
+// because the warning is: the pre-processor knows the rules it models and no
+// more, so this says what it expects rather than what will happen.
+func orderWarningLabel(warning game.FailureReason) string {
+	switch warning {
+	case game.FailureTerrain:
+		return "Nothing you have ordered can enter that hex"
+	default:
+		// Exhaustion has its own mark on the row already, and an order with no
+		// direction is drawn unpriced rather than warned about. The rest of the
+		// vocabulary arrives with the rules that earn it.
+		return ""
+	}
+}
+
 func orderCostLabel(cost game.OrderCost) string {
 	if !cost.Priced {
 		return "\u2014"

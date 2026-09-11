@@ -99,14 +99,19 @@ type apiOrder struct {
 }
 
 type apiOrderCost struct {
-	Sequence int           `json:"sequence"`
-	Kind     string        `json:"kind"`
-	Cost     *int          `json:"cost"`
-	Running  int           `json:"running"`
-	Exhausts bool          `json:"exhausts"`
-	From     apiCoordinate `json:"from"`
-	Target   apiCoordinate `json:"target"`
-	To       apiCoordinate `json:"to"`
+	Sequence int    `json:"sequence"`
+	Kind     string `json:"kind"`
+	Cost     *int   `json:"cost"`
+	Running  int    `json:"running"`
+	Exhausts bool   `json:"exhausts"`
+	// Warning is what the pre-processor expects to stop the order, in the
+	// vocabulary a turn result reports afterwards, and null when it expects
+	// nothing to. It is advice: the order is still priced, and to still names
+	// where the step points.
+	Warning *string       `json:"warning"`
+	From    apiCoordinate `json:"from"`
+	Target  apiCoordinate `json:"target"`
+	To      apiCoordinate `json:"to"`
 }
 
 type apiOrderEstimate struct {

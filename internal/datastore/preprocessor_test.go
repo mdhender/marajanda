@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/maloquacious/hexg"
 	"github.com/mdhender/marajanda/internal/compass"
 	"github.com/mdhender/marajanda/internal/game"
 	"zombiezen.com/go/sqlite"
@@ -401,6 +402,71 @@ func TestARefusedWriteLeavesTheTrailingRestAlone(t *testing.T) {
 			if after[index] != before[index] {
 				t.Fatalf("order %d = %#v, want %#v", index+1, after[index], before[index])
 			}
+		}
+	})
+}
+
+// wallToWalkUpTo finds a hex a leader can stand on that has impassable ground
+// beside it, together with a passable neighbour to arrive from. Walking in from
+// that neighbour is what puts the wall on the faction's map.
+func wallToWalkUpTo(t *testing.T, store *Store) (from hexg.Hex, approach, into compass.Point) {
+	t.Helper()
+	world, err := store.World(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cyl := testCylinder(t)
+	for _, hex := range world.Hexes() {
+		if !hex.Terrain.Passable(game.EntityKindLeader) {
+			continue
+		}
+		var wall, open compass.Point
+		for _, point := range compass.Points() {
+			if world.IsPassable(compass.Neighbor(cyl, hex.Coord, point), game.EntityKindLeader) {
+				if open == 0 {
+					open = point
+				}
+			} else if wall == 0 {
+				wall = point
+			}
+		}
+		if wall == 0 || open == 0 {
+			continue
+		}
+		return compass.Neighbor(cyl, hex.Coord, open), open.Opposite(), wall
+	}
+	t.Fatal("the test world has no shoreline to walk up to")
+	return hexg.Hex{}, 0, 0
+}
+
+// The estimate warns about a step into ground the faction has already seen it
+// cannot enter, and it warns without changing what the step costs or where the
+// walk goes on from. This is what a player was not told before #57: the leader
+// was priced into a lake that had been on their map for a turn.
+func TestTheEstimateWarnsAboutWaterTheFactionHasSeen(t *testing.T) {
+	eachMemoryMode(t, func(t *testing.T, store *Store) {
+		leader, _ := foundedFaction(t, store)
+		from, approach, into := wallToWalkUpTo(t, store)
+		standAt(t, store, leader.ID, from)
+
+		// Walk up to the shore. Entering the hex observes the ring around it,
+		// so the wall is on the faction's map from the next turn.
+		addMove(t, store, leader.ID, approach)
+		advanceTurn(t, store)
+
+		stand := compass.Neighbor(testCylinder(t), from, approach)
+		wall := compass.Neighbor(testCylinder(t), stand, into)
+		addMove(t, store, leader.ID, into)
+
+		estimate := estimateNow(t, store, leader.ID)
+		step := estimate.Orders[0]
+		if step.Warning != game.FailureTerrain {
+			t.Fatalf("warning = %q, want %q for %v, which the faction has seen", step.Warning, game.FailureTerrain, wall)
+		}
+		// Priced as a step onto known ground, and the walk still ends there:
+		// the warning is advice and nothing downstream of it moves.
+		if step.Cost != game.KnownStepCost || step.To != wall || estimate.End != wall {
+			t.Fatalf("step = %#v ending %v, want it priced and walked as though it lands", step, estimate.End)
 		}
 	})
 }

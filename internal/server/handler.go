@@ -640,6 +640,9 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 	.stanza .direction, .stanza .count { min-width: 8.5rem; }
 	.stanza .stanza-cost { min-width: 3.5rem; color: var(--muted); font: .82rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
 	.stanza .stanza-exhausts { color: var(--gold); font: .78rem/1.2 system-ui, sans-serif; text-transform: uppercase; letter-spacing: .06em; }
+	/* A warning is a sentence rather than a stamp, so it is not uppercased and
+	   it is allowed to wrap onto its own line on a narrow screen. */
+	.stanza .stanza-warning { flex-basis: 100%; color: var(--gold); font: .82rem/1.4 system-ui, sans-serif; }
 	.stanza .stanza-error { flex-basis: 100%; margin: 0; }
 	.order-budget { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem .75rem; margin: 1rem 0 0; padding-top: .75rem; border-top: 1px solid var(--rule, rgba(255,255,255,.12)); }
 	.order-budget .budget-idle { min-width: 5rem; color: var(--gold); font: 700 .78rem/1.2 system-ui, sans-serif; letter-spacing: .1em; text-transform: uppercase; }
@@ -983,6 +986,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 				</select></label>{{end}}
 				<span class="stanza-cost">{{.Cost}}</span>
 				{{if .Exhausts}}<span class="stanza-exhausts">Will exhaust</span>{{end}}
+				{{if .Warning}}<span class="stanza-warning">{{.Warning}}</span>{{end}}
 				<button class="sign-link" type="submit" name="insert" value="{{.InsertValue}}" hx-post="{{.InsertURL}}">Insert after</button>
 				<button class="sign-link" type="submit" name="remove" value="{{.RemoveValue}}" hx-delete="{{.RemoveURL}}">Remove</button>
 				{{if .Error}}<p class="message stanza-error" role="alert">{{.Error}}</p>{{end}}

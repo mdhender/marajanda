@@ -354,6 +354,7 @@ for the reported current turn.
             "cost": 3,
             "running": 3,
             "exhausts": false,
+            "warning": null,
             "from": {"q": 2, "r": -1},
             "target": {"q": 3, "r": -2},
             "to": {"q": 3, "r": -2}
@@ -371,6 +372,24 @@ as on the player orders page; they do not disclose actual unknown terrain.
 `residue` is what the allowance leaves unspent: the entity's idle action
 points. It is a number and never an order, so nothing appears in `orders` that
 the player did not write, and nothing rests an entity that was not ordered to.
+
+`warning` is what the pre-processor expects to stop the order, or `null` when it
+expects nothing to. It uses the vocabulary a turn result reports afterwards, so
+"what I was told" and "what happened" read as the same word.
+
+It is advice and not a verdict. The order is still priced, `to` still names
+where the step points, and the walk still goes on from there, because every
+order is assumed to land and an estimate that refused a step would mis-price
+every order after it the moment something the pre-processor does not model got
+the entity across. A warning that turns out wrong is a warning; a refusal that
+turns out wrong is a lie.
+
+The pre-processor speaks about two things only: a coordinate the world does not
+have, whose extent is published in `GET /api/v1/game` rather than hidden, and
+impassable ground the faction already knows. It is silent about ground the
+faction has not seen, because saying anything would disclose what is there.
+That case is carried by the flat exploration price instead - a real cost rather
+than a warning.
 
 ### Append or insert
 

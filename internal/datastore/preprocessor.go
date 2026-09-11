@@ -70,10 +70,17 @@ func (s *Store) EstimateOrders(ctx context.Context, email string, turn int) (map
 		return nil, err
 	}
 
+	// The terrain reader is for warnings alone. Pricing stays fogged: an
+	// unknown hex costs the flat exploration price whatever is under it, and
+	// game.Plan.warn speaks only about hexes the faction already knows and
+	// about coordinates the world does not have.
+	world := &worldTerrain{conn: conn, cache: make(map[hexg.Hex]game.Terrain)}
+
 	estimates := make(map[int64]game.Estimate, len(entities))
 	for _, entity := range entities {
 		estimates[entity.ID] = game.Price(game.Plan{
 			Sight:     game.Fogged(),
+			Advise:    world.at,
 			Kind:      entity.Kind,
 			World:     cyl,
 			Knowledge: known,
@@ -81,6 +88,13 @@ func (s *Store) EstimateOrders(ctx context.Context, email string, turn int) (map
 			Allowance: entity.Allowance,
 			Orders:    orders[entity.ID],
 		})
+	}
+	if err := world.err; err != nil {
+		// A read of the world failed partway, so some warning was decided on a
+		// hex nobody saw. The estimate is still arithmetic a player is about to
+		// act on, so it is refused rather than handed over with a silence in it
+		// that looks like an all-clear.
+		return nil, fmt.Errorf("price orders: %w", err)
 	}
 	return estimates, nil
 }

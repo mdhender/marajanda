@@ -215,6 +215,10 @@ func apiEstimateFromGame(estimate game.Estimate) apiOrderEstimate {
 			value := order.Cost
 			cost.Cost = &value
 		}
+		if order.Warning != "" {
+			warning := string(order.Warning)
+			cost.Warning = &warning
+		}
 		response.Orders = append(response.Orders, cost)
 	}
 	return response

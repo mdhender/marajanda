@@ -104,6 +104,39 @@ to ignore and stops every kind. The check is on the destination only, so an
 ordinary entity already standing in water may leave it by stepping onto land.
 See [Terrain reference](terrain.md).
 
+### The estimate warns, the executor decides
+
+The first row of that table is a case the pre-processor can see coming: the
+faction knows the hex, so the page can say so before the turn is processed
+rather than leaving a player to work it out from where their leader did not end
+up. Each order in an estimate therefore carries a warning, empty when there is
+nothing to say, in the same vocabulary the result records as its reason.
+
+The two are deliberately different powers. **The pre-processor warns and the
+executor decides.** A warning does not change what the order costs, does not
+move the entity, and does not stop the walk: the row is still priced, and the
+orders after it are still priced from the destination, because every order is
+assumed to land.
+
+That is not timidity. The pre-processor models the rules it knows and no more,
+so a step it calls impossible may still happen — an effect nobody taught it
+about is the kind of thing a game acquires. A warning that turns out wrong is a
+warning. A refusal that turns out wrong is a lie, and every order after it would
+be priced from a hex the entity is not standing in, so one wrong call would cost
+the player their whole turn rather than one row of it.
+
+It warns about two things and no others:
+
+- a coordinate the world does not have, since rows do not wrap and the world's
+  extent is published rather than hidden, and
+- impassable ground the faction already knows, which is already drawn on their
+  map in the colour of the water they are about to walk into.
+
+It is silent about ground the faction has not seen. Warning there would say what
+is under the fog, which is the whole reason an unknown hex is priced flat; the
+exploration price carries that risk instead, as a real cost rather than as a
+warning.
+
 ## A failed step does not move the entity
 
 Steps are resolved in order against where the entity actually stands. If step 2

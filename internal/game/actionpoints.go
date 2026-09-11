@@ -134,6 +134,18 @@ type Plan struct {
 	Allowance int
 	// Orders are the entity's orders in sequence order.
 	Orders []Order
+	// Advise, when set, answers with the terrain of a hex so that a fogged
+	// costing can warn about a step it can already see will not land. It is
+	// read for warnings and for nothing else: it never moves an entity, never
+	// changes a cost, and never decides an outcome. Pricing is Sight's work.
+	//
+	// Warning and deciding are deliberately different powers. The pre-processor
+	// models the rules it knows and no more, so a step it calls impossible may
+	// still happen - an effect nobody taught it about is exactly the kind of
+	// thing a game acquires. A warning that turns out wrong is a warning. A
+	// refusal that turns out wrong is a lie, and every order after it would be
+	// priced from a hex the entity is not standing in.
+	Advise func(hexg.Hex) (Terrain, bool)
 }
 
 // Estimate is what a Plan costs.
@@ -189,6 +201,16 @@ type OrderCost struct {
 	// Failed reports a step that a ground-truth costing can see will not land.
 	// A fogged costing assumes every order lands, so it never sets this.
 	Failed bool
+	// Warning says this costing expects the order not to be carried out, and
+	// why. It is advice rather than a verdict: the order is still priced and
+	// the entity is still walked to the destination, because an estimate that
+	// refused a step would mis-price every order after it the moment it was
+	// wrong. The executor answers the same question for real, in the same
+	// vocabulary, as StepOutcome.Reason.
+	//
+	// It is empty when the costing has nothing to say, which includes every
+	// case it is not entitled to speak about. See Plan.Advise.
+	Warning FailureReason
 	// From and To are where the order starts and where it leaves the entity.
 	// They are equal for an order that moves nothing and for a step that
 	// failed: a step is paid for whether or not it lands.
@@ -213,6 +235,35 @@ type OrderCost struct {
 // plan priced from where the plan puts it is what a player is editing. Every
 // order from the crossing on carries Exhausts, and Committed stops counting
 // there, so nothing pretends the tail will happen.
+// warn reports what this costing expects to stop a step into destination, or
+// the empty reason when it expects nothing to.
+//
+// It speaks about two things and no others. A coordinate the world does not
+// have is one: rows do not wrap, so a step off a pole lands nowhere, and the
+// world's extent is published rather than hidden. Impassable ground the faction
+// already knows is the other: the hex is on the player's map in the colour of
+// the water they are about to walk into.
+//
+// It is silent about everything else, and the silence is the rule rather than a
+// gap. Warning about ground the faction has not seen would tell a player what is
+// there, which is the whole reason an unknown hex is priced flat; the flat
+// exploration price is what covers that case, as a real cost rather than as a
+// warning.
+func (plan Plan) warn(destination hexg.Hex) FailureReason {
+	if plan.Advise == nil {
+		return ""
+	}
+	terrain, found := plan.Advise(destination)
+	switch {
+	case !found:
+		return FailureTerrain
+	case plan.Knowledge.Knows(destination) && !terrain.Passable(plan.Kind):
+		return FailureTerrain
+	default:
+		return ""
+	}
+}
+
 func Price(plan Plan) Estimate {
 	at := plan.World.Normalize(plan.Start)
 	estimate := Estimate{Allowance: plan.Allowance, End: at}
@@ -229,6 +280,7 @@ func Price(plan Plan) Estimate {
 			destination := compass.Neighbor(plan.World, at, order.Detail.Direction)
 			cost.Target = destination
 			cost.Cost = StepCost(plan.Knowledge, destination)
+			cost.Warning = plan.warn(destination)
 			if plan.Sight.blocks(plan.Kind, destination) {
 				// The step is paid for as what it was when it was ordered and
 				// the entity stays where it started. See

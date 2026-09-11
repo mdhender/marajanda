@@ -173,7 +173,7 @@ func TestAPIDTOJSONShapes(t *testing.T) {
 				End:    apiCoordinate{Q: 2, R: -1},
 				Orders: []apiOrderCost{{Sequence: 1, Kind: "move", From: apiCoordinate{Q: 2, R: -1}, Target: apiCoordinate{Q: 2, R: -1}, To: apiCoordinate{Q: 2, R: -1}}},
 			},
-			want: `{"allowance":0,"committed":0,"total":0,"residue":0,"overspend":0,"exhaustsAt":null,"end":{"q":2,"r":-1},"orders":[{"sequence":1,"kind":"move","cost":null,"running":0,"exhausts":false,"from":{"q":2,"r":-1},"target":{"q":2,"r":-1},"to":{"q":2,"r":-1}}]}`,
+			want: `{"allowance":0,"committed":0,"total":0,"residue":0,"overspend":0,"exhaustsAt":null,"end":{"q":2,"r":-1},"orders":[{"sequence":1,"kind":"move","cost":null,"running":0,"exhausts":false,"warning":null,"from":{"q":2,"r":-1},"target":{"q":2,"r":-1},"to":{"q":2,"r":-1}}]}`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

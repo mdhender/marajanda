@@ -393,3 +393,87 @@ func TestTheZeroSightIsFogged(t *testing.T) {
 		t.Fatal("Marajanda stepped beyond the world")
 	}
 }
+
+// A fogged costing warns about water the faction has already seen, and warns
+// about nothing else.
+func TestPricingWarnsAboutKnownImpassableGround(t *testing.T) {
+	world := testCylinder(t)
+	origin := hexg.NewHex(0, 0)
+	seen := compass.Neighbor(world, origin, compass.NE)
+	unseen := compass.Neighbor(world, origin, compass.E)
+	terrain := func(coord hexg.Hex) (Terrain, bool) {
+		if coord == seen || coord == unseen {
+			return TerrainLake, true
+		}
+		return TerrainGrassland, true
+	}
+	// The faction has seen one of the two lakes and not the other.
+	known := KnowledgeSet{origin: KnowledgeExplored, seen: KnowledgeObserved}
+
+	estimate := Price(Plan{
+		Sight: Fogged(), Advise: terrain, Kind: EntityKindLeader, World: world, Knowledge: known,
+		Start: origin, Allowance: LeaderAllowance, Orders: moves(compass.NE),
+	})
+	step := estimate.Orders[0]
+	if step.Warning != FailureTerrain {
+		t.Fatalf("warning = %q, want %q for a lake the faction has seen", step.Warning, FailureTerrain)
+	}
+	// The warning is advice, not a refusal. The step is priced as a step onto
+	// known ground and the walk goes on from the destination, because an
+	// estimate that stopped here would mis-price every order after it the
+	// moment something the pre-processor does not model got the entity across.
+	if step.Cost != KnownStepCost || step.To != seen || estimate.End != seen || step.Failed {
+		t.Fatalf("step = %#v, end %v: a warning must not move or re-price anything", step, estimate.End)
+	}
+
+	// The other lake is unseen. Warning about it would say what is there, so
+	// the flat exploration price carries that risk instead.
+	quiet := Price(Plan{
+		Sight: Fogged(), Advise: terrain, Kind: EntityKindLeader, World: world, Knowledge: known,
+		Start: origin, Allowance: LeaderAllowance, Orders: moves(compass.E),
+	})
+	if got := quiet.Orders[0]; got.Warning != "" || got.Cost != UnknownStepCost {
+		t.Fatalf("step onto unseen water = %#v, want no warning and the exploration price", got)
+	}
+}
+
+// A costing given no way to read the world says nothing at all, which is what
+// every caller that only wants a price gets.
+func TestPricingWithoutAdviceNeverWarns(t *testing.T) {
+	world := testCylinder(t)
+	origin := hexg.NewHex(0, 0)
+	seen := compass.Neighbor(world, origin, compass.NE)
+
+	estimate := Price(Plan{
+		Sight: Fogged(), Kind: EntityKindLeader, World: world,
+		Knowledge: KnowledgeSet{origin: KnowledgeExplored, seen: KnowledgeObserved},
+		Start:     origin, Allowance: LeaderAllowance, Orders: moves(compass.NE),
+	})
+	if got := estimate.Orders[0].Warning; got != "" {
+		t.Fatalf("warning = %q, want none from a costing with nothing to read", got)
+	}
+}
+
+// Rows do not wrap, so a step off a pole lands on no hex at all. The world's
+// extent is published, so saying so discloses nothing.
+func TestPricingWarnsAboutAStepOffTheWorld(t *testing.T) {
+	world := testCylinder(t)
+	origin := hexg.NewHex(0, 0)
+	// A terrain reader for a world one row tall: everything off that row is a
+	// coordinate the world does not have.
+	terrain := func(coord hexg.Hex) (Terrain, bool) {
+		if coord.R() != 0 {
+			return "", false
+		}
+		return TerrainGrassland, true
+	}
+
+	estimate := Price(Plan{
+		Sight: Fogged(), Advise: terrain, Kind: EntityKindLeader, World: world,
+		Knowledge: KnowledgeSet{origin: KnowledgeExplored},
+		Start:     origin, Allowance: LeaderAllowance, Orders: moves(compass.NE),
+	})
+	if got := estimate.Orders[0].Warning; got != FailureTerrain {
+		t.Fatalf("warning = %q, want %q for a step off the world", got, FailureTerrain)
+	}
+}
