@@ -38,6 +38,9 @@ func (app *application) getAPIFaction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *application) getAPIEntities(w http.ResponseWriter, r *http.Request) {
+	if rejectAPITurnSelector(w, r) {
+		return
+	}
 	if _, ok := app.apiPlayerFaction(w, r); !ok {
 		return
 	}
@@ -60,6 +63,9 @@ func (app *application) getAPIEntities(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *application) getAPIMap(w http.ResponseWriter, r *http.Request) {
+	if rejectAPITurnSelector(w, r) {
+		return
+	}
 	authentication := apiAuthenticationFromContext(r.Context())
 	if authentication.Account.Role != "admin" && authentication.Account.Role != "player" {
 		writeAPIError(w, http.StatusForbidden, apiCodeForbidden, "This account cannot use that resource.")
@@ -107,6 +113,9 @@ func (app *application) getAPIMap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *application) getAPIOrders(w http.ResponseWriter, r *http.Request) {
+	if rejectAPITurnSelector(w, r) {
+		return
+	}
 	if _, ok := app.apiPlayerFaction(w, r); !ok {
 		return
 	}
@@ -222,4 +231,32 @@ func apiEstimateFromGame(estimate game.Estimate) apiOrderEstimate {
 		response.Orders = append(response.Orders, cost)
 	}
 	return response
+}
+
+// apiTurnSelectorNames are the query parameters a client reaches for when it
+// wants a turn other than the current one. None of the read routes can answer
+// one yet, so each is rejected by name rather than ignored: a dropped selector
+// is answered with the current turn's data under a `turn` the client did not
+// ask for, which reads as success and is wrong. See issue #61.
+//
+// `turn` is listed because it is the obvious guess, not because it is the
+// spelling this API will adopt. A read that names a past turn will spell it
+// `asOfTurn`, matching the store's EntitiesAsOf and ResultsAsOf, and leaving
+// `turn` to mean on writes what it already means there: the turn the client
+// read, which makes a stale write a turn_closed conflict.
+var apiTurnSelectorNames = []string{"asOfTurn", "asOf", "turn"}
+
+// rejectAPITurnSelector reports whether the request tried to name a turn. It
+// answers the request itself when it did.
+func rejectAPITurnSelector(w http.ResponseWriter, r *http.Request) bool {
+	query := r.URL.Query()
+	for _, name := range apiTurnSelectorNames {
+		if !query.Has(name) {
+			continue
+		}
+		writeAPIError(w, http.StatusBadRequest, apiCodeInvalidRequest,
+			"This resource reads the current turn only; remove the "+name+" parameter.")
+		return true
+	}
+	return false
 }

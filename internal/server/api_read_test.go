@@ -220,3 +220,27 @@ func TestAPIReadResourceStoreFailures(t *testing.T) {
 		})
 	}
 }
+
+// A read that names a turn is refused, not quietly answered for the current
+// one. The refusal comes before the faction lookup, so a client learns the
+// parameter is the problem rather than being sent after some other cause.
+func TestAPIReadRefusesATurnItCannotAnswer(t *testing.T) {
+	for _, target := range []string{"/api/v1/entities", "/api/v1/map", "/api/v1/orders"} {
+		for _, name := range apiTurnSelectorNames {
+			t.Run(name+" "+target, func(t *testing.T) {
+				response := apiRead(t, apiReadStore(), "player", target+"?"+name+"=2")
+				assertAPIError(t, response.ResponseRecorder, http.StatusBadRequest, apiCodeInvalidRequest)
+			})
+		}
+	}
+}
+
+// An unrelated query parameter is still ignored. Only the names that ask for a
+// turn are refused, so a cache-buster does not break a read.
+func TestAPIReadIgnoresAnUnrelatedQueryParameter(t *testing.T) {
+	for _, target := range []string{"/api/v1/entities", "/api/v1/map", "/api/v1/orders"} {
+		t.Run(target, func(t *testing.T) {
+			apiRead(t, apiReadStore(), "player", target+"?_=17").requireOK(t)
+		})
+	}
+}

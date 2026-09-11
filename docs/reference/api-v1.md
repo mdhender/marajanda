@@ -25,6 +25,14 @@ body with another media type is refused with `415 Unsupported Media Type` and
 `Content-Type: application/json`. A `204 No Content` response has no body and
 no content type.
 
+Query parameter names are case-sensitive camel case, the same spelling as the
+JSON properties, so a value a client reads out of a response body goes back into
+a URL under the name it already knows. Path segments are lower case. Error codes
+are the one snake case name in the API, which keeps a code distinguishable from a
+parameter at a glance. Unlike JSON objects, a query string is not closed: an
+unrecognized parameter is ignored, except where this document says a route
+refuses one by name.
+
 JSON property names are case-sensitive camel case. Request objects are closed:
 an unknown property, malformed JSON, an empty body where an object is required,
 or anything after the first JSON value is refused with `400 Bad Request` and
@@ -157,6 +165,14 @@ decimal integers. Invalid syntax is `invalid_request`. An absent `turn` on the
 delete route is also invalid; every order write names the turn the client read,
 so advancing the clock makes a stale write a `turn_closed` conflict instead of
 silently applying it to the new turn.
+
+`turn` on the delete route names the turn the client read. It does not select a
+snapshot, and no read route accepts it with that meaning. Every read answers for
+the current turn, and `GET /api/v1/entities`, `GET /api/v1/map`, and
+`GET /api/v1/orders` refuse `asOfTurn`, `asOf`, or `turn` with `400 Bad Request`
+and `invalid_request` rather than answering the current turn under a name the
+client meant as the past. A read that names a past turn will spell it `asOfTurn`
+when one exists.
 
 ## Sessions
 
