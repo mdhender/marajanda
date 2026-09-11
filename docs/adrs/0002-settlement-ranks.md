@@ -1,6 +1,6 @@
 # ADR 0002: Model hamlets as ranked settlements
 
-- Status: Accepted
+- Status: Proposed
 - Date: 2026-09-11
 
 ## Context
