@@ -718,6 +718,26 @@ func (s *testStore) expectation(turn int, opts []datastore.OrderWriteOption) err
 	return nil
 }
 
+func (s *testStore) ReplaceOrders(_ context.Context, _ string, turn int, entityID int64, orders []datastore.Order, opts ...datastore.OrderWriteOption) error {
+	s.wroteTurn = turn
+	if err := s.expectation(turn, opts); err != nil {
+		return err
+	}
+	if s.orderErr != nil {
+		return s.orderErr
+	}
+	if s.orders == nil {
+		s.orders = make(map[int64][]datastore.Order)
+	}
+	replacement := make([]datastore.Order, 0, len(orders))
+	for index, order := range orders {
+		order.Seq = index + 1
+		replacement = append(replacement, order)
+	}
+	s.orders[entityID] = replacement
+	return nil
+}
+
 func (s *testStore) AdvanceTurn(context.Context) (int, error) {
 	if s.turnErr != nil {
 		return 0, s.turnErr

@@ -40,6 +40,7 @@ type applicationStore interface {
 	SetOrderDetail(context.Context, string, int, int64, int, game.OrderDetail, ...datastore.OrderWriteOption) error
 	SetOrderDetails(context.Context, string, int, []datastore.OrderUpdate, ...datastore.OrderWriteOption) error
 	RemoveOrder(context.Context, string, int, int64, int, ...datastore.OrderWriteOption) error
+	ReplaceOrders(context.Context, string, int, int64, []datastore.Order, ...datastore.OrderWriteOption) error
 	AdvanceTurn(context.Context) (int, error)
 	SaveFaction(context.Context, string, string, game.Race) (datastore.Account, error)
 	VisibleHexes(context.Context, string) ([]hexg.Hex, error)
@@ -112,6 +113,7 @@ func newConfiguredHandler(authenticate authenticateFunc, findOrCreate findOrCrea
 	mux.HandleFunc("GET /api/v1/orders", app.requireAPIRole("player", app.getAPIOrders))
 	mux.HandleFunc("PUT /api/v1/orders", app.requireAPIRole("player", app.putAPIOrders))
 	mux.HandleFunc("POST /api/v1/entities/{entity}/orders", app.requireAPIRole("player", app.postAPIOrder))
+	mux.HandleFunc("PUT /api/v1/entities/{entity}/orders", app.requireAPIRole("player", app.putAPIEntityOrders))
 	mux.HandleFunc("PATCH /api/v1/entities/{entity}/orders/{sequence}", app.requireAPIRole("player", app.patchAPIOrder))
 	mux.HandleFunc("DELETE /api/v1/entities/{entity}/orders/{sequence}", app.requireAPIRole("player", app.deleteAPIOrder))
 	mux.HandleFunc("POST /api/v1/turns/current/advance", app.requireAPIRole("admin", app.advanceAPITurn))

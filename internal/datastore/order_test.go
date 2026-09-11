@@ -4,6 +4,7 @@ package datastore
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/mdhender/marajanda/internal/compass"
@@ -518,4 +519,116 @@ func storedMove(t *testing.T, store *Store, entityID int64, seq int) string {
 		t.Fatal(err)
 	}
 	return stored
+}
+
+// A replace declares the list. Sending the same declaration again asks for the
+// same list, which is what makes a dropped connection safe to retry: an append
+// that may or may not have landed cannot be repeated, and this can.
+func TestReplaceOrdersIsIdempotent(t *testing.T) {
+	store, err := OpenMemory(t.Context(), testGame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	leader, _ := foundedFaction(t, store)
+
+	declared := []Order{
+		{Kind: game.OrderKindMove, Detail: moving(compass.NE)},
+		{Kind: game.OrderKindRest, Detail: resting(2)},
+		{Kind: game.OrderKindMove, Detail: moving(compass.W)},
+	}
+	var first []Order
+	for attempt := range 3 {
+		if err := store.ReplaceOrders(t.Context(), orderPlayer, game.FirstTurn, leader.ID, declared); err != nil {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+		got := ordersNow(t, store, leader.ID)
+		if attempt == 0 {
+			first = got
+			continue
+		}
+		if !reflect.DeepEqual(got, first) {
+			t.Fatalf("attempt %d gave %#v, want the %#v the first gave", attempt, got, first)
+		}
+	}
+	if len(first) != 3 || first[0].Seq != 1 || first[2].Seq != 3 || first[1].Kind != game.OrderKindRest {
+		t.Fatalf("declared list stored as %#v", first)
+	}
+}
+
+// The declaration replaces; it does not merge. Orders the declaration does not
+// mention are gone, which is the whole difference from appending.
+func TestReplaceOrdersDropsWhatItDoesNotDeclare(t *testing.T) {
+	store, err := OpenMemory(t.Context(), testGame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	leader, _ := foundedFaction(t, store)
+	for range 3 {
+		if _, err := store.AddOrder(t.Context(), orderPlayer, game.FirstTurn, leader.ID, game.OrderKindRest, resting(1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.ReplaceOrders(t.Context(), orderPlayer, game.FirstTurn, leader.ID,
+		[]Order{{Kind: game.OrderKindMove, Detail: moving(compass.NE)}}); err != nil {
+		t.Fatal(err)
+	}
+	got := ordersNow(t, store, leader.ID)
+	if len(got) != 1 || got[0].Kind != game.OrderKindMove {
+		t.Fatalf("orders after replacing three rests with one move = %#v", got)
+	}
+
+	// An empty declaration is a legal one: no orders this turn.
+	if err := store.ReplaceOrders(t.Context(), orderPlayer, game.FirstTurn, leader.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := ordersNow(t, store, leader.ID); len(got) != 0 {
+		t.Fatalf("orders after an empty declaration = %#v", got)
+	}
+}
+
+// Every order in a declaration is checked the way one added order is, and a
+// declaration with one bad order in it writes none of them.
+func TestReplaceOrdersRefusesABadListWhole(t *testing.T) {
+	store, err := OpenMemory(t.Context(), testGame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	leader, hamlet := foundedFaction(t, store)
+	if err := store.ReplaceOrders(t.Context(), orderPlayer, game.FirstTurn, leader.ID,
+		[]Order{{Kind: game.OrderKindMove, Detail: moving(compass.NE)}}); err != nil {
+		t.Fatal(err)
+	}
+	kept := ordersNow(t, store, leader.ID)
+
+	tooMany := make([]Order, MaxOrdersPerEntity+1)
+	for index := range tooMany {
+		tooMany[index] = Order{Kind: game.OrderKindRest, Detail: resting(1)}
+	}
+	for name, test := range map[string]struct {
+		entityID int64
+		orders   []Order
+		want     error
+	}{
+		"unknown kind":            {leader.ID, []Order{{Kind: game.OrderKind("dance")}}, ErrOrderKindRefused},
+		"kind the entity refuses": {hamlet.ID, []Order{{Kind: game.OrderKindMove, Detail: moving(compass.NE)}}, ErrOrderKindRefused},
+		"rest with a direction":   {leader.ID, []Order{{Kind: game.OrderKindRest, Detail: moving(compass.NE)}}, ErrOrderDetailRefused},
+		"rest with no count":      {leader.ID, []Order{{Kind: game.OrderKindRest}}, ErrOrderCountRefused},
+		"over the limit":          {leader.ID, tooMany, ErrTooManyOrders},
+		"one bad order last": {leader.ID, []Order{
+			{Kind: game.OrderKindMove, Detail: moving(compass.E)},
+			{Kind: game.OrderKindRest, Detail: resting(0)},
+		}, ErrOrderCountRefused},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := store.ReplaceOrders(t.Context(), orderPlayer, game.FirstTurn, test.entityID, test.orders); !errors.Is(err, test.want) {
+				t.Fatalf("%s = %v, want %v", name, err, test.want)
+			}
+			if got := ordersNow(t, store, leader.ID); !reflect.DeepEqual(got, kept) {
+				t.Fatalf("the refused declaration changed the orders: %#v, want %#v", got, kept)
+			}
+		})
+	}
 }

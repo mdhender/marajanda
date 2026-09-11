@@ -199,6 +199,44 @@ func (s *Store) InsertOrder(ctx context.Context, email string, turn int, entityI
 	})
 }
 
+// ReplaceOrders declares an entity's orders for a turn: the list it is given
+// becomes the list, renumbered 1..N, and whatever was there is gone.
+//
+// It is the operation the incremental controls cannot express. Appending is
+// right for building a plan an order at a time, which is what the page does and
+// what POST is for, but it cannot say "these are my orders" - and so it cannot
+// be retried. A client whose append timed out does not know whether it landed,
+// and sending it again appends a second copy. Sending this again sends the same
+// list, which is the same list.
+//
+// Every order is checked the way one added order is: the kind has to be one the
+// game has and one the entity's kind accepts, the detail has to suit the kind,
+// and the list has to fit inside MaxOrdersPerEntity. Nothing is written unless
+// all of it can be.
+//
+// An empty list is a legal declaration. It means the entity has no orders this
+// turn, which is a thing a player may mean and had no way to say in one request.
+func (s *Store) ReplaceOrders(ctx context.Context, email string, turn int, entityID int64, orders []Order, opts ...OrderWriteOption) error {
+	return s.writeOrders(ctx, email, turn, []int64{entityID}, opts, func(conn *sqlite.Conn) error {
+		entityKind, err := readEntityKind(conn, normalizeEmail(email), entityID, turn)
+		if err != nil {
+			return err
+		}
+		replacement := make([]Order, 0, len(orders))
+		for index, order := range orders {
+			if !order.Kind.Valid() {
+				return fmt.Errorf("replace orders: %w: %q", ErrOrderKindRefused, order.Kind)
+			}
+			if !entityKind.Accepts(order.Kind) {
+				return fmt.Errorf("replace orders: %w: %s takes no %s", ErrOrderKindRefused, entityKind, order.Kind)
+			}
+			order.Seq = index + 1
+			replacement = append(replacement, order)
+		}
+		return rewriteEntityOrders(conn, turn, entityID, replacement)
+	})
+}
+
 // SetOrderDetail sets what one order carries beyond its kind: which way a move
 // goes, or how long a rest lasts.
 //

@@ -159,10 +159,25 @@ type apiSetOrderDetailsRequest struct {
 	Updates []apiOrderUpdate `json:"updates"`
 }
 
+// apiReplacementOrder is one order in a declared list. It carries no sequence:
+// position in the list is the sequence, which is what makes the same request
+// sent twice mean the same thing.
+type apiReplacementOrder struct {
+	Kind   string          `json:"kind"`
+	Detail *apiOrderDetail `json:"detail"`
+}
+
+type apiReplaceOrdersRequest struct {
+	Turn   int                    `json:"turn"`
+	Orders *[]apiReplacementOrder `json:"orders"`
+}
+
 type apiOrderMutation struct {
-	Turn     int              `json:"turn"`
-	EntityID int64            `json:"entityId"`
-	Sequence int              `json:"sequence"`
+	Turn     int   `json:"turn"`
+	EntityID int64 `json:"entityId"`
+	// Sequence is the one order a write addressed. A whole-list write
+	// addresses none, so it is absent rather than reported as zero.
+	Sequence *int             `json:"sequence,omitempty"`
 	Orders   []apiOrder       `json:"orders"`
 	Estimate apiOrderEstimate `json:"estimate"`
 }

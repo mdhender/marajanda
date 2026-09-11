@@ -240,7 +240,7 @@ func TestAuthenticatedRouteCapabilityMatrix(t *testing.T) {
 		{name: "admin map", documentation: "| Read the whole world |", ui: []string{"GET /admin/map", "GET /admin/map.png"}, api: []string{"GET /api/v1/map", "GET /api/v1/turns/{turn}/map"}},
 		{name: "player map", documentation: "| Read visible terrain |", ui: []string{"GET /player/map"}, api: []string{"GET /api/v1/map", "GET /api/v1/turns/{turn}/map"}},
 		{name: "order reads", documentation: "| Read and estimate orders |", ui: []string{"GET /player/orders"}, api: []string{"GET /api/v1/orders", "GET /api/v1/turns/{turn}/orders"}},
-		{name: "order writes", documentation: "| Add, insert, edit, batch-save, and remove orders |", ui: []string{"POST /player/orders", "POST /player/orders/{entity}/{seq}", "POST /player/orders/{entity}/{seq}/insert", "DELETE /player/orders/{entity}/{seq}"}, api: []string{"POST /api/v1/entities/{entity}/orders", "PATCH /api/v1/entities/{entity}/orders/{sequence}", "PUT /api/v1/orders", "DELETE /api/v1/entities/{entity}/orders/{sequence}"}},
+		{name: "order writes", documentation: "| Add, insert, edit, batch-save, and remove orders |", ui: []string{"POST /player/orders", "POST /player/orders/{entity}/{seq}", "POST /player/orders/{entity}/{seq}/insert", "DELETE /player/orders/{entity}/{seq}"}, api: []string{"POST /api/v1/entities/{entity}/orders", "PUT /api/v1/entities/{entity}/orders", "PATCH /api/v1/entities/{entity}/orders/{sequence}", "PUT /api/v1/orders", "DELETE /api/v1/entities/{entity}/orders/{sequence}"}},
 		{name: "turn advance", documentation: "| Advance the turn |", ui: []string{"POST /admin/turn"}, api: []string{"POST /api/v1/turns/current/advance"}},
 	}
 

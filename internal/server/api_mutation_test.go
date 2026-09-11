@@ -174,6 +174,17 @@ func TestAPIPutFactionRefusals(t *testing.T) {
 	}
 }
 
+// addressedSequence is the one order a write addressed. Every write in these
+// tests addresses one; a whole-list write is the only one that does not, and it
+// has its own tests.
+func addressedSequence(t *testing.T, mutation apiOrderMutation) int {
+	t.Helper()
+	if mutation.Sequence == nil {
+		t.Fatalf("response addressed no order: %#v", mutation)
+	}
+	return *mutation.Sequence
+}
+
 func TestAPIOrderMutations(t *testing.T) {
 	store := ordersStore()
 	appendResponse := apiMutation(t, store, "player", http.MethodPost, "/api/v1/entities/7/orders", `{"turn":3,"kind":"move","detail":{"direction":"ne"}}`)
@@ -182,13 +193,13 @@ func TestAPIOrderMutations(t *testing.T) {
 	}
 	var mutation apiOrderMutation
 	decodeAPIResponse(t, appendResponse, &mutation)
-	if mutation.Sequence != 1 || len(mutation.Orders) != 1 || mutation.Orders[0].Detail.Direction == nil || *mutation.Orders[0].Detail.Direction != "ne" {
+	if addressedSequence(t, mutation) != 1 || len(mutation.Orders) != 1 || mutation.Orders[0].Detail.Direction == nil || *mutation.Orders[0].Detail.Direction != "ne" {
 		t.Fatalf("append = %#v", mutation)
 	}
 
 	insertResponse := apiMutation(t, store, "player", http.MethodPost, "/api/v1/entities/7/orders", `{"turn":3,"sequence":1,"kind":"rest","detail":{"count":2}}`)
 	decodeAPIResponse(t, insertResponse, &mutation)
-	if insertResponse.Code != http.StatusCreated || mutation.Sequence != 1 || len(mutation.Orders) != 2 || mutation.Orders[0].Kind != "rest" || mutation.Orders[1].Sequence != 2 {
+	if insertResponse.Code != http.StatusCreated || addressedSequence(t, mutation) != 1 || len(mutation.Orders) != 2 || mutation.Orders[0].Kind != "rest" || mutation.Orders[1].Sequence != 2 {
 		t.Fatalf("insert = %#v; status = %d", mutation, insertResponse.Code)
 	}
 
@@ -205,7 +216,7 @@ func TestAPIOrderMutations(t *testing.T) {
 
 	deleteResponse := apiMutation(t, store, "player", http.MethodDelete, "/api/v1/entities/7/orders/1?turn=3", "")
 	decodeAPIResponse(t, deleteResponse, &mutation)
-	if deleteResponse.Code != http.StatusOK || mutation.Sequence != 1 || len(mutation.Orders) != 1 || mutation.Orders[0].Sequence != 1 || mutation.Orders[0].Kind != "move" {
+	if deleteResponse.Code != http.StatusOK || addressedSequence(t, mutation) != 1 || len(mutation.Orders) != 1 || mutation.Orders[0].Sequence != 1 || mutation.Orders[0].Kind != "move" {
 		t.Fatalf("delete = %#v; status = %d", mutation, deleteResponse.Code)
 	}
 }

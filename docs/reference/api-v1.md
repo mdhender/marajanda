@@ -161,6 +161,7 @@ An unexpected error never includes its internal error text in `message`.
 | `GET /api/v1/map` | Either | `200` | Read all hexes as admin or visible hexes as player. |
 | `GET /api/v1/orders` | Player | `200` | Read and estimate current orders. |
 | `POST /api/v1/entities/{entity}/orders` | Player | `201` | Append or insert an order. |
+| `PUT /api/v1/entities/{entity}/orders` | Player | `200` | Declare an entity's whole order list. |
 | `PATCH /api/v1/entities/{entity}/orders/{sequence}` | Player | `200` | Set one order's detail. |
 | `PUT /api/v1/orders` | Player | `200` | Set multiple order details atomically. |
 | `DELETE /api/v1/entities/{entity}/orders/{sequence}?turn={turn}` | Player | `200` | Remove and renumber an order. |
@@ -493,6 +494,37 @@ estimate:
 }
 ```
 
+### Declare a whole list
+
+`PUT /api/v1/entities/{entity}/orders` replaces the entity's orders for the turn
+with the list it is given. It is the write a client can retry.
+
+```json
+{
+  "turn": 3,
+  "orders": [
+    {"kind": "move", "detail": {"direction": "ne"}},
+    {"kind": "rest", "detail": {"count": 2}}
+  ]
+}
+```
+
+An order here carries no `sequence`: its position in `orders` is its sequence.
+That is what makes the request idempotent - sending it again asks for the same
+list rather than for a second copy of it - and it is why a client whose
+connection dropped mid-write can send it again instead of reading back to find
+out what landed. `POST` cannot do this: an append that may or may not have
+happened cannot be repeated.
+
+Every order is checked the way one appended order is, and nothing is written
+unless all of it can be. An absent `orders` is `invalid_request`; an empty
+`orders` is a declaration that the entity has no orders this turn, which no
+other route can say in one request.
+
+Success returns the affected entity's complete orders and refreshed estimate.
+`sequence` is absent from that response, because a whole-list write addresses no
+one order.
+
 ### Set one detail
 
 `PATCH /api/v1/entities/{entity}/orders/{sequence}` takes the turn and the new
@@ -642,7 +674,7 @@ controls carry no tag.
 | Read the whole world | admin map and image | admin map representation, as of a turn |
 | Read visible terrain | player map | player map representation, as of a turn |
 | Read and estimate orders | `/player/orders` | orders, orders as of a turn |
-| Add, insert, edit, batch-save, and remove orders | `/player/orders...` | order mutations |
+| Add, insert, edit, batch-save, and remove orders | `/player/orders...` | order mutations, whole-list declare |
 | Advance the turn | `/admin/turn` | turn advance |
 
 Parity is a change rule: a change that adds or removes an authenticated UI

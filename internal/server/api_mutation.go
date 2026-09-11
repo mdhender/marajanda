@@ -95,7 +95,7 @@ func (app *application) postAPIOrder(w http.ResponseWriter, r *http.Request) {
 		app.writeAPIOrderFailure(w, r, err)
 		return
 	}
-	app.writeAPIEntityOrders(w, r, http.StatusCreated, request.Turn, entityID, sequence)
+	app.writeAPIEntityOrders(w, r, http.StatusCreated, request.Turn, entityID, &sequence)
 }
 
 func (app *application) patchAPIOrder(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +124,7 @@ func (app *application) patchAPIOrder(w http.ResponseWriter, r *http.Request) {
 		app.writeAPIOrderFailure(w, r, err)
 		return
 	}
-	app.writeAPIEntityOrders(w, r, http.StatusOK, request.Turn, entityID, sequence)
+	app.writeAPIEntityOrders(w, r, http.StatusOK, request.Turn, entityID, &sequence)
 }
 
 func (app *application) putAPIOrders(w http.ResponseWriter, r *http.Request) {
@@ -180,7 +180,52 @@ func (app *application) deleteAPIOrder(w http.ResponseWriter, r *http.Request) {
 		app.writeAPIOrderFailure(w, r, err)
 		return
 	}
-	app.writeAPIEntityOrders(w, r, http.StatusOK, turn, entityID, sequence)
+	app.writeAPIEntityOrders(w, r, http.StatusOK, turn, entityID, &sequence)
+}
+
+// putAPIEntityOrders declares an entity's whole order list for a turn.
+//
+// It is the write a client can retry. Position in `orders` is the sequence, so
+// the same request sent twice asks for the same list rather than for two copies
+// of it, and a client whose connection dropped mid-write can simply send it
+// again instead of reading back to find out what landed.
+func (app *application) putAPIEntityOrders(w http.ResponseWriter, r *http.Request) {
+	entityID, ok := positiveAPIPathInt64(w, r.PathValue("entity"), "entity")
+	if !ok || !app.requireAPIOrderFaction(w, r) || !requireAPIJSONBody(w, r) {
+		return
+	}
+	var request apiReplaceOrdersRequest
+	if err := decodeAPIJSON(r.Body, &request); err != nil {
+		writeAPIError(w, http.StatusBadRequest, apiCodeInvalidJSON, "The request body must contain one valid order list object.")
+		return
+	}
+	// An absent list is a missing value; an empty one is a declaration that the
+	// entity has no orders, so the two cannot be the same request.
+	if request.Turn < 1 || request.Orders == nil {
+		writeAPIInvalidRequest(w)
+		return
+	}
+	orders := make([]datastore.Order, 0, len(*request.Orders))
+	for _, wanted := range *request.Orders {
+		if wanted.Kind == "" || wanted.Detail == nil {
+			writeAPIInvalidRequest(w)
+			return
+		}
+		detail, ok := apiDetailToGame(w, *wanted.Detail)
+		if !ok {
+			return
+		}
+		orders = append(orders, datastore.Order{Kind: game.OrderKind(wanted.Kind), Detail: detail})
+	}
+	expect, ok := apiOrderExpectation(w, r)
+	if !ok {
+		return
+	}
+	if err := app.store.ReplaceOrders(r.Context(), apiPlayerEmail(r), request.Turn, entityID, orders, expect...); err != nil {
+		app.writeAPIOrderFailure(w, r, err)
+		return
+	}
+	app.writeAPIEntityOrders(w, r, http.StatusOK, request.Turn, entityID, nil)
 }
 
 func (app *application) requireAPIOrderFaction(w http.ResponseWriter, r *http.Request) bool {
@@ -188,7 +233,7 @@ func (app *application) requireAPIOrderFaction(w http.ResponseWriter, r *http.Re
 	return ok
 }
 
-func (app *application) writeAPIEntityOrders(w http.ResponseWriter, r *http.Request, status, turn int, entityID int64, sequence int) {
+func (app *application) writeAPIEntityOrders(w http.ResponseWriter, r *http.Request, status, turn int, entityID int64, sequence *int) {
 	orders, err := app.store.OrdersAsOf(r.Context(), apiPlayerEmail(r), turn)
 	if err != nil {
 		app.writeAPIInternalError(w, r, err)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/maloquacious/hexg"
@@ -209,4 +210,132 @@ func apiOrderWrite(t *testing.T, store *testStore, method, target, body, ifMatch
 		headers["If-Match"] = ifMatch
 	}
 	return apiRequest(newHandler(nil, store), method, target, body, headers)
+}
+
+// The retry the issue asks for, against the real store: the same declaration
+// sent three times leaves the same list, so a client whose connection dropped
+// mid-write can simply send it again.
+func TestAPIReplaceOrdersIsIdempotentAgainstTheRealStore(t *testing.T) {
+	store, err := datastore.OpenMemory(t.Context(), datastore.Game{
+		Seed1: 98374, Seed2: -98,
+		Width: datastore.MinimumWorldWidth, Height: datastore.MinimumWorldHeight,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	handler := newHandler(store.Authenticate, store)
+
+	player := createParitySession(t, handler, "player@marajanda.com", "good.luck")
+	headers := map[string]string{"Authorization": "Bearer " + player.Token}
+	assertParityMutationStatus(t, apiRequest(handler, http.MethodPut, "/api/v1/faction",
+		`{"name":"The Wayfarers","race":"human"}`, headers), http.StatusOK)
+
+	var entities apiEntities
+	decodeAPIResponse(t, apiRequest(handler, http.MethodGet, "/api/v1/entities", "", headers), &entities)
+	var leader apiEntity
+	for _, entity := range entities.Entities {
+		if entity.Kind == "leader" {
+			leader = entity
+		}
+	}
+	target := fmt.Sprintf("/api/v1/entities/%d/orders", leader.ID)
+	declaration := `{"turn":1,"orders":[{"kind":"move","detail":{"direction":"ne"}},{"kind":"rest","detail":{"count":2}}]}`
+
+	var first apiOrders
+	for attempt := range 3 {
+		response := apiRequest(handler, http.MethodPut, target, declaration, headers)
+		if response.Code != http.StatusOK {
+			t.Fatalf("attempt %d = %d %s", attempt, response.Code, response.Body.String())
+		}
+		var mutation apiOrderMutation
+		decodeAPIResponse(t, response, &mutation)
+		if mutation.Sequence != nil {
+			t.Fatalf("a whole-list write addressed order %d", *mutation.Sequence)
+		}
+		var orders apiOrders
+		decodeAPIResponse(t, apiRequest(handler, http.MethodGet, "/api/v1/orders", "", headers), &orders)
+		if attempt == 0 {
+			first = orders
+			continue
+		}
+		if !reflect.DeepEqual(orders, first) {
+			t.Fatalf("attempt %d left a different list:\nfirst = %#v\ngot   = %#v", attempt, first, orders)
+		}
+	}
+	if got := len(parityEntityOrders(t, first, leader.ID).Orders); got != 2 {
+		t.Fatalf("orders = %d, want the 2 declared; the retries appended", got)
+	}
+}
+
+// The replace carries the same expectation every other write carries, and
+// declares rather than merges.
+func TestAPIReplaceOrdersHonoursItsExpectationAndReplaces(t *testing.T) {
+	const stale = `"0000000000000000000000000000000000000000000000000000000000000000"`
+	declaration := `{"turn":3,"orders":[{"kind":"move","detail":{"direction":"ne"}}]}`
+
+	store := apiReadStore()
+	before := len(store.orders[7])
+	assertAPIError(t, apiOrderWrite(t, store, http.MethodPut, "/api/v1/entities/7/orders", declaration, stale),
+		http.StatusPreconditionFailed, apiCodePreconditionFailed)
+	if len(store.orders[7]) != before {
+		t.Fatal("the refused declaration was written anyway")
+	}
+
+	store = apiReadStore()
+	if len(store.orders[7]) != 2 {
+		t.Fatalf("the fixture has %d orders, and this test wants the list to shrink", len(store.orders[7]))
+	}
+	response := apiOrderWrite(t, store, http.MethodPut, "/api/v1/entities/7/orders", declaration, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if len(store.orders[7]) != 1 {
+		t.Fatalf("orders = %d, want the 1 declared", len(store.orders[7]))
+	}
+}
+
+// An absent list is a missing value and an empty one is a declaration that the
+// entity has no orders, so they cannot be the same request.
+func TestAPIReplaceOrdersSeparatesAnAbsentListFromAnEmptyOne(t *testing.T) {
+	store := apiReadStore()
+	assertAPIError(t, apiOrderWrite(t, store, http.MethodPut, "/api/v1/entities/7/orders", `{"turn":3}`, ""),
+		http.StatusBadRequest, apiCodeInvalidRequest)
+	if len(store.orders[7]) == 0 {
+		t.Fatal("a request with no list emptied the list")
+	}
+
+	store = apiReadStore()
+	response := apiOrderWrite(t, store, http.MethodPut, "/api/v1/entities/7/orders", `{"turn":3,"orders":[]}`, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if len(store.orders[7]) != 0 {
+		t.Fatalf("orders = %d, want none declared", len(store.orders[7]))
+	}
+}
+
+// A declaration is refused whole, the way one bad order refuses one write.
+func TestAPIReplaceOrdersRefusesABadDeclaration(t *testing.T) {
+	for name, test := range map[string]struct {
+		body   string
+		status int
+		code   string
+	}{
+		"no kind":       {`{"turn":3,"orders":[{"detail":{"direction":"ne"}}]}`, http.StatusBadRequest, apiCodeInvalidRequest},
+		"no detail":     {`{"turn":3,"orders":[{"kind":"move"}]}`, http.StatusBadRequest, apiCodeInvalidRequest},
+		"no turn":       {`{"orders":[]}`, http.StatusBadRequest, apiCodeInvalidRequest},
+		"two details":   {`{"turn":3,"orders":[{"kind":"move","detail":{"direction":"ne","count":2}}]}`, http.StatusUnprocessableEntity, apiCodeOrderRefused},
+		"bad direction": {`{"turn":3,"orders":[{"kind":"move","detail":{"direction":"up"}}]}`, http.StatusUnprocessableEntity, apiCodeOrderRefused},
+		"a sequence":    {`{"turn":3,"orders":[{"sequence":1,"kind":"move","detail":{"direction":"ne"}}]}`, http.StatusBadRequest, apiCodeInvalidJSON},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := apiReadStore()
+			before := len(store.orders[7])
+			assertAPIError(t, apiOrderWrite(t, store, http.MethodPut, "/api/v1/entities/7/orders", test.body, ""), test.status, test.code)
+			if len(store.orders[7]) != before {
+				t.Fatal("the refused declaration was written anyway")
+			}
+		})
+	}
 }
