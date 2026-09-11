@@ -81,9 +81,10 @@ type pageData struct {
 	Race   game.Race
 	Races  []game.Race
 	Map    mapView
-	// Script is where the page loads HTMX from. It is filled in by render
-	// rather than by every handler, the way Version is.
-	Script string
+	// Scripts are what the page loads, in the order they load: HTMX, then the
+	// project's own. They are filled in by render rather than by every handler,
+	// the way Version is.
+	Scripts []string
 }
 
 func newHandler(authenticate authenticateFunc, store applicationStore) http.Handler {
@@ -508,14 +509,15 @@ func (app *application) renderFragment(w http.ResponseWriter, status int, name s
 // headers.
 //
 // script-src is named even though "default-src 'self'" already covers it: the
-// page now loads a script, and the policy should say so where a reader looks
-// for it rather than leave it to be inferred. HTMX needs nothing beyond
-// 'self' - it fetches over XHR to this origin, and the project uses none of
-// the attributes (hx-on, js: expressions, event filters) that would ask for
-// 'unsafe-eval'.
+// page loads scripts, and the policy should say so where a reader looks for it
+// rather than leave it to be inferred. Both of them need nothing beyond 'self'.
+// HTMX fetches over XHR to this origin, and the project uses none of the
+// attributes (hx-on, js: expressions, event filters) that would ask for
+// 'unsafe-eval' - which is also why the project's own script is a served file
+// and not an inline handler.
 func (app *application) prepare(data *pageData, w http.ResponseWriter) {
 	data.Version = marajanda.Version().Short()
-	data.Script = htmxPath()
+	data.Scripts = pageScripts()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 	w.Header().Set("Referrer-Policy", "same-origin")
@@ -567,7 +569,8 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Title}} · Marajanda</title>
-  <script src="{{.Script}}" defer></script>
+  {{range .Scripts}}<script src="{{.}}" defer></script>
+  {{end}}
   <style>
     :root { color-scheme: dark; --ink: #f7f1dc; --muted: #bfb89f; --gold: #e5bd68; --ember: #c66a43; --night: #0d171c; --panel: #14252a; --line: rgba(229,189,104,.24); --grassland: #7f9c5a; --forest: #3f6b46; --hills: #a98a4e; --marsh: #5b7d78; --mountains: #8a8378; --ocean: #1d4a63; --lake: #2f7d95; --ice: #dce6eb; --fog: #1b2e35; }
     * { box-sizing: border-box; }
@@ -602,15 +605,19 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .orders-conflict { margin: 1.25rem 0 0; padding: .9rem 1.1rem; color: #ffe7d8; background: rgba(198,106,67,.22); border-left: 3px solid var(--ember); }
     .orders-conflict p { margin: .35rem 0 0; }
     .orders-conflict-title { margin-top: 0; font-weight: 600; letter-spacing: .02em; }
-    /* A conflict leaves the list a player knew on screen and takes the
-       controls away from them, because a second edit against that list would
-       be refused too. The refusal is the server's; this is only what the page
-       says about it, so a control that slips through a keyboard still changes
-       nothing. Refresh is outside the form and stays live. */
+    /* The fieldset is a wrapper and not a box to be drawn. */
+    .orders-form fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+    /* A conflict leaves the list a player knew on screen and takes the controls
+       away from them, because a second edit against that list would be refused
+       too. What takes them away is a real disabled attribute on the fieldset,
+       set by assets/marajanda.js, so this only has to look like what the
+       controls already are. Refresh is outside the form and stays live. */
+    .orders-form fieldset[disabled] { opacity: .5; filter: saturate(.4); }
+    /* And if that script never arrived, the page still says so. Dimming is a
+       hint rather than a claim, so this one is safe to state twice; the
+       pointer-events rule that used to sit here was not, because it told a
+       mouse the form was off and left a keyboard driving it. See #66. */
     #orders:has(.orders-conflict) .orders-form { opacity: .5; filter: saturate(.4); }
-    #orders:has(.orders-conflict) .orders-form select,
-    #orders:has(.orders-conflict) .orders-form input,
-    #orders:has(.orders-conflict) .orders-form button { pointer-events: none; }
     .dashboard { max-width: 52rem; }
     .dashboard h1 { max-width: 12ch; overflow-wrap: anywhere; }
     .dashboard-panel { margin-top: 3rem; padding: 2rem; background: rgba(20,37,42,.7); border: 1px solid var(--line); }
@@ -994,6 +1001,14 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		{{if .Orders.Message}}<p class="message" role="alert">{{.Orders.Message}}</p>{{end}}
 		{{if .Orders.Saved}}<p class="saved" role="status">Saved at {{.Orders.Saved}}</p>{{end}}
 		<form class="orders-form" action="/player/orders" method="post">
+		{{/* Every control the form holds, inside one fieldset, so that one
+		     attribute turns the lot off. A write that loses a race is answered
+		     with the notice alone and cannot redraw these controls, so the
+		     attribute is set on the page by assets/marajanda.js - and the
+		     fieldset is what gives it one attribute to set instead of a walk
+		     over every control. Disabled and not inert: the orders stay
+		     readable, which is the point of leaving them on screen. See #66. */}}
+		<fieldset id="orders-controls">
 		{{/* Which list this page was drawn from. Every control posts the form,
 		     so every write says what it believed it was writing to. */}}
 		<input type="hidden" name="ordersTag" value="{{.Orders.Tag}}">
@@ -1088,6 +1103,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 		     button and no pending state to have one for. CSP forbids inline
 		     script, so noscript is the only script-free detector available. */}}
 		<noscript><p class="save-orders"><button class="primary" type="submit">Save orders</button></p></noscript>
+		</fieldset>
 		</form>
 		</div>{{end}}
 `))

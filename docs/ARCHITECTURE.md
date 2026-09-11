@@ -4,6 +4,7 @@
 
 - Go implements the application.
 - HTMX provides server-rendered web interactions. Version `2.0.10`, vendored under `internal/server/assets/` and embedded in the binary.
+- `internal/server/assets/marajanda.js` is the project's own script and does one job HTMX cannot: disabling the orders form when a conflicting write is answered with the notice alone. Adding to it needs the same justification.
 - Alpine.js may provide client-side behavior that HTMX cannot reasonably supply; it is not required by default and is not present in the codebase.
 - ZombieZen SQLite provides persistence and schema migrations.
 
@@ -16,19 +17,24 @@ rendered on its own as a fragment.
 
 ### Assets
 
-Third-party scripts are vendored under `internal/server/assets/` and embedded
-with `go:embed`. There is no build step and nothing is fetched at run time.
+Scripts are embedded with `go:embed` from `internal/server/assets/`, third-party
+ones vendored there. There is no build step and nothing is fetched at run time.
 
 | Route | Response |
 | --- | --- |
-| `GET /assets/{name}` | The named vendored file, or `404` |
+| `GET /assets/{name}` | The named embedded file, or `404` |
 
 The route serves a fixed list of files rather than a directory, so documentation
-and licence files that sit beside them are not reachable through it. Each
-response carries `Cache-Control: public, max-age=31536000, immutable` and
-`X-Content-Type-Options: nosniff`. The version is part of the file name, so an
-upgrade is a new URL rather than a cache to be invalidated. The route requires
-no session: a page loads its script before anyone signs in.
+and licence files that sit beside them are not reachable through it. Every
+response carries `X-Content-Type-Options: nosniff`. The route requires no
+session: a page loads its scripts before anyone signs in.
+
+Caching follows the name. A vendored file carries its version in its file name
+and is served `Cache-Control: public, max-age=31536000, immutable`, so an
+upgrade is a new URL rather than a cache to be invalidated. `marajanda.js` — the
+project's own script, and the only one — does not, because it changes with the
+binary; it is served `no-cache` with an ETag of its own bytes, so a browser asks
+on every load and is answered `304` until it actually changes.
 
 `.air.toml` rebuilds on `.go` and `.js` changes, because a vendored script is
 embedded and only reaches a running server through a rebuild.
@@ -42,9 +48,11 @@ default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none
 ```
 
 `script-src 'self'` is why HTMX is vendored: a CDN script is blocked outright.
-HTMX needs nothing beyond it. It requests over `XMLHttpRequest` to this origin,
-which `default-src 'self'` allows, and the project uses none of the attributes
-(`hx-on`, `js:` expressions, event filters) that would require `unsafe-eval`.
+Neither script needs anything beyond it. HTMX requests over `XMLHttpRequest` to
+this origin, which `default-src 'self'` allows, and the project uses none of the
+attributes (`hx-on`, `js:` expressions, event filters) that would require
+`unsafe-eval` — which is also why the project's own script is a served file
+rather than an inline handler.
 
 ### Fragments
 

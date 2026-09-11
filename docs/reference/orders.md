@@ -293,3 +293,41 @@ the first Remove on the page.
 `<noscript>` does not cover scripting that is enabled but blocked. The content
 security policy is `script-src 'self'` with no inline script, so it is the only
 script-free detector available.
+
+### A write that lost a race
+
+Every control posts the list's tag, so a write made against a list somebody else
+has since changed is refused rather than landing on top of theirs. What the page
+does with that refusal depends on whether script is running, because the two
+situations are not the same.
+
+With script, the response is the notice **alone**: `HX-Retarget: #orders-notice`
+and `HX-Reswap: innerHTML`. The list is left exactly as the player knew it. The
+orders the other client wrote are not orders this player has ever seen, and
+swapping them in underneath would be the page rearranging itself for reasons the
+player cannot see. The notice carries a Refresh link, which is what asks for the
+new draw — so the other client's orders arrive because they were asked for and
+not under a cursor. The link keeps its `href`, and it sits outside the form.
+
+The controls go quiet until then, and quiet means a real `disabled` attribute.
+Every control the form holds is inside one `<fieldset id="orders-controls">`, and
+`assets/marajanda.js` sets `disabled` on it after any swap that leaves a conflict
+notice on the page — the response cannot, because it is not drawing the form.
+The fieldset is disabled rather than `inert`: the orders stay readable, which is
+the point of leaving them on screen.
+
+That is the one job the project's own script does. It is script and not CSS
+because CSS has nothing that will do it: `pointer-events` stops a mouse and
+leaves Tab walking every control, Enter activating one, and an accessibility
+tree with no disabled state in it reporting a live form
+([#66](https://github.com/mdhender/marajanda/issues/66)). Nothing is lost by
+using script, either — the notice-alone swap only happens when HTMX is running.
+
+Without script there is no pending state to protect, so the refusal is answered
+with `409` and the whole page, the list redrawn from the store, and a message
+saying the orders below have been redrawn. Nothing needs disabling: submitting
+the form was a page load, and the page it loaded is the new draw.
+
+The refusal itself is the store's. The page's disabling is what it says about
+it, not what enforces it: a second write against the stale list is refused
+whether or not any control was reachable.

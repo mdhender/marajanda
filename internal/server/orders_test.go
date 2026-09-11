@@ -896,6 +896,65 @@ func TestOrdersPageConflictSwapsTheNoticeAndNotTheList(t *testing.T) {
 	}
 }
 
+// Every control the form holds is inside one fieldset, so the conflict notice
+// has one attribute to set rather than a walk over every control - and the
+// attribute is a real one. See #66.
+func TestTheOrdersFormHoldsItsControlsInOneFieldset(t *testing.T) {
+	store := ordersStore()
+	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NE}}}
+	body := ordersRequest(t, store, http.MethodGet, ordersPath, "", nil).Body.String()
+
+	start := strings.Index(body, `<form class="orders-form"`)
+	if start < 0 {
+		t.Fatalf("the page carries no orders form: %s", body)
+	}
+	form := body[start:]
+	form = form[:strings.Index(form, "</form>")+len("</form>")]
+
+	fieldset := strings.Index(form, `<fieldset id="orders-controls">`)
+	closing := strings.Index(form, "</fieldset>")
+	if fieldset < 0 || closing < fieldset {
+		t.Fatalf("the form does not hold one fieldset: %s", form)
+	}
+	// Every control is inside it, the hidden tag included: one that sat outside
+	// would be the one a conflict left live.
+	controls := form[fieldset:closing]
+	for _, want := range []string{`name="ordersTag"`, `name="direction.7.1"`, `name="remove"`, `name="add"`, `name="restIdle"`} {
+		if !strings.Contains(controls, want) {
+			t.Fatalf("%s is outside the fieldset, so a conflict would leave it live", want)
+		}
+	}
+	// The Refresh link the notice carries is the one thing that must stay live,
+	// and it is outside the form entirely.
+	if strings.Contains(controls, `hx-get="/player/orders"`) {
+		t.Fatal("the refresh link is inside the fieldset, so a conflict would disable the way out of it")
+	}
+}
+
+// The page no longer claims to disable anything with pointer-events. That rule
+// stopped a mouse and nothing else: a keyboard still reached every control and
+// an accessibility tree with no disabled state in it reported a live form. What
+// turns the controls off now is the attribute, and the styling only describes
+// it. See #66.
+func TestTheConflictStylingDoesNotStandInForDisabling(t *testing.T) {
+	body := ordersRequest(t, ordersStore(), http.MethodGet, ordersPath, "", nil).Body.String()
+
+	for _, rule := range strings.Split(body, "\n") {
+		if !strings.Contains(rule, "pointer-events") {
+			continue
+		}
+		// The page's own backdrop uses it to stay out of the way of a cursor,
+		// which is what the property is for. A control is what it must not
+		// reach.
+		if strings.Contains(rule, "orders") || strings.Contains(rule, "button") {
+			t.Fatalf("a pointer-events rule is back on a control: %s", strings.TrimSpace(rule))
+		}
+	}
+	if !strings.Contains(body, ".orders-form fieldset[disabled]") {
+		t.Fatal("nothing styles the real disabled state")
+	}
+}
+
 // Every one of the page's write controls carries the tag and answers a conflict
 // the same way. A control that dropped it would be the one that always wins.
 func TestOrdersPageWriteControlsAllCarryTheTag(t *testing.T) {

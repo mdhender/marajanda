@@ -50,6 +50,46 @@ func TestAssetRouteServesTheVendoredHTMX(t *testing.T) {
 	}
 }
 
+// The project's own script is served like the vendored one and cached unlike
+// it. Its name carries no version, so a browser has to ask whether the copy it
+// holds is still the copy the server has - otherwise a deployed fix would wait
+// behind a year-long cache.
+func TestAssetRouteServesThePageScriptWithoutCachingItForever(t *testing.T) {
+	handler := newHandler(nil, mapStore())
+	fetch := func(headers map[string]string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, "/assets/"+pageAsset, nil)
+		for name, value := range headers {
+			request.Header.Set(name, value)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+
+	response := fetch(nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if got := response.Header().Get("Content-Type"); got != "text/javascript; charset=utf-8" {
+		t.Fatalf("content type = %q, want text/javascript; charset=utf-8", got)
+	}
+	if got := response.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Fatalf("cache control = %q, want no-cache: the name carries no version", got)
+	}
+	etag := response.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("the response carries no ETag, so revalidating it costs a whole refetch")
+	}
+	if !strings.Contains(response.Body.String(), "orders-controls") {
+		t.Fatalf("the asset is not the page script: %.80q", response.Body.String())
+	}
+
+	// And the tag is the content's, so an unchanged file is answered 304.
+	if got := fetch(map[string]string{"If-None-Match": etag}); got.Code != http.StatusNotModified {
+		t.Fatalf("revalidating with the tag = %d, want %d", got.Code, http.StatusNotModified)
+	}
+}
+
 // The route answers from a list of files rather than from the filesystem, so
 // nothing outside that list is reachable through it - documentation in the
 // asset directory included.
@@ -71,8 +111,16 @@ func TestPagesLoadHTMXAndSaySoInThePolicy(t *testing.T) {
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 
-	if got, want := response.Body.String(), `<script src="/assets/`+htmxAsset+`" defer></script>`; !strings.Contains(got, want) {
+	body := response.Body.String()
+	if want := `<script src="/assets/` + htmxAsset + `" defer></script>`; !strings.Contains(body, want) {
 		t.Fatalf("the page does not load HTMX from %s", "/assets/"+htmxAsset)
+	}
+	// Ours loads after it, because it listens for HTMX's events.
+	if want := `<script src="/assets/` + pageAsset + `" defer></script>`; !strings.Contains(body, want) {
+		t.Fatalf("the page does not load %s", "/assets/"+pageAsset)
+	}
+	if strings.Index(body, htmxAsset) > strings.Index(body, pageAsset) {
+		t.Fatal("the page loads its own script before HTMX")
 	}
 	policy := response.Header().Get("Content-Security-Policy")
 	if !strings.Contains(policy, "script-src 'self'") {
