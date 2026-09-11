@@ -30,6 +30,7 @@ const (
 	apiCodeEntityNotFound       = "entity_not_found"
 	apiCodeOrderNotFound        = "order_not_found"
 	apiCodeTurnClosed           = "turn_closed"
+	apiCodeTurnNotFound         = "turn_not_found"
 	apiCodeNoOrigin             = "no_origin"
 	apiCodeOrderRefused         = "order_refused"
 	apiCodeOrderLimit           = "order_limit"

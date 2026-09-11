@@ -494,14 +494,17 @@ func requestWithCookie(handler http.Handler, method, target string, cookie *http
 }
 
 type testStore struct {
-	email    string
-	faction  datastore.Faction
-	found    bool
-	game     datastore.Game
-	world    game.World
-	visible  []hexg.Hex
-	turn     int
-	entities []datastore.Entity
+	email   string
+	faction datastore.Faction
+	found   bool
+	game    datastore.Game
+	world   game.World
+	visible []hexg.Hex
+	// knownAsOf overrides visible for one turn, so a test can give the past a
+	// different shape from the present and see which one a read returns.
+	knownAsOf map[int][]hexg.Hex
+	turn      int
+	entities  []datastore.Entity
 	// asOf is the turn EntitiesAsOf was last asked for, so a test can check
 	// that the dashboard reads the entities as of the turn it displays.
 	asOf int
@@ -738,6 +741,26 @@ func (s *testStore) VisibleHexes(context.Context, string) ([]hexg.Hex, error) {
 		return nil, s.visibleErr
 	}
 	return s.visible, nil
+}
+
+// KnowledgeAsOf answers from the same visible hexes VisibleHexes does, and
+// fails with the same error, because the real store's VisibleHexes is this read
+// on the current turn. knownAsOf, when a test sets it, answers a particular turn
+// instead, which is how a map read is watched asking for the past.
+func (s *testStore) KnowledgeAsOf(_ context.Context, _ string, turn int) (game.KnowledgeSet, error) {
+	s.asOf = turn
+	if s.visibleErr != nil {
+		return nil, s.visibleErr
+	}
+	hexes, ok := s.knownAsOf[turn]
+	if !ok {
+		hexes = s.visible
+	}
+	known := make(game.KnowledgeSet, len(hexes))
+	for _, hex := range hexes {
+		known[hex] = game.KnowledgeObserved
+	}
+	return known, nil
 }
 
 func (s *testStore) SaveFaction(_ context.Context, email, name string, race game.Race) (datastore.Account, error) {

@@ -132,6 +132,7 @@ stable matching surface; clients branch on `code` and HTTP status.
 | `404` | `faction_not_configured` | The player has not configured a faction. |
 | `404` | `entity_not_found` | The entity is not one of the player's faction entities. |
 | `404` | `order_not_found` | The addressed order or insertion position does not exist. |
+| `404` | `turn_not_found` | A turn-scoped read names a turn the game has not reached. |
 | `409` | `turn_closed` | An order write names a turn that is no longer current. |
 | `409` | `no_origin` | Faction configuration cannot find a valid origin in this world. |
 | `415` | `unsupported_media_type` | A route requiring JSON did not receive `application/json`. |
@@ -159,6 +160,9 @@ An unexpected error never includes its internal error text in `message`.
 | `PUT /api/v1/orders` | Player | `200` | Set multiple order details atomically. |
 | `DELETE /api/v1/entities/{entity}/orders/{sequence}?turn={turn}` | Player | `200` | Remove and renumber an order. |
 | `POST /api/v1/turns/current/advance` | Admin | `200` | Process and advance the current turn. |
+| `GET /api/v1/turns/{turn}/entities` | Player | `200` | Read the player's entities as of a turn. |
+| `GET /api/v1/turns/{turn}/orders` | Player | `200` | Read and estimate orders as of a turn. |
+| `GET /api/v1/turns/{turn}/map` | Either | `200` | Read the map as of a turn. |
 
 Path values `entity`, `sequence`, and the delete query value `turn` are positive
 decimal integers. Invalid syntax is `invalid_request`. An absent `turn` on the
@@ -167,12 +171,12 @@ so advancing the clock makes a stale write a `turn_closed` conflict instead of
 silently applying it to the new turn.
 
 `turn` on the delete route names the turn the client read. It does not select a
-snapshot, and no read route accepts it with that meaning. Every read answers for
-the current turn, and `GET /api/v1/entities`, `GET /api/v1/map`, and
-`GET /api/v1/orders` refuse `asOfTurn`, `asOf`, or `turn` with `400 Bad Request`
-and `invalid_request` rather than answering the current turn under a name the
-client meant as the past. A read that names a past turn will spell it `asOfTurn`
-when one exists.
+snapshot, and no read route accepts it with that meaning. A turn is selected by
+path, not by query: `GET /api/v1/entities` and `GET /api/v1/turns/{turn}/entities`
+are the same read reaching its turn two ways. The unscoped reads therefore refuse
+`asOfTurn`, `asOf`, and `turn` with `400 Bad Request` and `invalid_request`
+rather than answering the current turn under a name the client meant as the past.
+Were a query spelling ever added, it would be `asOfTurn`.
 
 ## Sessions
 
@@ -295,11 +299,15 @@ turn. `turn` and all entity facts in the response describe the same snapshot.
 `allowance` is zero for an entity with no allowance row. `orderKinds` is the
 game rule for the entity's kind and is empty when the entity takes no orders.
 
+The turn is the current one. See [Past turns](#past-turns) for reading an
+earlier one.
+
 ## Map
 
 `GET /api/v1/map` returns a role-filtered map in deterministic world order. An
-admin receives every stored hex. A player receives only coordinates returned by
-`VisibleHexes`, with terrain and elevation read from the stored world. Observed
+admin receives every stored hex. A player receives only the coordinates the
+faction knew on the reported turn, with terrain and elevation read from the
+stored world. Observed
 and explored hexes have the same representation because the active player map
 does not distinguish them. Unknown and fog hexes are omitted rather than
 represented with hidden properties.
@@ -319,9 +327,10 @@ represented with hidden properties.
 }
 ```
 
-`width` and `height` are the stored half-extents. `turn` is the current turn
-against which player visibility was read; it is also present for admins so the
-resource shape is stable across roles. The endpoint does not return SVG, PNG,
+`width` and `height` are the stored half-extents. `turn` is the turn against
+which player visibility was read; it is also present for admins so the resource
+shape is stable across roles, though no turn changes what an admin sees. See
+[Past turns](#past-turns) for reading an earlier one. The endpoint does not return SVG, PNG,
 window controls, fog geometry, or game seeds.
 
 ## Orders
@@ -344,7 +353,8 @@ an invalid value is `order_refused`.
 
 `GET /api/v1/orders` returns one entry for every entity shown on the orders
 page, including entities that accept no orders. Orders and estimates are read
-for the reported current turn.
+for the reported current turn; see [Past turns](#past-turns) for reading an
+earlier one, estimate included.
 
 ```json
 {
@@ -525,6 +535,43 @@ admin form. Success returns the new turn:
 {"turn":4}
 ```
 
+## Past turns
+
+`GET /api/v1/turns/{turn}/entities`, `GET /api/v1/turns/{turn}/orders`, and
+`GET /api/v1/turns/{turn}/map` are the unscoped reads of the same names with the
+turn named in the path. Each returns the representation that read returns, and
+`turn` in the body is the turn asked for. `/api/v1/entities` is
+`/api/v1/turns/{current}/entities`; the unscoped route is the convenience, not
+the other way round.
+
+`{turn}` is a positive decimal integer or the literal `current`. `current` is
+spelled out so reading today is one request rather than a read of the clock and
+a read of the data with an advance possible between them.
+
+| Turn | Answer |
+| --- | --- |
+| `current`, or `1` through the current turn | `200` with that turn's snapshot |
+| A turn the game has not reached | `404` and `turn_not_found` |
+| Not a positive decimal integer | `400` and `invalid_request` |
+
+A turn before the player's faction was configured is a `200` with an empty
+collection. The faction did not exist, and that is the true account of it rather
+than a refusal.
+
+The world a report describes never changes underneath the report, so these reads
+are stable: a past turn returns the same bytes however far the game moves on.
+What each read holds fixed at the named turn is what that turn recorded -
+entity locations and allowances, the stored orders, and the hexes the faction
+knew. Terrain and world shape are generated once and never change, so they are
+not turn-scoped facts.
+
+An `estimate` on a closed turn is the estimate the player would have been shown
+while the turn was open. It is priced against that turn's knowledge, locations
+and allowances, so it reproduces what was on screen when the orders were
+written - which is the question a client asking about a closed turn is really
+asking. It remains an estimate and not a record of what happened; the executor
+is what decides that, and turn results are a separate resource.
+
 ## Capability parity
 
 | Domain capability | HTML/HTMX | API v1 |
@@ -533,10 +580,10 @@ admin form. Success returns the new turn:
 | Current identity and role | dashboards | account |
 | Current game and turn | dashboards and orders | game |
 | Configure a faction | `/player/faction` | faction |
-| Read player entities | player dashboard and orders | entities |
-| Read the whole world | admin map and image | admin map representation |
-| Read visible terrain | player map | player map representation |
-| Read and estimate orders | `/player/orders` | orders |
+| Read player entities | player dashboard and orders | entities, entities as of a turn |
+| Read the whole world | admin map and image | admin map representation, as of a turn |
+| Read visible terrain | player map | player map representation, as of a turn |
+| Read and estimate orders | `/player/orders` | orders, orders as of a turn |
 | Add, insert, edit, batch-save, and remove orders | `/player/orders...` | order mutations |
 | Advance the turn | `/admin/turn` | turn advance |
 

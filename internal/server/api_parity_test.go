@@ -227,15 +227,19 @@ func TestAuthenticatedRouteCapabilityMatrix(t *testing.T) {
 		name, documentation string
 		ui, api             []string
 	}
+	// The turn-scoped reads sit in the capability they read rather than in one
+	// of their own. They are the same capability addressed by turn, and the UI
+	// has no past-turn view to pair them with; the matrix asks every capability
+	// to have both sides, and a surplus API route is not a parity gap.
 	matrix := []capability{
 		{name: "sessions", documentation: "| Sign in and out |", ui: []string{"POST /sign-out"}, api: []string{"POST /api/v1/sessions", "DELETE /api/v1/session"}},
 		{name: "identity", documentation: "| Current identity and role |", ui: []string{"GET /admin/dashboard", "GET /player/dashboard"}, api: []string{"GET /api/v1/account"}},
 		{name: "game", documentation: "| Current game and turn |", ui: []string{"GET /admin/dashboard", "GET /player/dashboard", "GET /player/orders"}, api: []string{"GET /api/v1/game"}},
 		{name: "faction", documentation: "| Configure a faction |", ui: []string{"GET /player/faction", "POST /player/faction"}, api: []string{"GET /api/v1/faction", "PUT /api/v1/faction"}},
-		{name: "entities", documentation: "| Read player entities |", ui: []string{"GET /player/dashboard", "GET /player/orders"}, api: []string{"GET /api/v1/entities"}},
-		{name: "admin map", documentation: "| Read the whole world |", ui: []string{"GET /admin/map", "GET /admin/map.png"}, api: []string{"GET /api/v1/map"}},
-		{name: "player map", documentation: "| Read visible terrain |", ui: []string{"GET /player/map"}, api: []string{"GET /api/v1/map"}},
-		{name: "order reads", documentation: "| Read and estimate orders |", ui: []string{"GET /player/orders"}, api: []string{"GET /api/v1/orders"}},
+		{name: "entities", documentation: "| Read player entities |", ui: []string{"GET /player/dashboard", "GET /player/orders"}, api: []string{"GET /api/v1/entities", "GET /api/v1/turns/{turn}/entities"}},
+		{name: "admin map", documentation: "| Read the whole world |", ui: []string{"GET /admin/map", "GET /admin/map.png"}, api: []string{"GET /api/v1/map", "GET /api/v1/turns/{turn}/map"}},
+		{name: "player map", documentation: "| Read visible terrain |", ui: []string{"GET /player/map"}, api: []string{"GET /api/v1/map", "GET /api/v1/turns/{turn}/map"}},
+		{name: "order reads", documentation: "| Read and estimate orders |", ui: []string{"GET /player/orders"}, api: []string{"GET /api/v1/orders", "GET /api/v1/turns/{turn}/orders"}},
 		{name: "order writes", documentation: "| Add, insert, edit, batch-save, and remove orders |", ui: []string{"POST /player/orders", "POST /player/orders/{entity}/{seq}", "POST /player/orders/{entity}/{seq}/insert", "DELETE /player/orders/{entity}/{seq}"}, api: []string{"POST /api/v1/entities/{entity}/orders", "PATCH /api/v1/entities/{entity}/orders/{sequence}", "PUT /api/v1/orders", "DELETE /api/v1/entities/{entity}/orders/{sequence}"}},
 		{name: "turn advance", documentation: "| Advance the turn |", ui: []string{"POST /admin/turn"}, api: []string{"POST /api/v1/turns/current/advance"}},
 	}

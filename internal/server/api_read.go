@@ -41,12 +41,20 @@ func (app *application) getAPIEntities(w http.ResponseWriter, r *http.Request) {
 	if rejectAPITurnSelector(w, r) {
 		return
 	}
-	if _, ok := app.apiPlayerFaction(w, r); !ok {
+	turn, ok := app.apiCurrentTurn(w, r)
+	if !ok {
 		return
 	}
-	turn, err := app.store.CurrentTurn(r.Context())
-	if err != nil {
-		app.writeAPIReadFailure(w, r, err)
+	app.writeAPIEntitiesAsOf(w, r, turn)
+}
+
+// writeAPIEntitiesAsOf answers an entities read for one turn.
+//
+// The turn is the caller's. The current-turn route and the turn-scoped route
+// differ in how they arrive at a turn and in nothing else, so what a past turn
+// reports cannot drift away from what the present one reports.
+func (app *application) writeAPIEntitiesAsOf(w http.ResponseWriter, r *http.Request, turn int) {
+	if _, ok := app.apiPlayerFaction(w, r); !ok {
 		return
 	}
 	account := apiAuthenticationFromContext(r.Context()).Account
@@ -66,6 +74,18 @@ func (app *application) getAPIMap(w http.ResponseWriter, r *http.Request) {
 	if rejectAPITurnSelector(w, r) {
 		return
 	}
+	turn, ok := app.apiCurrentTurn(w, r)
+	if !ok {
+		return
+	}
+	app.writeAPIMapAsOf(w, r, turn)
+}
+
+// writeAPIMapAsOf answers a map read for one turn. An admin sees the whole
+// world, which no turn changes; a player sees the hexes the faction knew on
+// that turn, which is what makes a past map a report rather than today's
+// visibility drawn over an old date.
+func (app *application) writeAPIMapAsOf(w http.ResponseWriter, r *http.Request, turn int) {
 	authentication := apiAuthenticationFromContext(r.Context())
 	if authentication.Account.Role != "admin" && authentication.Account.Role != "player" {
 		writeAPIError(w, http.StatusForbidden, apiCodeForbidden, "This account cannot use that resource.")
@@ -76,11 +96,6 @@ func (app *application) getAPIMap(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	turn, err := app.store.CurrentTurn(r.Context())
-	if err != nil {
-		app.writeAPIReadFailure(w, r, err)
-		return
-	}
 	world, err := app.store.World(r.Context())
 	if err != nil {
 		app.writeAPIReadFailure(w, r, err)
@@ -88,11 +103,12 @@ func (app *application) getAPIMap(w http.ResponseWriter, r *http.Request) {
 	}
 	visible := make(map[hexg.Hex]bool)
 	if authentication.Account.Role == "player" {
-		hexes, err := app.store.VisibleHexes(r.Context(), authentication.Account.Email)
+		known, err := app.store.KnowledgeAsOf(r.Context(), authentication.Account.Email, turn)
 		if err != nil {
 			app.writeAPIReadFailure(w, r, err)
 			return
 		}
+		hexes := known.Hexes()
 		visible = make(map[hexg.Hex]bool, len(hexes))
 		for _, coord := range hexes {
 			visible[world.Normalize(coord)] = true
@@ -116,12 +132,23 @@ func (app *application) getAPIOrders(w http.ResponseWriter, r *http.Request) {
 	if rejectAPITurnSelector(w, r) {
 		return
 	}
-	if _, ok := app.apiPlayerFaction(w, r); !ok {
+	turn, ok := app.apiCurrentTurn(w, r)
+	if !ok {
 		return
 	}
-	turn, err := app.store.CurrentTurn(r.Context())
-	if err != nil {
-		app.writeAPIReadFailure(w, r, err)
+	app.writeAPIOrdersAsOf(w, r, turn)
+}
+
+// writeAPIOrdersAsOf answers an orders read for one turn, estimate included.
+//
+// An estimate on a closed turn is the one the player would have been shown
+// while the turn was open: EstimateOrders prices the stored orders against the
+// knowledge, locations and allowances of that turn, and terrain and world shape
+// do not change. Answering the question a client is really asking - what did
+// this look like when I ordered it - is worth more than refusing arithmetic for
+// being historical.
+func (app *application) writeAPIOrdersAsOf(w http.ResponseWriter, r *http.Request, turn int) {
+	if _, ok := app.apiPlayerFaction(w, r); !ok {
 		return
 	}
 	account := apiAuthenticationFromContext(r.Context()).Account
