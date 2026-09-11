@@ -175,7 +175,7 @@ func (app *application) writeAPIOrdersAsOf(w http.ResponseWriter, r *http.Reques
 			Estimate: apiEstimateFromGame(estimates[entity.ID]),
 		})
 	}
-	app.setAPIOrdersETag(w, r, turn)
+	setAPIOrdersETag(w, r, turn, orders)
 	_ = writeAPIJSON(w, http.StatusOK, response)
 }
 

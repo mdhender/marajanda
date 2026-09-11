@@ -10,16 +10,22 @@ import (
 	"github.com/mdhender/marajanda/internal/game"
 )
 
-func orderTag(t *testing.T, store *Store, turn int) string {
+func tagFor(t *testing.T, store *Store, email string, turn int) string {
 	t.Helper()
-	tag, err := store.OrdersETag(t.Context(), orderPlayer, turn)
+	orders, err := store.OrdersAsOf(t.Context(), email, turn)
 	if err != nil {
 		t.Fatal(err)
 	}
+	tag := OrdersTag(email, turn, orders)
 	if tag == "" {
-		t.Fatal("OrdersETag returned an empty tag")
+		t.Fatal("OrdersTag returned an empty tag")
 	}
 	return tag
+}
+
+func orderTag(t *testing.T, store *Store, turn int) string {
+	t.Helper()
+	return tagFor(t, store, orderPlayer, turn)
 }
 
 // The tag is a function of the list and nothing else. Reading twice without
@@ -177,17 +183,11 @@ func TestOrdersETagIsPerFaction(t *testing.T) {
 	leader, _ := foundedFaction(t, store)
 
 	other := "admin@marajanda.com"
-	before, err := store.OrdersETag(t.Context(), other, game.FirstTurn)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := tagFor(t, store, other, game.FirstTurn)
 	if _, err := store.AddOrder(t.Context(), orderPlayer, game.FirstTurn, leader.ID, game.OrderKindMove, moving(compass.NE)); err != nil {
 		t.Fatal(err)
 	}
-	after, err := store.OrdersETag(t.Context(), other, game.FirstTurn)
-	if err != nil {
-		t.Fatal(err)
-	}
+	after := tagFor(t, store, other, game.FirstTurn)
 	if before != after {
 		t.Fatal("one faction's write moved another faction's tag")
 	}

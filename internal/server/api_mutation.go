@@ -199,7 +199,7 @@ func (app *application) writeAPIEntityOrders(w http.ResponseWriter, r *http.Requ
 		app.writeAPIInternalError(w, r, err)
 		return
 	}
-	app.setAPIOrdersETag(w, r, turn)
+	setAPIOrdersETag(w, r, turn, orders)
 	_ = writeAPIJSON(w, status, apiOrderMutation{
 		Turn: turn, EntityID: entityID, Sequence: sequence,
 		Orders: apiOrdersFromStore(orders[entityID]), Estimate: apiEstimateFromGame(estimates[entityID]),
@@ -228,7 +228,7 @@ func (app *application) writeAPIOrders(w http.ResponseWriter, r *http.Request, t
 			EntityID: entity.ID, Orders: apiOrdersFromStore(orders[entity.ID]), Estimate: apiEstimateFromGame(estimates[entity.ID]),
 		})
 	}
-	app.setAPIOrdersETag(w, r, turn)
+	setAPIOrdersETag(w, r, turn, orders)
 	_ = writeAPIJSON(w, http.StatusOK, response)
 }
 

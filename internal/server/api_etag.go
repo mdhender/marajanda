@@ -27,15 +27,12 @@ import (
 // still the client that always wins.
 
 // setAPIOrdersETag puts the tag for the faction's orders on the response.
-// Failing to read it is not worth failing a response that is otherwise correct:
-// the client simply gets no tag and cannot make a conditional write.
-func (app *application) setAPIOrdersETag(w http.ResponseWriter, r *http.Request, turn int) {
-	tag, err := app.store.OrdersETag(r.Context(), apiPlayerEmail(r), turn)
-	if err != nil {
-		app.logger.Error("tag orders", "turn", turn, "error", err)
-		return
-	}
-	w.Header().Set("ETag", `"`+tag+`"`)
+//
+// It takes the orders the handler has already read rather than reading them
+// again. Hashing them is a fraction of a microsecond; a second trip for the
+// same rows would be a fifth of the cost of the whole request.
+func setAPIOrdersETag(w http.ResponseWriter, r *http.Request, turn int, orders map[int64][]datastore.Order) {
+	w.Header().Set("ETag", `"`+datastore.OrdersTag(apiPlayerEmail(r), turn, orders)+`"`)
 }
 
 // apiOrderExpectation reads `If-Match` into the store options a write carries.

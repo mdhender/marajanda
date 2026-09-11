@@ -44,7 +44,6 @@ type applicationStore interface {
 	SaveFaction(context.Context, string, string, game.Race) (datastore.Account, error)
 	VisibleHexes(context.Context, string) ([]hexg.Hex, error)
 	KnowledgeAsOf(context.Context, string, int) (game.KnowledgeSet, error)
-	OrdersETag(context.Context, string, int) (string, error)
 }
 
 type application struct {

@@ -590,8 +590,10 @@ every order write. The tag on a write response is the tag of the list that write
 just made, so a client writing several times in a row never has to read between
 them.
 
-The tag is derived from the orders themselves, not stored beside them. It
-identifies the whole representation even though it covers only the orders,
+The tag is derived from the orders themselves, not stored beside them, and is
+computed from the list a response has already read rather than by going back for
+it. It identifies the whole representation even though it covers only the
+orders,
 because an estimate is a function of the orders, the entities and what the
 faction knows, and within one turn the last two do not move: turn processing
 dates everything it writes from turn+1, and a turn the game has left refuses

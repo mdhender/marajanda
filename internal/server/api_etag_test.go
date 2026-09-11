@@ -4,7 +4,6 @@ package server
 
 import (
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -27,19 +26,6 @@ func TestAPIOrdersRespondWithATag(t *testing.T) {
 				t.Fatalf("ETag = %q, want one quoted entity-tag", tag)
 			}
 		})
-	}
-}
-
-// A read that fails to tag still answers. The tag is a convenience for a client
-// that wants to write conditionally, not a part of the representation, so
-// losing it must not lose the orders.
-func TestAPIOrdersAnswerWithoutATagWhenTaggingFails(t *testing.T) {
-	store := apiReadStore()
-	store.etagErr = errors.New("store unavailable")
-	response := apiRead(t, store, "player", "/api/v1/orders")
-	response.requireOK(t)
-	if tag := response.Header().Get("ETag"); tag != "" {
-		t.Fatalf("ETag = %q, want none", tag)
 	}
 }
 
