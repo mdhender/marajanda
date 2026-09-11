@@ -673,3 +673,166 @@ func TestTheAccuracyLevelIsNotAFormField(t *testing.T) {
 		t.Fatal("asking for a different accuracy in the query string changed the page")
 	}
 }
+
+// pageOrdersTag is the tag the page renders into its hidden field, which is
+// what every one of its writes sends back.
+func pageOrdersTag(t *testing.T, store *testStore) string {
+	t.Helper()
+	body := ordersRequest(t, store, http.MethodGet, ordersPath, "", nil).Body.String()
+	const marker = `name="ordersTag" value="`
+	start := strings.Index(body, marker)
+	if start < 0 {
+		t.Fatal("the orders page carries no tag")
+	}
+	rest := body[start+len(marker):]
+	end := strings.Index(rest, `"`)
+	if end <= 0 {
+		t.Fatal("the orders page's tag is empty")
+	}
+	return rest[:end]
+}
+
+// The page carries the tag of the list it was drawn from, and it moves when the
+// orders do.
+func TestOrdersPageCarriesTheTagOfTheListItDrew(t *testing.T) {
+	store := ordersStore()
+	empty := pageOrdersTag(t, store)
+	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NE}}}
+	if withOrder := pageOrdersTag(t, store); withOrder == empty {
+		t.Fatal("the page's tag did not move when the orders did")
+	}
+}
+
+// A scripted write that lost a race swaps the notice alone. The list the player
+// knows is left where it is, because the orders the other client wrote are
+// orders this player has never seen.
+func TestOrdersPageConflictSwapsTheNoticeAndNotTheList(t *testing.T) {
+	store := ordersStore()
+	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NE}}}
+	stale := pageOrdersTag(t, store)
+
+	// Somebody else writes, so the tag the page holds is no longer the list.
+	store.orders[7] = append(store.orders[7], datastore.Order{Seq: 2, Kind: game.OrderKindRest, Detail: game.OrderDetail{Count: 3}})
+
+	form := url.Values{"ordersTag": {stale}, "direction.7.1": {"e"}}
+	response := ordersRequest(t, store, http.MethodPost, ordersPath+"/7/1", form.Encode(), htmxHeader)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d so HTMX swaps the notice", response.Code, http.StatusOK)
+	}
+	if got := response.Header().Get("HX-Retarget"); got != "#orders-notice" {
+		t.Fatalf("HX-Retarget = %q, want #orders-notice", got)
+	}
+	if got := response.Header().Get("HX-Reswap"); got != "innerHTML" {
+		t.Fatalf("HX-Reswap = %q, want innerHTML", got)
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, "Conflicting update") || !strings.Contains(body, "Refresh") {
+		t.Fatalf("conflict notice = %q", body)
+	}
+	// The response is the notice and nothing else: no stanza, no other
+	// client's order, no hidden tag that would re-arm the stale page.
+	for _, unwanted := range []string{`id="orders"`, "LEADER-1", "ordersTag", "<select"} {
+		if strings.Contains(body, unwanted) {
+			t.Fatalf("the conflict response carries %q, so it is replacing the list: %q", unwanted, body)
+		}
+	}
+	// And nothing was written.
+	if len(store.orders[7]) != 2 || store.orders[7][0].Detail.Direction != compass.NE {
+		t.Fatalf("the refused write changed the orders: %#v", store.orders[7])
+	}
+}
+
+// Every one of the page's write controls carries the tag and answers a conflict
+// the same way. A control that dropped it would be the one that always wins.
+func TestOrdersPageWriteControlsAllCarryTheTag(t *testing.T) {
+	for name, test := range map[string]struct {
+		method, target string
+		form           url.Values
+	}{
+		"one detail": {http.MethodPost, ordersPath + "/7/1", url.Values{"direction.7.1": {"e"}}},
+		"insert":     {http.MethodPost, ordersPath + "/7/1/insert", url.Values{"kind.7": {"move"}}},
+		"remove":     {http.MethodDelete, ordersPath + "/7/1", url.Values{}},
+		"save":       {http.MethodPost, ordersPath, url.Values{"direction.7.1": {"e"}}},
+		"add":        {http.MethodPost, ordersPath, url.Values{"add": {"7"}, "kind.7": {"move"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := ordersStore()
+			store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NE}}}
+			stale := pageOrdersTag(t, store)
+			store.orders[7] = append(store.orders[7], datastore.Order{Seq: 2, Kind: game.OrderKindRest, Detail: game.OrderDetail{Count: 3}})
+			before := len(store.orders[7])
+
+			form := url.Values{"ordersTag": {stale}}
+			for key, values := range test.form {
+				form[key] = values
+			}
+			target, body := test.target, form.Encode()
+			if test.method == http.MethodDelete {
+				// A DELETE's values ride in the query, which is where HTMX
+				// puts them and where r.Form finds them.
+				target, body = target+"?"+body, ""
+			}
+			response := ordersRequest(t, store, test.method, target, body, htmxHeader)
+			if got := response.Header().Get("HX-Retarget"); got != "#orders-notice" {
+				t.Fatalf("%s answered %d with HX-Retarget %q, want the conflict notice; body = %s",
+					name, response.Code, got, response.Body.String())
+			}
+			if len(store.orders[7]) != before {
+				t.Fatalf("%s wrote despite the conflict: %#v", name, store.orders[7])
+			}
+		})
+	}
+}
+
+// A write with the tag the page is holding goes through, so the guard does not
+// stand in the way of ordinary play.
+func TestOrdersPageWritesWithACurrentTagSucceed(t *testing.T) {
+	store := ordersStore()
+	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NE}}}
+	form := url.Values{"ordersTag": {pageOrdersTag(t, store)}, "direction.7.1": {"e"}}
+	response := ordersRequest(t, store, http.MethodPost, ordersPath+"/7/1", form.Encode(), htmxHeader)
+	if response.Code != http.StatusOK || response.Header().Get("HX-Retarget") != "" {
+		t.Fatalf("a current tag was refused: %d %s", response.Code, response.Body.String())
+	}
+	if store.orders[7][0].Detail.Direction != compass.E {
+		t.Fatalf("the write did not land: %#v", store.orders[7])
+	}
+}
+
+// Without script there is no pending state to protect: the submission is a page
+// load, so the conflict is reported on the page the load draws.
+func TestOrdersPageConflictWithoutScriptRedrawsWithTheNotice(t *testing.T) {
+	store := ordersStore()
+	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NE}}}
+	stale := pageOrdersTag(t, store)
+	store.orders[7] = append(store.orders[7], datastore.Order{Seq: 2, Kind: game.OrderKindRest, Detail: game.OrderDetail{Count: 3}})
+
+	form := url.Values{"ordersTag": {stale}, "direction.7.1": {"e"}}
+	response := ordersRequest(t, store, http.MethodPost, ordersPath, form.Encode(), nil)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusConflict)
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, "Conflicting update") || !strings.Contains(body, "redrawn") {
+		t.Fatalf("unscripted conflict page = %q", body)
+	}
+	if !strings.Contains(body, "LEADER-1") {
+		t.Fatal("the unscripted conflict page did not redraw the list")
+	}
+}
+
+// A write that sends no tag is unconditional, which is what a hand-built
+// request does and what the page did before it carried one.
+func TestOrdersPageWritesWithoutATagAreUnconditional(t *testing.T) {
+	store := ordersStore()
+	store.orders[7] = []datastore.Order{{Seq: 1, Kind: game.OrderKindMove, Detail: game.OrderDetail{Direction: compass.NE}}}
+	form := url.Values{"direction.7.1": {"e"}}
+	response := ordersRequest(t, store, http.MethodPost, ordersPath+"/7/1", form.Encode(), htmxHeader)
+	if response.Code != http.StatusOK || response.Header().Get("HX-Retarget") != "" {
+		t.Fatalf("an untagged write was refused: %d %s", response.Code, response.Body.String())
+	}
+	if store.orders[7][0].Detail.Direction != compass.E {
+		t.Fatalf("the write did not land: %#v", store.orders[7])
+	}
+}

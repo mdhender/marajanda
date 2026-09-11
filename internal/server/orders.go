@@ -53,6 +53,12 @@ type ordersView struct {
 	// Message is a failure that belongs to the page rather than to one stanza:
 	// a turn that closed, a form that could not be read.
 	Message string
+	// Tag identifies the order list this page was drawn from. It rides in a
+	// hidden field so that every write the page makes says which list it
+	// believed it was writing to, and a write made against a list somebody
+	// else has since changed is refused instead of landing on top of theirs.
+	// See internal/datastore.OrdersTag and issue #62.
+	Tag string
 }
 
 // entityOrders is one entity's section of the page: what it is, what it has
@@ -163,6 +169,58 @@ type orderFeedback struct {
 // ordersPath is where an unscripted write is sent back to.
 const ordersPath = "/player/orders"
 
+// ordersTagField is the hidden field the page carries its list's tag in. It is
+// in the form, so every control that posts the form sends it.
+const ordersTagField = "ordersTag"
+
+// postedOrdersExpectation is the precondition a page write carries.
+//
+// A request with no tag writes unconditionally, which is what a hand-built one
+// does and what the page did before it carried one. r.Form rather than
+// r.PostForm because the remove control is a DELETE, whose values ride in the
+// query.
+func postedOrdersExpectation(r *http.Request) []datastore.OrderWriteOption {
+	tag := r.Form.Get(ordersTagField)
+	if tag == "" {
+		return nil
+	}
+	return []datastore.OrderWriteOption{datastore.ExpectOrders(tag)}
+}
+
+// renderOrdersConflict answers a page write that lost a race.
+//
+// The player's own pending change was at most the one control they just
+// touched, because the page writes as soon as it sees a change - so there is
+// almost nothing of theirs to lose. What there is to lose is their bearings:
+// the orders the other client wrote are not orders they have ever seen, and
+// swapping them in underneath would be the page rearranging itself for reasons
+// the player cannot see.
+//
+// So the list is left exactly as they knew it. Only the notice is swapped in,
+// the controls go quiet until they ask for a new draw, and Refresh is what asks.
+// A second edit against the stale list would be refused anyway, which is what
+// the quiet controls are saying out loud.
+func (app *application) renderOrdersConflict(w http.ResponseWriter, r *http.Request, account datastore.Account, faction datastore.Faction) {
+	if wantsFragment(r) {
+		// Retarget: the default target is the whole list, and the whole point
+		// is not to replace the whole list.
+		w.Header().Set("HX-Retarget", "#orders-notice")
+		w.Header().Set("HX-Reswap", "innerHTML")
+		w.Header().Set("Vary", "HX-Request")
+		app.renderFragment(w, http.StatusOK, "orders-conflict", pageData{
+			Title: "Orders", View: "orders", Account: account, Faction: faction,
+		})
+		return
+	}
+	// Without script there is no pending state to protect: submitting the form
+	// is a page load, and the page it loads is the new draw. The notice says so
+	// rather than telling a player to refresh something already refreshed.
+	app.renderOrders(w, r, account, faction, orderFeedback{
+		message: "Conflicting update. These orders were changed somewhere else, so your change was not applied. The orders below have been redrawn.",
+		status:  http.StatusConflict,
+	})
+}
+
 // orders renders the page a player builds their turn on.
 func (app *application) orders(w http.ResponseWriter, r *http.Request) {
 	account, faction, ok := app.playerFaction(w, r)
@@ -201,9 +259,23 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if err := app.store.SetOrderDetails(r.Context(), account.Email, turn, updates); err != nil {
-		app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, 0, 0))
-		return
+	// The expectation guards the first write this submission makes and only
+	// the first: once it has held, the list is this request's to change, and a
+	// second write against the list the first one just made would be comparing
+	// against a tag it has itself made stale. SetOrderDetails does nothing when
+	// there is nothing to set, so on a bare button press the guard moves on to
+	// the button's own write.
+	expect := postedOrdersExpectation(r)
+	if len(updates) > 0 {
+		if err := app.store.SetOrderDetails(r.Context(), account.Email, turn, updates, expect...); err != nil {
+			if errors.Is(err, datastore.ErrOrdersChanged) {
+				app.renderOrdersConflict(w, r, account, faction)
+				return
+			}
+			app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, 0, 0))
+			return
+		}
+		expect = nil
 	}
 	switch add, insert, remove := r.PostForm.Get(addField), r.PostForm.Get(insertField), r.PostForm.Get(removeField); {
 	case add != "":
@@ -215,7 +287,11 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		kind := formOrderKind(r.PostForm, entity)
-		if _, err := app.store.AddOrder(r.Context(), account.Email, turn, entity, kind, newOrderDetail(kind)); err != nil {
+		if _, err := app.store.AddOrder(r.Context(), account.Email, turn, entity, kind, newOrderDetail(kind), expect...); err != nil {
+			if errors.Is(err, datastore.ErrOrdersChanged) {
+				app.renderOrdersConflict(w, r, account, faction)
+				return
+			}
 			app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, entity, 0))
 			return
 		}
@@ -230,7 +306,11 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 		// The button names the order the new one goes after, so the position
 		// it takes is the next one.
 		kind := formOrderKind(r.PostForm, entity)
-		if err := app.store.InsertOrder(r.Context(), account.Email, turn, entity, seq+1, kind, newOrderDetail(kind)); err != nil {
+		if err := app.store.InsertOrder(r.Context(), account.Email, turn, entity, seq+1, kind, newOrderDetail(kind), expect...); err != nil {
+			if errors.Is(err, datastore.ErrOrdersChanged) {
+				app.renderOrdersConflict(w, r, account, faction)
+				return
+			}
 			app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, entity, seq))
 			return
 		}
@@ -242,7 +322,11 @@ func (app *application) saveOrders(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		if err := app.store.RemoveOrder(r.Context(), account.Email, turn, entity, seq); err != nil {
+		if err := app.store.RemoveOrder(r.Context(), account.Email, turn, entity, seq, expect...); err != nil {
+			if errors.Is(err, datastore.ErrOrdersChanged) {
+				app.renderOrdersConflict(w, r, account, faction)
+				return
+			}
 			app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, entity, seq))
 			return
 		}
@@ -285,7 +369,11 @@ func (app *application) setOrderDetail(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if err := app.store.SetOrderDetail(r.Context(), account.Email, turn, entity, seq, detail); err != nil {
+	if err := app.store.SetOrderDetail(r.Context(), account.Email, turn, entity, seq, detail, postedOrdersExpectation(r)...); err != nil {
+		if errors.Is(err, datastore.ErrOrdersChanged) {
+			app.renderOrdersConflict(w, r, account, faction)
+			return
+		}
 		app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, entity, seq))
 		return
 	}
@@ -320,7 +408,11 @@ func (app *application) insertOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := formOrderKind(r.PostForm, entity)
-	if err := app.store.InsertOrder(r.Context(), account.Email, turn, entity, seq+1, kind, newOrderDetail(kind)); err != nil {
+	if err := app.store.InsertOrder(r.Context(), account.Email, turn, entity, seq+1, kind, newOrderDetail(kind), postedOrdersExpectation(r)...); err != nil {
+		if errors.Is(err, datastore.ErrOrdersChanged) {
+			app.renderOrdersConflict(w, r, account, faction)
+			return
+		}
 		app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, entity, seq))
 		return
 	}
@@ -345,7 +437,19 @@ func (app *application) removeOrder(w http.ResponseWriter, r *http.Request) {
 		app.serverError(w, r, err, "Marajanda could not load your orders.")
 		return
 	}
-	if err := app.store.RemoveOrder(r.Context(), account.Email, turn, entity, seq); err != nil {
+	// The remove control is a DELETE, so its values are in the query rather
+	// than a body, and r.Form is where both end up.
+	if err := r.ParseForm(); err != nil {
+		app.renderOrders(w, r, account, faction, orderFeedback{
+			message: "Marajanda could not read that form.", status: http.StatusBadRequest,
+		})
+		return
+	}
+	if err := app.store.RemoveOrder(r.Context(), account.Email, turn, entity, seq, postedOrdersExpectation(r)...); err != nil {
+		if errors.Is(err, datastore.ErrOrdersChanged) {
+			app.renderOrdersConflict(w, r, account, faction)
+			return
+		}
 		app.renderOrders(w, r, account, faction, app.orderWriteFeedback(r, err, entity, seq))
 		return
 	}
@@ -460,7 +564,7 @@ func (app *application) renderOrders(w http.ResponseWriter, r *http.Request, acc
 		Account: account,
 		Faction: faction,
 		Turn:    turn,
-		Orders:  buildOrdersView(turn, entities, orders, estimates, feedback),
+		Orders:  buildOrdersView(turn, account.Email, entities, orders, estimates, feedback),
 	}
 	if wantsFragment(r) {
 		app.renderFragment(w, http.StatusOK, "orders-list", data)
@@ -486,8 +590,8 @@ func (app *application) renderOrders(w http.ResponseWriter, r *http.Request, acc
 // Every entity the faction owns gets a section, in the order the force is
 // listed, whether or not it can be given an order. A player sees their whole
 // force in one place rather than wondering what happened to their hamlet.
-func buildOrdersView(turn int, entities []datastore.Entity, orders map[int64][]datastore.Order, estimates map[int64]game.Estimate, feedback orderFeedback) ordersView {
-	view := ordersView{Turn: turn, Directions: orderDirections()}
+func buildOrdersView(turn int, email string, entities []datastore.Entity, orders map[int64][]datastore.Order, estimates map[int64]game.Estimate, feedback orderFeedback) ordersView {
+	view := ordersView{Turn: turn, Directions: orderDirections(), Tag: datastore.OrdersTag(email, turn, orders)}
 	if feedback.saved {
 		view.Saved = time.Now().UTC().Format("15:04:05 MST")
 	}

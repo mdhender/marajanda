@@ -599,6 +599,18 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     input:focus, select:focus { outline: 2px solid var(--gold); outline-offset: 2px; }
     select { text-transform: capitalize; }
     .message { margin: 1.25rem 0 0; padding: .8rem 1rem; color: #ffe7d8; background: rgba(198,106,67,.18); border-left: 3px solid var(--ember); }
+    .orders-conflict { margin: 1.25rem 0 0; padding: .9rem 1.1rem; color: #ffe7d8; background: rgba(198,106,67,.22); border-left: 3px solid var(--ember); }
+    .orders-conflict p { margin: .35rem 0 0; }
+    .orders-conflict-title { margin-top: 0; font-weight: 600; letter-spacing: .02em; }
+    /* A conflict leaves the list a player knew on screen and takes the
+       controls away from them, because a second edit against that list would
+       be refused too. The refusal is the server's; this is only what the page
+       says about it, so a control that slips through a keyboard still changes
+       nothing. Refresh is outside the form and stays live. */
+    #orders:has(.orders-conflict) .orders-form { opacity: .5; filter: saturate(.4); }
+    #orders:has(.orders-conflict) .orders-form select,
+    #orders:has(.orders-conflict) .orders-form input,
+    #orders:has(.orders-conflict) .orders-form button { pointer-events: none; }
     .dashboard { max-width: 52rem; }
     .dashboard h1 { max-width: 12ch; overflow-wrap: anywhere; }
     .dashboard-panel { margin-top: 3rem; padding: 2rem; background: rgba(20,37,42,.7); border: 1px solid var(--line); }
@@ -953,10 +965,31 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
      carries its whole address - entity and sequence - in its name. With HTMX
      loaded, a select posts itself to the URL that names the same order and the
      page never submits at all. */}}
+{{/* orders-conflict is swapped into #orders-notice, alone, when a write is
+     refused because somebody else changed the list. The list keeps what the
+     player knew; Refresh is what asks for the new draw, so the other client's
+     orders arrive because they were asked for and not underneath a cursor. */}}
+{{define "orders-conflict"}}<div class="orders-conflict" role="alert">
+		  <p class="orders-conflict-title">Conflicting update</p>
+		  <p>These orders were changed somewhere else, so your change was not applied. Refresh to carry on.</p>
+		  {{/* The link keeps its href, so it is a page load when the script
+		       is blocked and a new draw of the list when it is not - the same
+		       bargain the map's pan links make. */}}
+		  <p><a class="sign-link" href="/player/orders" hx-get="/player/orders" hx-target="#orders" hx-swap="outerHTML">Refresh</a></p>
+		</div>{{end}}
+
 {{define "orders-list"}}		<div id="orders" hx-target="#orders" hx-swap="outerHTML" hx-indicator="#orders">
+		{{/* The notice region is swapped on its own when a write loses a race,
+		     which is the one case where the list below must not be replaced:
+		     the orders the other client wrote are not orders this player has
+		     ever seen. Empty the rest of the time. */}}
+		<div id="orders-notice"></div>
 		{{if .Orders.Message}}<p class="message" role="alert">{{.Orders.Message}}</p>{{end}}
 		{{if .Orders.Saved}}<p class="saved" role="status">Saved at {{.Orders.Saved}}</p>{{end}}
 		<form class="orders-form" action="/player/orders" method="post">
+		{{/* Which list this page was drawn from. Every control posts the form,
+		     so every write says what it believed it was writing to. */}}
+		<input type="hidden" name="ordersTag" value="{{.Orders.Tag}}">
 		{{/* Enter in any field submits a form through its first submit button,
 		     and every other button here removes, inserts or adds an order.
 		     Without this one, Enter in a direction select would delete the

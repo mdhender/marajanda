@@ -656,11 +656,18 @@ the reason the header exists: weak comparison admits representations that
 differ, and this comparison decides whether somebody else's orders are about to
 be written over.
 
-Two things this does not yet do. `If-None-Match` on the reads is not honoured,
-so there is no `304`; the tag is here for writing safely, not for saving
-bandwidth. And the header is optional, so a client that sends no expectation can
-still overwrite one that did - which today includes the HTML orders page, whose
-controls carry no tag.
+The HTML orders page carries the same guard by another route: it renders its
+list's tag in a hidden field, so every control it offers sends the tag of the
+list the player is looking at. A page write that loses a race leaves the list on
+screen alone and swaps in a notice above it - the orders the other client wrote
+are not orders that player has seen, and arriving underneath their cursor is the
+part that would startle - with the controls quiet until Refresh asks for a new
+draw.
+
+One thing this does not yet do: `If-None-Match` on the reads is not honoured, so
+there is no `304`. The tag is here for writing safely, not for saving bandwidth.
+The header also stays optional, so a client that sends no expectation writes
+unconditionally, as every client did before it existed.
 
 ## Capability parity
 
