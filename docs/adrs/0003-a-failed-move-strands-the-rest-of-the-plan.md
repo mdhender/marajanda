@@ -2,6 +2,7 @@
 
 - Status: Proposed
 - Date: 2026-09-12
+- See also: ADR 0004, which restates this rule as a per-order guard
 
 ## Context
 
@@ -184,12 +185,21 @@ its status is Proposed.
 2. **The word.** `stranded` is proposed. `aborted` says more about the order
    and less about the entity. The vocabulary is a compatibility surface for the
    API and the reports, so the choice is worth making once.
-3. **Whether a player can express a fallback.** Today "try east, otherwise go
+3. **Whether a player can express a fallback.** ~~Today "try east, otherwise go
    south-west" is sometimes expressible by accident, because a failed step
    leaves the next one running from the old hex. This rule removes that, and
-   the game gains no conditional order to replace it. That is arguably correct
-   — the accident was never a feature — but it should be a deliberate gap
-   rather than an unnoticed one.
+   the game gains no conditional order to replace it.~~
+
+   **Answered, and it changes this ADR.** If #72's hexes are authored, a
+   fallback is already expressible: an order that names the hex the failed
+   order *started* from, rather than the one it aimed at, is an instruction to
+   do that instead. ADR 0004 restates the cascade below as a per-order guard —
+   *an order runs only if the entity is standing where it says it starts* —
+   which produces this ADR's behaviour in every case discussed here and gets
+   fallbacks for nothing. If 0004 is accepted, the Decision below is subsumed
+   by it and this ADR should be marked superseded. The defect described in the
+   Context, and the fairness question raised with the decision, stay live
+   either way.
 
 ## Consequences
 
