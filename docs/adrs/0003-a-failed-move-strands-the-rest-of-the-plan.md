@@ -14,20 +14,31 @@ stands. `docs/reference/action-points.md` states the current rule plainly:
 
 That rule treats each order as independent. It is not: a move's meaning depends
 entirely on where the entity is standing when the move is read. A player who
-writes `Move E, Move SW` is not asking for two unrelated things. They are
-describing one route.
+writes `Move E from (186, 46) to (187, 46)` and then `Move SW from (187, 46) to
+(186, 47)` is not asking for two unrelated things. They are describing one
+route, and the second row says so in as many words.
 
 ### What the playtest found
 
 A leader stood at `(186, 46)`. The faction's map already showed ocean at
-`(187, 45)` and `(187, 46)`. Turn 7 was ordered `Move E, Move SW`, and the
-compass vectors are `E = (+1, 0)` and `SW = (-1, +1)`:
+`(187, 45)` and `(187, 46)`. Turn 7 was ordered two moves, written here in the
+full form proposed by #72, with compass vectors `E = (+1, 0)` and
+`SW = (-1, +1)`:
 
-| | The player's route | What the executor walks |
+```
+1  Move E  from (186, 46) to (187, 46)
+2  Move SW from (187, 46) to (186, 47)
+```
+
+Row 1 fails on terrain and the leader does not leave `(186, 46)`. Row 2 says it
+starts at `(187, 46)`, and the entity is not there. The executor runs it
+anyway, against wherever the entity actually stands:
+
+| | What the orders say | What the executor walks |
 | --- | --- | --- |
 | start | `(186, 46)` | `(186, 46)` |
-| Move E | `(187, 46)` | fails on terrain, stays at `(186, 46)` |
-| Move SW | `(186, 47)` | `(185, 47)` |
+| `Move E from (186, 46) to (187, 46)` | `(187, 46)` | fails on terrain, stays at `(186, 46)` |
+| `Move SW from (187, 46) to (186, 47)` | `(186, 47)` | `(185, 47)` |
 
 Both `(186, 47)` and `(185, 47)` are grassland, so the second step does not
 fail. It succeeds, and it is charged 3 AP as unexplored ground. The leader ends
@@ -39,10 +50,16 @@ That is the defect. A blocked first step does not merely lose its own hex; it
 re-anchors every step after it, and the entity walks a plan the player did not
 write. The failure is loud. The drift is silent.
 
+Written out in full it is almost self-evident: row 2 states the hex it starts
+from, that statement is false by the time it runs, and the executor has no rule
+that cares. Written as `Move SW` there is nothing to notice, which is why #72
+and this ADR are the same observation approached from two sides.
+
 The run that produced this is described in the playtest notes for issue #71.
-The turn as actually ordered was `Move E, Move E`, where both steps failed the
-same way and the flaw is invisible; the `Move SW` variant above is the same
-position with the second order changed, and it is the case that matters.
+The turn as actually ordered was `Move E from (186, 46) to (187, 46)` twice
+over, where both steps failed the same way and the flaw is invisible; the
+`Move SW` variant above is the same position with the second order changed, and
+it is the case that matters.
 
 ### The asymmetry with exhaustion
 
@@ -73,6 +90,13 @@ questions into one word and spend a reservation the rules will want later.
 stranded.** A stranded order is not executed, charges nothing, reveals nothing,
 and leaves the entity where it stands.
 
+The turn above becomes:
+
+```
+1  Move E  from (186, 46) to (187, 46)   1 AP   Did not happen - it could not enter that hex
+2  Move SW from (187, 46) to (186, 47)   —      Stranded - the entity never reached (187, 46)
+```
+
 This adds a fifth value to the failure vocabulary:
 
 | Reason | Meaning |
@@ -97,30 +121,58 @@ Three things follow directly and are part of this decision:
   a no-op that the rest of the plan walks through preserves exactly the defect
   this ADR is about.
 - **The pre-processor does not gain a verdict.** The estimate keeps warning and
-  keeps pricing the tail as though every order lands. See the open question
+  keeps pricing the tail as though every order lands. See open question 1
   below; changing that is a separate decision, and this one does not depend on
   it.
 
+### The question this rule does not answer
+
+The rule is stated above without qualification, and there is one case where
+that is hard to defend. It belongs here rather than in a list at the end,
+because it is an objection to the decision itself and not a detail of carrying
+it out.
+
+The pre-processor is forbidden from warning about ground the faction has not
+seen — `action-points.md` is explicit that warning there would disclose what is
+under the fog, and that the flat exploration price is what covers the risk
+instead. So consider the same two orders written against unexplored ground:
+
+```
+1  Move E  from (186, 46) to (187, 46)   3 AP   ← unknown ground, no warning is permitted
+2  Move SW from (187, 46) to (186, 47)   3 AP
+```
+
+If `(187, 46)` turns out to be water, the player loses their entire remaining
+turn to a step the game was not allowed to warn them about and that they had no
+way to know was impossible. Under today's rule they lose one row. Under this
+one they lose the turn.
+
+That is the strongest argument against this ADR, and it is a fairness
+judgement rather than a technical one, so it is not settled here. Three answers
+are available:
+
+- **Accept it.** Exploration is priced as risk already, and a plan written
+  blind is a gamble the player chose to make.
+- **Strand the remainder, but rest it.** The turn is lost and the allowance is
+  not wasted. This needs no new classification of order kinds and is the
+  cheapest mitigation.
+- **Strand only what was foreseeable.** Cascade when the faction already knew
+  the terrain, and fall back to today's behaviour when it did not. This makes
+  the executor's consequences depend on the player's knowledge, which is
+  defensible — the player is only held to a plan they could have checked — and
+  is a larger change than it looks, because the executor would then need the
+  faction's knowledge as well as the ground truth.
+
+The first two keep one rule. The third keeps the game kinder and buys it with a
+rule that has an exception in it.
+
 ## Open questions
 
-These are game and presentation rules that this ADR does not settle. They are
-the reason its status is Proposed.
+These are game and presentation rules that this ADR does not settle, beside the
+fairness question raised with the decision above. Together they are the reason
+its status is Proposed.
 
-1. **The unwarnable case.** The pre-processor is forbidden from warning about
-   ground the faction has not seen, because warning there would disclose what
-   is under the fog. Under this rule, a leader exploring into unseen water
-   loses its entire remaining turn, with no warning possible and no way for the
-   player to have known. That is the strongest argument against, and it is a
-   fairness judgement rather than a technical one. Three mitigations are
-   available and none is chosen here:
-   - accept it, on the grounds that exploration is priced as risk already;
-   - strand the remainder but treat the unspent points as rested, so the turn
-     is lost but the allowance is not wasted;
-   - strand only when the failure was *foreseeable* — when the faction already
-     knew the terrain — which makes the executor's behaviour depend on the
-     player's knowledge. That is defensible and is a larger change than it
-     looks.
-2. **What the estimate shows.** `action-points.md` argues that the
+1. **What the estimate shows.** `action-points.md` argues that the
    pre-processor must not refuse a step, because a refusal that turns out wrong
    mis-prices every order after it and costs the player the whole turn rather
    than one row. This rule inverts half of that argument: if a warned step will
@@ -129,10 +181,10 @@ the reason its status is Proposed.
    confident cascade in the estimate would be a new way to lie. A conditional
    projection — "4 AP, or 1 AP if the warned step does not land" — is a third
    answer with its own cost.
-3. **The word.** `stranded` is proposed. `aborted` says more about the order
+2. **The word.** `stranded` is proposed. `aborted` says more about the order
    and less about the entity. The vocabulary is a compatibility surface for the
    API and the reports, so the choice is worth making once.
-4. **Whether a player can express a fallback.** Today "try east, otherwise go
+3. **Whether a player can express a fallback.** Today "try east, otherwise go
    south-west" is sometimes expressible by accident, because a failed step
    leaves the next one running from the old hex. This rule removes that, and
    the game gains no conditional order to replace it. That is arguably correct
@@ -151,7 +203,7 @@ the reason its status is Proposed.
   renders.
 - `internal/game/executor.go` stops the walk on the first uncarried order, the
   way it already does for exhaustion. The change is small and sits entirely in
-  `Execute`; `Price` is untouched unless open question 2 is answered against
+  `Execute`; `Price` is untouched unless open question 1 is answered against
   the default.
 - `internal/server/results.go` needs a sentence for `stranded`. It already
   prints an unknown reason with the word the turn recorded, so the report
@@ -160,7 +212,8 @@ the reason its status is Proposed.
   Existing clients see a reason they have not been told about, which the
   reference already anticipates for `blocked`.
 - A single misjudged step now costs a whole turn rather than one row. That is
-  the intended effect and also the main risk; see open question 1.
+  the intended effect and also the main risk; see the fairness question raised
+  with the decision.
 - Failure becomes more visible rather than less. A turn where four orders read
   `stranded` states plainly that the plan stopped at row 1, which is a better
   report than four rows of plausible-looking movement. This interacts with #71,
@@ -179,12 +232,13 @@ this loop says nothing about the row where the plan actually went wrong.
 
 ### Strand only the moves, and let other orders run
 
-A rest does not depend on where the entity stands, so a plan of `Move, Move,
-Rest 2` could still rest. This is kinder and it is the reading a player would
-probably guess. It was rejected as the default because it requires a permanent
+A rest does not depend on where the entity stands, so a plan that moves twice
+and then rests could still carry out its `Rest 2` after the first move failed.
+This is kinder and it is the reading a player would probably guess. It was
+rejected as the default because it requires a permanent
 per-order-kind classification, and because the kinder outcome it buys is better
-obtained through open question 1's second mitigation — treating the stranded
-remainder as rested — which needs no classification at all.
+obtained through the second mitigation offered with the decision — treating the
+stranded remainder as rested — which needs no classification at all.
 
 ### Re-plan the tail against the new position
 
