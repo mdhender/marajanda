@@ -194,12 +194,17 @@ its status is Proposed.
    fallback is already expressible: an order that names the hex the failed
    order *started* from, rather than the one it aimed at, is an instruction to
    do that instead. ADR 0004 restates the cascade below as a per-order guard —
-   *an order runs only if the entity is standing where it says it starts* —
-   which produces this ADR's behaviour in every case discussed here and gets
-   fallbacks for nothing. If 0004 is accepted, the Decision below is subsumed
-   by it and this ADR should be marked superseded. The defect described in the
-   Context, and the fairness question raised with the decision, stay live
-   either way.
+   *an order that says where it starts runs only if the entity is standing
+   there* — which produces this ADR's behaviour for moves and gets fallbacks
+   for nothing.
+
+   It does not agree with this ADR everywhere. Under 0004 an order that states
+   no origin is unguarded and runs, so the first bullet below — that the rule
+   applies to the whole order list, a rest included — is the one thing 0004
+   decides differently rather than merely re-expresses. If 0004 is accepted,
+   the Decision below is subsumed by it and this ADR should be marked
+   superseded. The defect described in the Context, and the fairness question
+   raised with the decision, stay live either way.
 
 ## Consequences
 

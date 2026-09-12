@@ -34,12 +34,16 @@ was written for.
 
 ## Decision
 
-**An order is carried out only if the entity is standing where the order says
-it starts.** An order whose stated origin is not where the entity stands is
-stranded: not executed, charging nothing, revealing nothing.
+**An order that says where it starts is carried out only if the entity is
+standing there.** An order whose stated origin is not where the entity stands
+is stranded: not executed, charging nothing, revealing nothing. An order that
+states no origin is not guarded and runs wherever the entity has ended up.
 
-This replaces ADR 0003's cascade with the rule it was approximating, and it
-produces ADR 0003's behaviour in every case that ADR discussed:
+The origin is the guard. Whether an order has one is a property of its kind,
+settled below.
+
+This replaces ADR 0003's cascade with the rule it was approximating. A move
+always states an origin, so for moves it produces ADR 0003's behaviour exactly:
 
 | Row 2 says | Row 1 failed | Row 1 succeeded |
 | --- | --- | --- |
@@ -70,22 +74,58 @@ continuations. Each row's origin says which branch it belongs to:
 The order list is a decision tree written out flat. The executor never learns
 what a branch is; it asks one question per row and the tree falls out.
 
-### Every order carries an origin, including the ones that do not need one
+### Whether an order has an origin is a property of its kind
 
-A rest does not care where it happens. It carries an origin anyway:
+Three policies, and an order kind declares which one it follows:
+
+| Policy | Kinds | Effect |
+| --- | --- | --- |
+| Required | `move` | Always guarded. A move is meaningless without a place to move from. |
+| None | `rest` | Never guarded. Resting does not depend on where the entity is standing. |
+| Optional | future kinds | Guarded only when the player writes an origin. |
+
+ADR 0003 refused to classify order kinds this way, on the grounds that it meant
+maintaining a table forever. That objection is weaker than it looked. Every
+order kind already carries per-kind knowledge — its own detail table in the
+schema, its own validation, its own row on the orders page — and the page that
+generates orders already knows each row's origin, because the pre-processor
+walks the plan to price it. A location policy is one more property of a kind
+that has properties, not a new category of thing to keep true.
+
+The third policy is the reason to prefer this over guarding everything
+uniformly. An optional origin is a **condition the player opts into**. Take a
+`Pray` order that is only worth giving inside a shrine:
 
 ```
-5  Rest 2 at (186, 48)
+5  Pray at (186, 48)     only if the entity reached the shrine hex
+5  Pray                  wherever the entity ended up
 ```
 
-This is the part of the decision that costs something, and it is deliberate.
-ADR 0003 had to choose between stranding the whole order list and stranding
-only the moves in it, and rejected the second because it would require every
-order kind the game ever gains to declare whether it is anchored to a place —
-a rule plus a table that has to stay correct forever. Putting an origin on
-every order removes the question. There is one rule, it has no exceptions, and
-a rest is guarded exactly like a move, which is also what lets a player write
-"rest only if I got where I was going".
+Both are legitimate instructions and they mean different things. A rule that
+guards every order can only express the first; a rule that guards none can only
+express the second. Making the origin optional lets the player say which they
+meant, in the same notation that already expresses a fallback.
+
+The player's real condition here is *the hex is a shrine*, and what they write
+is *the hex is `(186, 48)`*. That works because a shrine they know about is on
+their map. It does not extend to "pray if you happen to find one", which is a
+condition on terrain rather than on position and is not what this rule offers.
+
+#### What this means for a rest after a failed move
+
+A rest is unguarded, so it runs even when the move before it failed. ADR 0003
+asked what should happen to the other orders in a turn and answered "everything
+stops". This answers differently, and better: a player who writes
+
+```
+1  Move E  from (186, 46) to (187, 46)
+2  Rest 2
+```
+
+gets their two points rested whether or not the move landed, because that is
+plainly what they meant. It also turns ADR 0003's second fairness mitigation —
+*strand the remainder, but rest it* — from a rule the game imposes into
+something the player writes for themselves.
 
 ## Open questions
 
@@ -119,10 +159,13 @@ a rest is guarded exactly like a move, which is also what lets a player write
    never sees what their fallback would cost. A second projection, or a
    conditional price per row, are the alternatives. This is ADR 0003's open
    question 1 in a sharper form.
-4. **How a player authors one.** Hand-typing hexes is not an order entry
-   screen. The page has to offer something like "add a fallback for this row"
-   and fill the origin in, which means the UI has a concept of branch even
-   though the rule does not.
+4. **How a player authors a fallback.** Authoring an ordinary origin is not a
+   problem: the orders page walks the plan to price it, so it already knows
+   each row's origin and can fill it in without the player typing a
+   coordinate. The open part is the fallback, where the origin the page would
+   fill in is the wrong one by definition. The page has to offer something like
+   "add a fallback for this row", which means the UI has a concept of branch
+   even though the rule does not.
 5. **Whether this is too clever.** The rule is simple and what it enables is
    not. A play-by-mail game whose order list is a decision tree asks more of a
    player than one whose order list is a list. The counter-argument is that a
@@ -135,6 +178,12 @@ a rest is guarded exactly like a move, which is also what lets a player write
   all stay live; its cascade is subsumed. If this ADR is accepted, 0003 should
   be marked superseded by it rather than withdrawn, because the reasoning that
   got there is the reasoning for this.
+- **It does not agree with ADR 0003 everywhere.** 0003 decided that a failed
+  move strands the whole order list, a rest included. Under an origin-as-guard
+  rule an unguarded rest runs, so the two differ for every order that states no
+  origin. That is a behavioural difference and not a restatement, and it is the
+  one place where accepting this ADR changes what 0003 would have done rather
+  than merely how it is expressed.
 - **#72 is decided by this, not merely informed by it.** A derived origin is by
   definition whatever the previous row left, so row 2 could never say
   `from (186, 46)` while row 1 ends at `(187, 46)`. If fallbacks are wanted,
@@ -146,7 +195,14 @@ a rest is guarded exactly like a move, which is also what lets a player write
   player still cannot know which step needs one — but "the game gave me no way
   to hedge" stops being true.
 - `stranded` from ADR 0003 is still the right reason word, and its definition
-  generalizes: *the entity was not where this order said it starts*.
+  generalizes: *the entity was not where this order said it starts*. It is
+  never recorded against an order that states no origin, because such an order
+  has nothing to be stranded by.
+- **Every order kind now declares a location policy** — required, none, or
+  optional — alongside the detail table and validation it already declares. A
+  new kind that forgets to choose one is a kind whose guarding behaviour is
+  undefined, so the policy belongs where the kind is defined rather than in a
+  lookup beside it.
 - The comparison must be made against normalized coordinates. `Execute` already
   normalizes the entity's position through `plan.World.Normalize`; an authored
   origin has to go through the same door, or the world's wrap will make two
@@ -170,6 +226,15 @@ rules agree on every continuation and differ only where the player wrote an
 origin the cascade cannot read. Rejected because the extra capability costs
 nothing to implement — it is the same comparison — and because the cascade has
 to keep a positional rule that the guard does not need.
+
+### Guard every order, without exception
+
+The first draft of this ADR put an origin on every order, including a rest, so
+that the rule would have no exceptions and no per-kind table. It was rejected
+because the uniformity is false economy: the table exists anyway in everything
+else a kind declares, and guarding unconditionally removes the player's ability
+to say "do this wherever I end up" — which for a rest is almost always what
+they mean.
 
 ### A conditional order kind
 
